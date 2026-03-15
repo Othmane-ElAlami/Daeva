@@ -1,4 +1,4 @@
-name: Deploy to Cloudflare Pages
+﻿name: Deploy to Cloudflare Pages
 
 on:
   push:
@@ -23,7 +23,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # @cloudflare/next-on-pages calls vercel build internally
       - name: Install Vercel CLI
         run: npm install -g vercel@47
 
@@ -31,6 +30,6 @@ jobs:
         run: npx @cloudflare/next-on-pages
 
       - name: Deploy to Cloudflare Pages
-        run: npx wrangler pages deploy .vercel/output/static --project-name=daeva --branch=main
+        run: npx wrangler pages deploy .vercel/output/static --project-name=daeva --branch=master
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
