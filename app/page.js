@@ -102,6 +102,28 @@ const stagger = {
   animate: { transition: { staggerChildren: 0.06 } },
 };
 
+// Aion 2 item grade → color
+//  API name  →  in-game name  →  color (confirmed ✓)
+//  "Special" →  Special       →  turquoise ✓
+//  "Epic"    →  Heroic        →  dark orange  ✓
+//  "Unique"  →  Unique        →  golden yellow ✓
+//  "Legend"  →  Epic          →  blue  ✓
+
+function gradeColor(grade) {
+  const map = {
+    special: "#2dd4bf", // turquoise
+    common: "#6b7280", // grey
+    rare: "#22c55e", // green
+    epic: "#c2410c", // dark orange
+    unique: "#eab308", // golden yellow
+    legend: "#3b82f6", // blue
+    heroic: "#a855f7", // purple — placeholder, unconfirmed
+  };
+  if (grade === null || grade === undefined) return "#e4e4e7";
+  const key = typeof grade === "string" ? grade.toLowerCase() : String(grade);
+  return map[key] ?? "#e4e4e7";
+}
+
 export default function Home() {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState(null);
@@ -794,8 +816,8 @@ export default function Home() {
                       </span>
                     </div>
                     <p className="text-muted" style={{ fontSize: "0.85rem" }}>
-                      {data.count} top{" "}
-                      <strong style={{ color: "#fff" }}>{data.cls}</strong>{" "}
+                      <strong style={{ color: "#fff" }}>{data.count}</strong>{" "}
+                      top <strong style={{ color: "#fff" }}>{data.cls}</strong>{" "}
                       players on{" "}
                       <strong style={{ color: "#fff" }}>{data.lb}</strong>
                     </p>
@@ -995,17 +1017,6 @@ export default function Home() {
                                 >
                                   {i + 1}
                                 </span>
-                                {stat.equippedCount > data.count / 2 && (
-                                  <span
-                                    className="badge"
-                                    style={{
-                                      fontSize: "0.55rem",
-                                      padding: "1px 5px",
-                                    }}
-                                  >
-                                    Meta
-                                  </span>
-                                )}
                                 <span
                                   style={{
                                     fontSize: "0.8rem",
@@ -1483,16 +1494,15 @@ export default function Home() {
 
                     {(() => {
                       const WEAPON_SLOTS = [
-                        "Mace",
-                        "Spellbook",
-                        "Staff",
-                        "Greatsword",
-                        "Sword",
-                        "Dagger",
-                        "Bow",
-                        "Pistol",
-                        "Harp",
-                        "Guard",
+                        "Mace", // Cleric
+                        "Spellbook", // Sorcerer
+                        "Staff", // Chanter
+                        "Greatsword", // Gladiator
+                        "Longsword", // Templar
+                        "Dagger", // Assassin
+                        "Bow", // Ranger
+                        "Orb", // Spiritmaster
+                        "Guard", // Everyone
                       ];
                       const ARMOR_SLOTS = [
                         "Top",
@@ -1505,12 +1515,14 @@ export default function Home() {
                         "Belt",
                       ];
                       const ACCESSORY_SLOTS = [
-                        "Necklace",
                         "Earrings",
+                        "Necklace",
+                        "Amulet",
                         "Ring",
                         "Bracelet",
+                        "Rune",
                       ];
-                      const ARCANA_SLOTS = ["Rune", "Amulet"];
+                      const ARCANA_SLOTS = [];
 
                       const allSlots = Object.entries(
                         data.stats.subStatsBySlot,
@@ -1753,6 +1765,237 @@ export default function Home() {
                                           </div>
                                         </div>
                                       ),
+                                    )}
+                                  </div>
+                                </motion.div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ));
+                    })()}
+                  </motion.div>
+                )}
+
+                {/* Most Used Items by Slot */}
+                {Object.keys(data.stats.itemsBySlot).length > 0 && (
+                  <motion.div variants={fadeUp} className="glass-panel">
+                    <h3 className="mb-4 flex items-center gap-2">
+                      <span
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          width: "28px",
+                          height: "28px",
+                          borderRadius: "8px",
+                          background: "rgba(244,114,182,0.08)",
+                          border: "1px solid rgba(244,114,182,0.15)",
+                        }}
+                      >
+                        <Swords size={14} style={{ color: "#f472b6" }} />
+                      </span>
+                      Most Used Items
+                    </h3>
+
+                    {(() => {
+                      const WEAPON_SLOTS = [
+                        "Mace", // Cleric
+                        "Spellbook", // Sorcerer
+                        "Staff", // Chanter
+                        "Greatsword", // Gladiator
+                        "Longsword", // Templar
+                        "Dagger", // Assassin
+                        "Bow", // Ranger
+                        "Orb", // Spiritmaster
+                        "Guard", // Everyone
+                      ];
+                      const ARMOR_SLOTS = [
+                        "Top",
+                        "Legs",
+                        "Helm",
+                        "Pauldrons",
+                        "Gloves",
+                        "Shoes",
+                        "Cloak",
+                        "Belt",
+                      ];
+                      const ACCESSORY_SLOTS = [
+                        "Earrings",
+                        "Necklace",
+                        "Amulet",
+                        "Ring",
+                        "Bracelet",
+                        "Rune",
+                      ];
+                      const ARCANA_SLOTS = [];
+
+                      const allSlots = Object.entries(
+                        data.stats.itemsBySlot,
+                      ).filter(([, items]) => Object.keys(items).length > 0);
+
+                      const matchesGroup = (slot, slotList) =>
+                        slotList.some(
+                          (s) => slot === s || slot.startsWith(s + "("),
+                        );
+                      const groupSlots = (slotList) =>
+                        allSlots.filter(([slot]) =>
+                          matchesGroup(slot, slotList),
+                        );
+                      const allKnownSlots = [
+                        ...WEAPON_SLOTS,
+                        ...ARMOR_SLOTS,
+                        ...ACCESSORY_SLOTS,
+                        ...ARCANA_SLOTS,
+                      ];
+                      const remainingSlots = allSlots.filter(
+                        ([slot]) => !matchesGroup(slot, allKnownSlots),
+                      );
+
+                      const groups = [
+                        {
+                          label: "Weapons & Guard",
+                          icon: "⚔️",
+                          slots: groupSlots(WEAPON_SLOTS),
+                        },
+                        {
+                          label: "Armor",
+                          icon: "🛡️",
+                          slots: groupSlots(ARMOR_SLOTS),
+                        },
+                        {
+                          label: "Accessories",
+                          icon: "💍",
+                          slots: groupSlots(ACCESSORY_SLOTS),
+                        },
+                        {
+                          label: "Arcanas",
+                          icon: "✨",
+                          slots: [
+                            ...groupSlots(ARCANA_SLOTS),
+                            ...remainingSlots,
+                          ],
+                        },
+                      ].filter((g) => g.slots.length > 0);
+
+                      return groups.map((group) => (
+                        <div key={group.label} style={{ marginBottom: "24px" }}>
+                          <h4
+                            style={{
+                              fontSize: "0.8rem",
+                              color: "var(--text-secondary)",
+                              marginBottom: "12px",
+                              fontWeight: 600,
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "8px",
+                            }}
+                          >
+                            <span>{group.icon}</span> {group.label}
+                          </h4>
+                          <div className="grid-cols-3">
+                            {group.slots.map(([slot, items], slotIdx) => {
+                              const sorted = Object.entries(items).sort(
+                                (a, b) => b[1].count - a[1].count,
+                              );
+                              return (
+                                <motion.div
+                                  key={slot}
+                                  initial={{ opacity: 0, y: 8 }}
+                                  animate={{ opacity: 1, y: 0 }}
+                                  transition={{ delay: slotIdx * 0.03 }}
+                                  className="stat-card"
+                                >
+                                  <div className="stat-card-header">
+                                    <span
+                                      style={{
+                                        fontSize: "0.7rem",
+                                        fontWeight: 700,
+                                        color: "#f472b6",
+                                        textTransform: "uppercase",
+                                        letterSpacing: "0.05em",
+                                      }}
+                                    >
+                                      {slot}
+                                    </span>
+                                  </div>
+                                  <div
+                                    className="stat-card-content custom-scrollbar-slim"
+                                    style={{
+                                      maxHeight: "420px",
+                                      overflowY: "auto",
+                                    }}
+                                  >
+                                    {sorted.map(
+                                      ([itemName, { count, grade }], i) => {
+                                        const pct = (
+                                          (count / data.count) *
+                                          100
+                                        ).toFixed(0);
+                                        const color = gradeColor(grade);
+                                        return (
+                                          <div key={itemName}>
+                                            <div className="substat-row">
+                                              <span
+                                                className="substat-type-dot"
+                                                style={{
+                                                  background: color,
+                                                  boxShadow: `0 0 6px ${color}66`,
+                                                }}
+                                              />
+                                              <div className="substat-info">
+                                                <span
+                                                  className="substat-name"
+                                                  title={itemName}
+                                                  style={{
+                                                    color,
+                                                    whiteSpace: "normal",
+                                                    lineHeight: "1.3",
+                                                    fontSize: "0.78rem",
+                                                  }}
+                                                >
+                                                  <span
+                                                    style={{
+                                                      color:
+                                                        "var(--text-tertiary)",
+                                                      marginRight: "6px",
+                                                      fontSize: "0.65rem",
+                                                    }}
+                                                  >
+                                                    {i + 1}.
+                                                  </span>
+                                                  {itemName}
+                                                </span>
+                                              </div>
+                                              <span
+                                                className="substat-pct"
+                                                style={{ color }}
+                                              >
+                                                {pct}%
+                                              </span>
+                                              <div className="substat-bar-bg">
+                                                <motion.div
+                                                  initial={{ width: 0 }}
+                                                  animate={{
+                                                    width: `${pct}%`,
+                                                  }}
+                                                  transition={{
+                                                    duration: 0.8,
+                                                    ease: "easeOut",
+                                                    delay:
+                                                      0.15 + slotIdx * 0.03,
+                                                  }}
+                                                  className="substat-bar"
+                                                  style={{
+                                                    background: color,
+                                                    boxShadow: `0 0 8px ${color}4d`,
+                                                  }}
+                                                />
+                                              </div>
+                                            </div>
+                                          </div>
+                                        );
+                                      },
                                     )}
                                   </div>
                                 </motion.div>

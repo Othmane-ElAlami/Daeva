@@ -156,6 +156,7 @@ function extractBuild(player, itemDetailsMap, equipDetailsList) {
     arcanas: [],
     arcanaSets: [],
     equipSubStats: [],
+    equipItems: [],
   };
 
   const skillList = equip?.skill?.skillList || [];
@@ -171,6 +172,18 @@ function extractBuild(player, itemDetailsMap, equipDetailsList) {
     if (s.category === "Active") build.activeSkills.push(info);
     if (s.category === "Dp") build.stigmaSkills.push(info);
     if (isPassive) build.passiveSkills.push(info);
+  }
+
+  const equipList = equip?.equipment?.equipmentList || [];
+
+  // Build maps from slotPos to item name/grade from the equipment list
+  const slotPosToName = {};
+  const slotPosToGrade = {};
+  for (const item of equipList) {
+    if (item.name && item.slotPos != null) {
+      slotPosToName[item.slotPos] = item.name;
+      slotPosToGrade[item.slotPos] = item.grade ?? null;
+    }
   }
 
   for (const eqItem of equipDetailsList) {
@@ -189,9 +202,14 @@ function extractBuild(player, itemDetailsMap, equipDetailsList) {
     if (combined.length > 0) {
       build.equipSubStats.push({ categoryName: cat, subStats: combined });
     }
+    // Track item name per slot
+    const itemName = slotPosToName[eqItem.slotPos];
+    if (itemName) {
+      const grade = slotPosToGrade[eqItem.slotPos] ?? null;
+      build.equipItems.push({ categoryName: cat, itemName, grade });
+    }
   }
 
-  const equipList = equip?.equipment?.equipmentList || [];
   const setCounts = {};
   const seenSets = new Set();
   for (const item of equipList) {
@@ -249,6 +267,7 @@ function aggregate(builds) {
     arcanaMainStats: {},
     equippedStigmaCombos: {},
     subStatsBySlot: {},
+    itemsBySlot: {},
     scannedPlayers: [],
   };
 
@@ -318,6 +337,15 @@ function aggregate(builds) {
         const entry = (slotStats[s.name] ||= { count: 0, values: [] });
         entry.count++;
         entry.values.push(s.value);
+      }
+    }
+    for (const eq of b.equipItems) {
+      const slotItems = (stats.itemsBySlot[eq.categoryName] ||= {});
+      const existing = slotItems[eq.itemName];
+      if (existing) {
+        existing.count++;
+      } else {
+        slotItems[eq.itemName] = { count: 1, grade: eq.grade };
       }
     }
     stats.scannedPlayers.push({
@@ -403,7 +431,14 @@ export async function POST(req) {
         });
 
         // Estimate how many pages we need (100 per page), fetch them concurrently
-        const pagesNeeded = Math.min(Math.ceil((limit * 1.5) / 100), 20);
+        // When filtering by server/region, we need many more pages since most
+        // entries will be discarded by the client-side filter.
+        const isFiltered =
+          (region && region !== "all") || (serverId && serverId !== "all");
+        const pagesNeeded = Math.min(
+          Math.ceil((limit * (isFiltered ? 8 : 1.5)) / 100),
+          20,
+        );
         const lbPageTasks = Array.from({ length: pagesNeeded }, (_, i) => {
           const pg = i + 1;
           return async () => {
@@ -422,11 +457,22 @@ export async function POST(req) {
         });
 
         const lbResults = await runPool(lbPageTasks, 5);
-        let allPlayers = lbResults.flat();
+        const rawPlayers = lbResults.flat();
+
+        // Deduplicate by characterId + serverId
+        const seen = new Set();
+        let allPlayers = [];
+        for (const p of rawPlayers) {
+          const key = `${p.characterId}_${p.serverId}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            allPlayers.push(p);
+          }
+        }
 
         sendEvent({
           type: "log",
-          message: `Found ${allPlayers.length} top candidates.`,
+          message: `Found ${allPlayers.length} unique candidates (${rawPlayers.length} raw).`,
         });
 
         // ═══════════════════════════════════════════════════════════════════
@@ -487,9 +533,10 @@ export async function POST(req) {
           });
         }
 
+        const stillNeeded = limit - enriched.length;
         sendEvent({
           type: "log",
-          message: `${cachedResults.length} cached, ${uncachedPlayers.length} need fetching.`,
+          message: `${cachedResults.length} cached, ${Math.min(uncachedPlayers.length, stillNeeded)} need fetching.`,
         });
 
         // ═══════════════════════════════════════════════════════════════════
@@ -502,16 +549,22 @@ export async function POST(req) {
         );
 
         if (toFetch.length > 0 && remaining > 0) {
-          // Shared counter for progress tracking
-          let completedCount = enriched.length;
+          // reservedCount: incremented synchronously at task start to prevent over-fetching
+          // doneCount: incremented at task completion for sequential display numbers
+          let reservedCount = enriched.length;
+          let doneCount = enriched.length;
 
           // Build task list: each task fetches equip + details for one player
           const playerTasks = toFetch.map((p) => async () => {
-            if (!isActive || completedCount >= limit) return null;
+            if (!isActive || reservedCount >= limit) return null;
+
+            // Reserve the slot synchronously (before any await) so that
+            // concurrent tasks don't all pass the guard with the same counter.
+            reservedCount++;
 
             sendEvent({
               type: "progress",
-              current: completedCount,
+              current: reservedCount,
               total: limit,
               target: p.characterName,
             });
@@ -539,6 +592,7 @@ export async function POST(req) {
                 RETRY_BASE_MS,
               );
             } catch {
+              reservedCount--; // Release the reserved slot
               sendEvent({
                 type: "log",
                 message: `Failed equipment for ${p.characterName}, skipping.`,
@@ -579,6 +633,7 @@ export async function POST(req) {
                 RETRY_BASE_MS,
               );
             } catch {
+              reservedCount--; // Release the reserved slot
               sendEvent({
                 type: "log",
                 message: `Failed substats for ${p.characterName}, skipping.`,
@@ -622,10 +677,10 @@ export async function POST(req) {
               equipDetails,
             );
 
-            completedCount++;
+            const playerNum = ++doneCount;
             sendEvent({
               type: "log",
-              message: `Scanned ${p.characterName} (${completedCount}/${limit})`,
+              message: `Scanned ${p.characterName} (${playerNum}/${limit})`,
             });
 
             return result;
@@ -643,182 +698,193 @@ export async function POST(req) {
                 allArcanaIds.push(item.id);
             }
           }
+        }
 
-          // If we still don't have enough, try fetching more leaderboard pages
-          if (enriched.length < limit) {
-            let extraPage = pagesNeeded + 1;
-            while (enriched.length < limit && extraPage <= 30) {
-              if (!isActive) break;
-              sendEvent({
-                type: "log",
-                message: `Need more candidates, fetching page ${extraPage}...`,
-              });
-              const url = `${BASE}/api/leaderboard?contentType=${lbInfo.contentType}&rankingType=${rankingType}&page=${extraPage}&limit=100`;
-              let moreRankings;
-              try {
-                const data = await fetchWithRetry(
-                  () => fetchJSON(url, headers),
-                  MAX_RETRIES,
-                  RETRY_BASE_MS,
-                );
-                moreRankings = data?.rankings || [];
-              } catch {
-                break;
+        // ═══════════════════════════════════════════════════════════════════
+        // PHASE 3b: Fetch additional leaderboard pages if still short
+        // ═══════════════════════════════════════════════════════════════════
+        if (enriched.length < limit) {
+          let extraPage = pagesNeeded + 1;
+          while (enriched.length < limit && extraPage <= 50) {
+            if (!isActive) break;
+            sendEvent({
+              type: "log",
+              message: `Need more candidates, fetching page ${extraPage}...`,
+            });
+            const url = `${BASE}/api/leaderboard?contentType=${lbInfo.contentType}&rankingType=${rankingType}&page=${extraPage}&limit=100`;
+            let moreRankings;
+            try {
+              const data = await fetchWithRetry(
+                () => fetchJSON(url, headers),
+                MAX_RETRIES,
+                RETRY_BASE_MS,
+              );
+              moreRankings = data?.rankings || [];
+            } catch {
+              break;
+            }
+            if (!moreRankings.length) break;
+
+            // Deduplicate against already-seen players
+            let moreCandidates = [];
+            for (const p of moreRankings) {
+              const key = `${p.characterId}_${p.serverId}`;
+              if (!seen.has(key)) {
+                seen.add(key);
+                moreCandidates.push(p);
               }
-              if (!moreRankings.length) break;
+            }
+            if (region && region !== "all")
+              moreCandidates = moreCandidates.filter(
+                (p) => p.region === region,
+              );
+            if (serverId && serverId !== "all")
+              moreCandidates = moreCandidates.filter(
+                (p) => String(p.serverId) === String(serverId),
+              );
 
-              let moreCandidates = moreRankings;
-              if (region && region !== "all")
-                moreCandidates = moreCandidates.filter(
-                  (p) => p.region === region,
-                );
-              if (serverId && serverId !== "all")
-                moreCandidates = moreCandidates.filter(
-                  (p) => String(p.serverId) === String(serverId),
-                );
-
-              const moreUncached = [];
-              for (const p of moreCandidates) {
-                const cached = await getCachedPlayer(db, p.characterId, p.serverId);
-                if (cached) {
-                  if (enriched.length >= limit) break;
-                  const result = {
-                    ...p,
-                    _equip: cached.equipData,
-                    _equipDetails: cached.equipDetails,
-                  };
-                  enriched.push(result);
-                  for (const item of result._equip?.equipment?.equipmentList ||
-                    []) {
-                    if ((item.slotPosName || "").startsWith("Arcana"))
-                      allArcanaIds.push(item.id);
-                  }
-                  sendEvent({
-                    type: "log",
-                    message: `[CACHED] ${p.characterName} (${enriched.length}/${limit})`,
-                  });
-                } else {
-                  moreUncached.push(p);
+            const moreUncached = [];
+            for (const p of moreCandidates) {
+              const cached = await getCachedPlayer(
+                db,
+                p.characterId,
+                p.serverId,
+              );
+              if (cached) {
+                if (enriched.length >= limit) break;
+                const result = {
+                  ...p,
+                  _equip: cached.equipData,
+                  _equipDetails: cached.equipDetails,
+                };
+                enriched.push(result);
+                for (const item of result._equip?.equipment?.equipmentList ||
+                  []) {
+                  if ((item.slotPosName || "").startsWith("Arcana"))
+                    allArcanaIds.push(item.id);
                 }
+                sendEvent({
+                  type: "log",
+                  message: `[CACHED] ${p.characterName} (${enriched.length}/${limit})`,
+                });
+              } else {
+                moreUncached.push(p);
               }
+            }
 
-              if (enriched.length < limit && moreUncached.length > 0) {
-                let mc = enriched.length;
-                const moreTasks = moreUncached
-                  .slice(0, limit - enriched.length + 5)
-                  .map((p) => async () => {
-                    if (!isActive || mc >= limit) return null;
-                    let result;
-                    try {
-                      result = await fetchWithRetry(
-                        async () => {
-                          const apiBase =
-                            p.region === "TW"
-                              ? "https://tw.ncsoft.com/aion2/api"
-                              : "https://aion2.plaync.com/api";
-                          const equipData = await fetchJSON(
-                            proxyUrl(
-                              `${apiBase}/character/equipment?lang=en&characterId=${p.characterId}&serverId=${p.serverId}`,
-                            ),
-                            headers,
-                          );
-                          if (!equipData?.equipment?.equipmentList?.length)
-                            throw new Error("Empty equipmentList");
-                          return { ...p, _equip: equipData };
-                        },
-                        MAX_RETRIES,
-                        RETRY_BASE_MS,
-                      );
-                    } catch {
-                      return null;
-                    }
+            if (enriched.length < limit && moreUncached.length > 0) {
+              let mc = enriched.length;
+              const moreTasks = moreUncached
+                .slice(0, limit - enriched.length + 5)
+                .map((p) => async () => {
+                  if (!isActive || mc >= limit) return null;
+                  let result;
+                  try {
+                    result = await fetchWithRetry(
+                      async () => {
+                        const apiBase =
+                          p.region === "TW"
+                            ? "https://tw.ncsoft.com/aion2/api"
+                            : "https://aion2.plaync.com/api";
+                        const equipData = await fetchJSON(
+                          proxyUrl(
+                            `${apiBase}/character/equipment?lang=en&characterId=${p.characterId}&serverId=${p.serverId}`,
+                          ),
+                          headers,
+                        );
+                        if (!equipData?.equipment?.equipmentList?.length)
+                          throw new Error("Empty equipmentList");
+                        return { ...p, _equip: equipData };
+                      },
+                      MAX_RETRIES,
+                      RETRY_BASE_MS,
+                    );
+                  } catch {
+                    return null;
+                  }
 
-                    let equipDetails;
-                    try {
-                      equipDetails = await fetchWithRetry(
-                        async () => {
-                          const eqList =
-                            result._equip?.equipment?.equipmentList || [];
-                          if (!eqList.length) return [];
-                          const items = eqList.map((e) => ({
-                            itemId: e.id,
-                            enchantLevel: e.enchantLevel || 0,
-                            slotPos: e.slotPos,
-                          }));
-                          const data = await fetchJSON(
-                            `${BASE}/api/items/batch-equipment`,
-                            headers,
-                            "POST",
-                            {
-                              items,
-                              characterId: p.characterId,
-                              serverId: p.serverId,
-                              region: p.region,
-                            },
-                          );
-                          const arr = Array.isArray(data?.items || data)
-                            ? data?.items || data
-                            : [];
-                          if (!arr.length)
-                            throw new Error("Empty equip details");
-                          return arr;
-                        },
-                        MAX_RETRIES,
-                        RETRY_BASE_MS,
-                      );
-                    } catch {
-                      return null;
-                    }
+                  let equipDetails;
+                  try {
+                    equipDetails = await fetchWithRetry(
+                      async () => {
+                        const eqList =
+                          result._equip?.equipment?.equipmentList || [];
+                        if (!eqList.length) return [];
+                        const items = eqList.map((e) => ({
+                          itemId: e.id,
+                          enchantLevel: e.enchantLevel || 0,
+                          slotPos: e.slotPos,
+                        }));
+                        const data = await fetchJSON(
+                          `${BASE}/api/items/batch-equipment`,
+                          headers,
+                          "POST",
+                          {
+                            items,
+                            characterId: p.characterId,
+                            serverId: p.serverId,
+                            region: p.region,
+                          },
+                        );
+                        const arr = Array.isArray(data?.items || data)
+                          ? data?.items || data
+                          : [];
+                        if (!arr.length) throw new Error("Empty equip details");
+                        return arr;
+                      },
+                      MAX_RETRIES,
+                      RETRY_BASE_MS,
+                    );
+                  } catch {
+                    return null;
+                  }
 
-                    result._equipDetails = equipDetails;
-                    const primaryWeapon = CLASS_WEAPONS[cls];
-                    if (primaryWeapon) {
-                      let valid = false;
-                      for (const eqItem of equipDetails) {
-                        if (!eqItem) continue;
-                        if (eqItem.slotPos === 1 || eqItem.slotPos === 2) {
-                          if (
-                            (eqItem.categoryName || "").startsWith(
-                              primaryWeapon,
-                            )
-                          ) {
-                            valid = true;
-                            break;
-                          }
+                  result._equipDetails = equipDetails;
+                  const primaryWeapon = CLASS_WEAPONS[cls];
+                  if (primaryWeapon) {
+                    let valid = false;
+                    for (const eqItem of equipDetails) {
+                      if (!eqItem) continue;
+                      if (eqItem.slotPos === 1 || eqItem.slotPos === 2) {
+                        if (
+                          (eqItem.categoryName || "").startsWith(primaryWeapon)
+                        ) {
+                          valid = true;
+                          break;
                         }
                       }
-                      if (!valid) {
-                        result._equip = null;
-                        result._equipDetails = [];
-                      }
                     }
-                    await setCachedPlayer(
-                      db,
-                      p.characterId,
-                      p.serverId,
-                      p.region,
-                      result._equip,
-                      equipDetails,
-                    );
-                    mc++;
-                    sendEvent({
-                      type: "log",
-                      message: `Scanned ${p.characterName} (${mc}/${limit})`,
-                    });
-                    return result;
-                  });
-                const moreResults = await runPool(moreTasks, CONCURRENCY);
-                for (const r of moreResults) {
-                  if (!r || enriched.length >= limit) continue;
-                  enriched.push(r);
-                  for (const item of r._equip?.equipment?.equipmentList || []) {
-                    if ((item.slotPosName || "").startsWith("Arcana"))
-                      allArcanaIds.push(item.id);
+                    if (!valid) {
+                      result._equip = null;
+                      result._equipDetails = [];
+                    }
                   }
+                  await setCachedPlayer(
+                    db,
+                    p.characterId,
+                    p.serverId,
+                    p.region,
+                    result._equip,
+                    equipDetails,
+                  );
+                  mc++;
+                  sendEvent({
+                    type: "log",
+                    message: `Scanned ${p.characterName} (${mc}/${limit})`,
+                  });
+                  return result;
+                });
+              const moreResults = await runPool(moreTasks, CONCURRENCY);
+              for (const r of moreResults) {
+                if (!r || enriched.length >= limit) continue;
+                enriched.push(r);
+                for (const item of r._equip?.equipment?.equipmentList || []) {
+                  if ((item.slotPosName || "").startsWith("Arcana"))
+                    allArcanaIds.push(item.id);
                 }
               }
-              extraPage++;
             }
+            extraPage++;
           }
         }
 
