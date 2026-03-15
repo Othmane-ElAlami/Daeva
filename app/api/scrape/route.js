@@ -1,0 +1,901 @@
+import { getCachedPlayer, setCachedPlayer } from "@/lib/db";
+import { getRequestContext } from "@cloudflare/next-on-pages";
+
+export const runtime = "edge";
+
+const BASE = "https://shugo.gg";
+
+const LEADERBOARD_TYPES = {
+  nightmare: { contentType: 3, label: "Nightmare" },
+  abyss: { contentType: 1, label: "Abyss" },
+  "arena-solo": { contentType: 5, label: "Arena Solo" },
+  "arena-coop": { contentType: 6, label: "Arena Coop" },
+  transcendence: { contentType: 4, label: "Transcendence" },
+  ascension: { contentType: 21, label: "Ascension" },
+  raid: { contentType: 20, label: "Raid" },
+};
+
+const CLASS_RANKING_IDS = {
+  gladiator: 2,
+  templar: 3,
+  ranger: 4,
+  assassin: 5,
+  spiritmaster: 6,
+  sorcerer: 7,
+  cleric: 8,
+  chanter: 9,
+};
+
+const CLASS_WEAPONS = {
+  gladiator: "Greatsword",
+  templar: "Longsword",
+  ranger: "Bow",
+  assassin: "Dagger",
+  spiritmaster: "Orb",
+  sorcerer: "Spellbook",
+  cleric: "Mace",
+  chanter: "Staff",
+};
+
+const SERVER_NAMES = {
+  // Elyos (1xxx)
+  1001: "Siel",
+  1002: "Nezekan",
+  1003: "Vaizel",
+  1004: "Kaisinel",
+  1005: "Yustiel",
+  1006: "Ariel",
+  1007: "Fregion",
+  1008: "Meslamtaeda",
+  1009: "Hithanya",
+  1010: "Nania",
+  1011: "Tahavatha",
+  1012: "Luteros",
+  1013: "Phernos",
+  1014: "Daminu",
+  1015: "Kasaka",
+  1016: "Bakarma",
+  1017: "Tsenka",
+  1018: "Kochi",
+  1019: "Ishtar",
+  1020: "Tiamat",
+  1021: "Poeta",
+  // Asmodian (2xxx)
+  2001: "Israphel",
+  2002: "Zikel",
+  2003: "Triniel",
+  2004: "Lumiel",
+  2005: "Marchutan",
+  2006: "Azphel",
+  2007: "Ereshkigal",
+  2008: "Beritra",
+  2009: "Nemon",
+  2010: "Hadala",
+  2011: "Ludra",
+  2012: "Ulgorn",
+  2013: "Munin",
+  2014: "Odar",
+  2015: "Zemurru",
+  2016: "Kromede",
+  2017: "Quai",
+  2018: "Baba",
+  2019: "Fafnir",
+  2020: "Indnah",
+  2021: "Pandemonium",
+};
+
+function makeHeaders(referer) {
+  return {
+    "User-Agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    Accept: "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    Referer: referer,
+    Origin: BASE,
+  };
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function fetchJSON(url, headers, method = "GET", body = null) {
+  const opts = { headers, method };
+  if (body) {
+    opts.body = JSON.stringify(body);
+    opts.headers = { ...headers, "Content-Type": "application/json" };
+  }
+  const res = await fetch(url, opts);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+async function fetchWithRetry(fn, maxAttempts = 3, baseDelayMs = 500) {
+  let lastErr;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt < maxAttempts) {
+        let wait = baseDelayMs * Math.pow(2, attempt - 1);
+        if (err.message && err.message.includes("HTTP 429")) {
+          wait += 5000;
+        }
+        await sleep(wait);
+      }
+    }
+  }
+  throw lastErr;
+}
+
+function proxyUrl(apiPath) {
+  return `${BASE}/api/proxy?url=${encodeURIComponent(apiPath)}`;
+}
+
+// ── Extraction Logic ───
+function extractBuild(player, itemDetailsMap, equipDetailsList) {
+  const equip = player._equip;
+  const serverId = player.serverId;
+  const serverName =
+    SERVER_NAMES[serverId] || (serverId ? `Server ${serverId}` : "Unknown");
+
+  const build = {
+    name: player.characterName || "Unknown",
+    serverId: serverId || null,
+    serverName: serverName,
+    race: serverId >= 2000 ? "Asmo" : serverId >= 1000 ? "Elyos" : "Unknown",
+    region: player.region || "Unknown",
+    faction:
+      player.faction ||
+      equip?.profile?.factionName ||
+      equip?.profile?.raceName ||
+      "Unknown",
+    globalRank: player.globalRank || player.rank,
+    activeSkills: [],
+    stigmaSkills: [],
+    passiveSkills: [],
+    arcanas: [],
+    arcanaSets: [],
+    equipSubStats: [],
+  };
+
+  const skillList = equip?.skill?.skillList || [];
+  for (const s of skillList) {
+    const isPassive = s.category === "Passive";
+    const isStigma = s.category === "Dp";
+    if (!isPassive && !isStigma && !s.equip) continue;
+    const info = {
+      name: s.name,
+      level: s.skillLevel || 0,
+      equipped: !!s.equip,
+    };
+    if (s.category === "Active") build.activeSkills.push(info);
+    if (s.category === "Dp") build.stigmaSkills.push(info);
+    if (isPassive) build.passiveSkills.push(info);
+  }
+
+  for (const eqItem of equipDetailsList) {
+    if (!eqItem) continue;
+    const cat = eqItem.categoryName;
+    if (!cat) continue;
+    const subs = (eqItem.subStats || []).map((s) => ({
+      name: s.name,
+      value: s.value,
+    }));
+    const skills = (eqItem.subSkills || []).map((s) => ({
+      name: s.name,
+      value: "+" + s.level,
+    }));
+    const combined = [...subs, ...skills];
+    if (combined.length > 0) {
+      build.equipSubStats.push({ categoryName: cat, subStats: combined });
+    }
+  }
+
+  const equipList = equip?.equipment?.equipmentList || [];
+  const setCounts = {};
+  const seenSets = new Set();
+  for (const item of equipList) {
+    if (!(item.slotPosName || "").startsWith("Arcana")) continue;
+    const detail = itemDetailsMap[item.id];
+    const arcana = {
+      name: item.name,
+      slot: item.slotPosName,
+      grade: item.grade,
+      enchantLevel: item.enchantLevel || 0,
+      mainStat: null,
+      setName: null,
+    };
+    if (detail) {
+      if (detail.mainStats?.[0]) {
+        arcana.mainStat =
+          detail.mainStats[0].name + ": " + detail.mainStats[0].value;
+      }
+      if (detail.set) {
+        arcana.setName = detail.set.name;
+        setCounts[detail.set.name] = (setCounts[detail.set.name] || 0) + 1;
+        if (!seenSets.has(detail.set.name)) {
+          seenSets.add(detail.set.name);
+          build.arcanaSets.push({
+            name: detail.set.name,
+            bonuses: (detail.set.bonuses || []).map(
+              (b) => `(${b.degree}-piece) ${b.descriptions.join(", ")}`,
+            ),
+          });
+        }
+      }
+    }
+    build.arcanas.push(arcana);
+  }
+
+  build.arcanaSetCombo =
+    Object.entries(setCounts)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([name, count]) => `${name}(${count})`)
+      .join(" + ") || "None";
+
+  return build;
+}
+
+function aggregate(builds) {
+  const total = builds.length;
+  const stats = {
+    total,
+    activeSkills: {},
+    stigmaSkills: {},
+    passiveSkills: {},
+    arcanaUsage: {},
+    arcanaSets: {},
+    arcanaSetCombos: {},
+    arcanaMainStats: {},
+    equippedStigmaCombos: {},
+    subStatsBySlot: {},
+    scannedPlayers: [],
+  };
+
+  for (const b of builds) {
+    for (const s of b.activeSkills) {
+      const e = (stats.activeSkills[s.name] ||= {
+        totalLv: 0,
+        count: 0,
+        maxLv: 0,
+        equippedCount: 0,
+      });
+      e.totalLv += s.level;
+      e.count++;
+      e.maxLv = Math.max(e.maxLv, s.level);
+      if (s.equipped) e.equippedCount++;
+    }
+    for (const s of b.stigmaSkills) {
+      const e = (stats.stigmaSkills[s.name] ||= {
+        totalLv: 0,
+        count: 0,
+        maxLv: 0,
+        equippedCount: 0,
+      });
+      e.totalLv += s.level;
+      e.count++;
+      e.maxLv = Math.max(e.maxLv, s.level);
+      if (s.equipped) e.equippedCount++;
+    }
+    const topStigmas = [...b.stigmaSkills]
+      .sort((a, b) => b.level - a.level || a.name.localeCompare(b.name))
+      .slice(0, 4)
+      .map((s) => s.name)
+      .sort();
+    if (topStigmas.length > 0) {
+      const combo = topStigmas.join(" + ");
+      stats.equippedStigmaCombos[combo] =
+        (stats.equippedStigmaCombos[combo] || 0) + 1;
+    }
+    for (const s of b.passiveSkills) {
+      const e = (stats.passiveSkills[s.name] ||= {
+        totalLv: 0,
+        count: 0,
+        maxLv: 0,
+      });
+      e.totalLv += s.level;
+      e.count++;
+      e.maxLv = Math.max(e.maxLv, s.level);
+    }
+    for (const a of b.arcanas) {
+      stats.arcanaUsage[a.name] = (stats.arcanaUsage[a.name] || 0) + 1;
+      if (a.mainStat)
+        stats.arcanaMainStats[a.mainStat] =
+          (stats.arcanaMainStats[a.mainStat] || 0) + 1;
+    }
+    for (const s of b.arcanaSets) {
+      if (!stats.arcanaSets[s.name])
+        stats.arcanaSets[s.name] = { count: 0, bonuses: s.bonuses };
+      stats.arcanaSets[s.name].count++;
+    }
+    if (b.arcanaSetCombo) {
+      stats.arcanaSetCombos[b.arcanaSetCombo] =
+        (stats.arcanaSetCombos[b.arcanaSetCombo] || 0) + 1;
+    }
+    for (const eq of b.equipSubStats) {
+      const slotStats = (stats.subStatsBySlot[eq.categoryName] ||= {});
+      for (const s of eq.subStats) {
+        const entry = (slotStats[s.name] ||= { count: 0, values: [] });
+        entry.count++;
+        entry.values.push(s.value);
+      }
+    }
+    stats.scannedPlayers.push({
+      name: b.name,
+      serverId: b.serverId,
+      serverName: b.serverName,
+      race: b.race,
+      region: b.region,
+      faction: b.faction,
+      globalRank: b.globalRank,
+    });
+  }
+
+  for (const map of [
+    stats.activeSkills,
+    stats.stigmaSkills,
+    stats.passiveSkills,
+  ]) {
+    for (const d of Object.values(map)) {
+      d.avgLv = +(d.totalLv / d.count).toFixed(1);
+    }
+  }
+  return stats;
+}
+
+// ── Concurrency-limited task runner ──────────────────────────────────────────
+// Runs up to `concurrency` async tasks in parallel from `tasks` iterator/array.
+// Returns results in order.
+async function runPool(tasks, concurrency) {
+  const results = new Array(tasks.length);
+  let idx = 0;
+
+  async function worker() {
+    while (idx < tasks.length) {
+      const i = idx++;
+      results[i] = await tasks[i]();
+    }
+  }
+
+  const workers = Array.from(
+    { length: Math.min(concurrency, tasks.length) },
+    () => worker(),
+  );
+  await Promise.all(workers);
+  return results;
+}
+
+export async function POST(req) {
+  const { lbType, cls, limit, region, serverId } = await req.json();
+  const lbInfo = LEADERBOARD_TYPES[lbType];
+  const rankingType = CLASS_RANKING_IDS[cls] || 0;
+  const headers = makeHeaders(`${BASE}/leaderboard/${lbType}?class=${cls}`);
+  const { env } = getRequestContext();
+  const db = env.DB;
+
+  // Tuning: max concurrent API requests for player data
+  const CONCURRENCY = 15;
+  const MAX_RETRIES = 3;
+  const RETRY_BASE_MS = 400;
+
+  const encoder = new TextEncoder();
+  let isActive = true;
+  const stream = new ReadableStream({
+    async start(controller) {
+      const sendEvent = (data) => {
+        if (!isActive) return;
+        try {
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify(data)}\n\n`),
+          );
+        } catch (e) {
+          isActive = false;
+        }
+      };
+
+      try {
+        // ═══════════════════════════════════════════════════════════════════
+        // PHASE 1: Fetch all leaderboard pages in parallel
+        // ═══════════════════════════════════════════════════════════════════
+        sendEvent({
+          type: "log",
+          message: `Fetching ${lbInfo.label} leaderboard...`,
+        });
+
+        // Estimate how many pages we need (100 per page), fetch them concurrently
+        const pagesNeeded = Math.min(Math.ceil((limit * 1.5) / 100), 20);
+        const lbPageTasks = Array.from({ length: pagesNeeded }, (_, i) => {
+          const pg = i + 1;
+          return async () => {
+            const url = `${BASE}/api/leaderboard?contentType=${lbInfo.contentType}&rankingType=${rankingType}&page=${pg}&limit=100`;
+            try {
+              const data = await fetchWithRetry(
+                () => fetchJSON(url, headers),
+                MAX_RETRIES,
+                RETRY_BASE_MS,
+              );
+              return data?.rankings || [];
+            } catch {
+              return [];
+            }
+          };
+        });
+
+        const lbResults = await runPool(lbPageTasks, 5);
+        let allPlayers = lbResults.flat();
+
+        sendEvent({
+          type: "log",
+          message: `Found ${allPlayers.length} top candidates.`,
+        });
+
+        // ═══════════════════════════════════════════════════════════════════
+        // PHASE 2: Filter by region/server, then split cached vs uncached
+        // ═══════════════════════════════════════════════════════════════════
+        let candidates = allPlayers;
+        if (region && region !== "all") {
+          candidates = candidates.filter((p) => p.region === region);
+        }
+        if (serverId && serverId !== "all") {
+          candidates = candidates.filter(
+            (p) => String(p.serverId) === String(serverId),
+          );
+        }
+
+        // Batch cache lookup: separate cached from uncached up-front
+        const cachedResults = [];
+        const uncachedPlayers = [];
+        const allArcanaIds = [];
+
+        for (const p of candidates) {
+          if (cachedResults.length + uncachedPlayers.length >= limit * 2) break;
+          const cached = await getCachedPlayer(db, p.characterId, p.serverId);
+          if (cached) {
+            const result = {
+              ...p,
+              _equip: cached.equipData,
+              _equipDetails: cached.equipDetails,
+            };
+            cachedResults.push(result);
+            for (const item of result._equip?.equipment?.equipmentList || []) {
+              if ((item.slotPosName || "").startsWith("Arcana"))
+                allArcanaIds.push(item.id);
+            }
+          } else {
+            uncachedPlayers.push(p);
+          }
+        }
+
+        // Report cached hits
+        const enriched = [];
+        for (const r of cachedResults) {
+          if (enriched.length >= limit) break;
+          enriched.push(r);
+          sendEvent({
+            type: "log",
+            message: `[CACHED] ${r.characterName} (${enriched.length}/${limit})`,
+          });
+        }
+
+        if (enriched.length >= limit) {
+          // All from cache — skip network phase entirely
+          sendEvent({
+            type: "progress",
+            current: enriched.length,
+            total: limit,
+            target: "",
+          });
+        }
+
+        sendEvent({
+          type: "log",
+          message: `${cachedResults.length} cached, ${uncachedPlayers.length} need fetching.`,
+        });
+
+        // ═══════════════════════════════════════════════════════════════════
+        // PHASE 3: Fetch uncached players concurrently in batches
+        // ═══════════════════════════════════════════════════════════════════
+        const remaining = limit - enriched.length;
+        const toFetch = uncachedPlayers.slice(
+          0,
+          remaining + Math.ceil(remaining * 0.3),
+        );
+
+        if (toFetch.length > 0 && remaining > 0) {
+          // Shared counter for progress tracking
+          let completedCount = enriched.length;
+
+          // Build task list: each task fetches equip + details for one player
+          const playerTasks = toFetch.map((p) => async () => {
+            if (!isActive || completedCount >= limit) return null;
+
+            sendEvent({
+              type: "progress",
+              current: completedCount,
+              total: limit,
+              target: p.characterName,
+            });
+
+            // Fetch equipment
+            let result;
+            try {
+              result = await fetchWithRetry(
+                async () => {
+                  const apiBase =
+                    p.region === "TW"
+                      ? "https://tw.ncsoft.com/aion2/api"
+                      : "https://aion2.plaync.com/api";
+                  const equipData = await fetchJSON(
+                    proxyUrl(
+                      `${apiBase}/character/equipment?lang=en&characterId=${p.characterId}&serverId=${p.serverId}`,
+                    ),
+                    headers,
+                  );
+                  if (!equipData?.equipment?.equipmentList?.length)
+                    throw new Error("Empty equipmentList");
+                  return { ...p, _equip: equipData };
+                },
+                MAX_RETRIES,
+                RETRY_BASE_MS,
+              );
+            } catch {
+              sendEvent({
+                type: "log",
+                message: `Failed equipment for ${p.characterName}, skipping.`,
+              });
+              return null;
+            }
+
+            // Fetch equipment details (substats)
+            let equipDetails;
+            try {
+              equipDetails = await fetchWithRetry(
+                async () => {
+                  const eqList = result._equip?.equipment?.equipmentList || [];
+                  if (!eqList.length) return [];
+                  const items = eqList.map((e) => ({
+                    itemId: e.id,
+                    enchantLevel: e.enchantLevel || 0,
+                    slotPos: e.slotPos,
+                  }));
+                  const data = await fetchJSON(
+                    `${BASE}/api/items/batch-equipment`,
+                    headers,
+                    "POST",
+                    {
+                      items,
+                      characterId: p.characterId,
+                      serverId: p.serverId,
+                      region: p.region,
+                    },
+                  );
+                  const arr = Array.isArray(data?.items || data)
+                    ? data?.items || data
+                    : [];
+                  if (!arr.length) throw new Error("Empty equip details");
+                  return arr;
+                },
+                MAX_RETRIES,
+                RETRY_BASE_MS,
+              );
+            } catch {
+              sendEvent({
+                type: "log",
+                message: `Failed substats for ${p.characterName}, skipping.`,
+              });
+              return null;
+            }
+
+            result._equipDetails = equipDetails;
+
+            // Validate weapon class
+            const primaryWeapon = CLASS_WEAPONS[cls];
+            if (primaryWeapon) {
+              let hasValidWeapon = false;
+              for (const eqItem of equipDetails) {
+                if (!eqItem) continue;
+                if (eqItem.slotPos === 1 || eqItem.slotPos === 2) {
+                  if ((eqItem.categoryName || "").startsWith(primaryWeapon)) {
+                    hasValidWeapon = true;
+                    break;
+                  }
+                }
+              }
+              if (!hasValidWeapon) {
+                sendEvent({
+                  type: "log",
+                  message: `${p.characterName} has mismatched weapon. Ignoring equipment data.`,
+                });
+                result._equip = null;
+                result._equipDetails = [];
+                equipDetails = [];
+              }
+            }
+
+            // Cache the result
+            await setCachedPlayer(
+              db,
+              p.characterId,
+              p.serverId,
+              p.region,
+              result._equip,
+              equipDetails,
+            );
+
+            completedCount++;
+            sendEvent({
+              type: "log",
+              message: `Scanned ${p.characterName} (${completedCount}/${limit})`,
+            });
+
+            return result;
+          });
+
+          // Run all player tasks with concurrency pool
+          const results = await runPool(playerTasks, CONCURRENCY);
+
+          // Collect successful results
+          for (const r of results) {
+            if (!r || enriched.length >= limit) continue;
+            enriched.push(r);
+            for (const item of r._equip?.equipment?.equipmentList || []) {
+              if ((item.slotPosName || "").startsWith("Arcana"))
+                allArcanaIds.push(item.id);
+            }
+          }
+
+          // If we still don't have enough, try fetching more leaderboard pages
+          if (enriched.length < limit) {
+            let extraPage = pagesNeeded + 1;
+            while (enriched.length < limit && extraPage <= 30) {
+              if (!isActive) break;
+              sendEvent({
+                type: "log",
+                message: `Need more candidates, fetching page ${extraPage}...`,
+              });
+              const url = `${BASE}/api/leaderboard?contentType=${lbInfo.contentType}&rankingType=${rankingType}&page=${extraPage}&limit=100`;
+              let moreRankings;
+              try {
+                const data = await fetchWithRetry(
+                  () => fetchJSON(url, headers),
+                  MAX_RETRIES,
+                  RETRY_BASE_MS,
+                );
+                moreRankings = data?.rankings || [];
+              } catch {
+                break;
+              }
+              if (!moreRankings.length) break;
+
+              let moreCandidates = moreRankings;
+              if (region && region !== "all")
+                moreCandidates = moreCandidates.filter(
+                  (p) => p.region === region,
+                );
+              if (serverId && serverId !== "all")
+                moreCandidates = moreCandidates.filter(
+                  (p) => String(p.serverId) === String(serverId),
+                );
+
+              const moreUncached = [];
+              for (const p of moreCandidates) {
+                const cached = await getCachedPlayer(db, p.characterId, p.serverId);
+                if (cached) {
+                  if (enriched.length >= limit) break;
+                  const result = {
+                    ...p,
+                    _equip: cached.equipData,
+                    _equipDetails: cached.equipDetails,
+                  };
+                  enriched.push(result);
+                  for (const item of result._equip?.equipment?.equipmentList ||
+                    []) {
+                    if ((item.slotPosName || "").startsWith("Arcana"))
+                      allArcanaIds.push(item.id);
+                  }
+                  sendEvent({
+                    type: "log",
+                    message: `[CACHED] ${p.characterName} (${enriched.length}/${limit})`,
+                  });
+                } else {
+                  moreUncached.push(p);
+                }
+              }
+
+              if (enriched.length < limit && moreUncached.length > 0) {
+                let mc = enriched.length;
+                const moreTasks = moreUncached
+                  .slice(0, limit - enriched.length + 5)
+                  .map((p) => async () => {
+                    if (!isActive || mc >= limit) return null;
+                    let result;
+                    try {
+                      result = await fetchWithRetry(
+                        async () => {
+                          const apiBase =
+                            p.region === "TW"
+                              ? "https://tw.ncsoft.com/aion2/api"
+                              : "https://aion2.plaync.com/api";
+                          const equipData = await fetchJSON(
+                            proxyUrl(
+                              `${apiBase}/character/equipment?lang=en&characterId=${p.characterId}&serverId=${p.serverId}`,
+                            ),
+                            headers,
+                          );
+                          if (!equipData?.equipment?.equipmentList?.length)
+                            throw new Error("Empty equipmentList");
+                          return { ...p, _equip: equipData };
+                        },
+                        MAX_RETRIES,
+                        RETRY_BASE_MS,
+                      );
+                    } catch {
+                      return null;
+                    }
+
+                    let equipDetails;
+                    try {
+                      equipDetails = await fetchWithRetry(
+                        async () => {
+                          const eqList =
+                            result._equip?.equipment?.equipmentList || [];
+                          if (!eqList.length) return [];
+                          const items = eqList.map((e) => ({
+                            itemId: e.id,
+                            enchantLevel: e.enchantLevel || 0,
+                            slotPos: e.slotPos,
+                          }));
+                          const data = await fetchJSON(
+                            `${BASE}/api/items/batch-equipment`,
+                            headers,
+                            "POST",
+                            {
+                              items,
+                              characterId: p.characterId,
+                              serverId: p.serverId,
+                              region: p.region,
+                            },
+                          );
+                          const arr = Array.isArray(data?.items || data)
+                            ? data?.items || data
+                            : [];
+                          if (!arr.length)
+                            throw new Error("Empty equip details");
+                          return arr;
+                        },
+                        MAX_RETRIES,
+                        RETRY_BASE_MS,
+                      );
+                    } catch {
+                      return null;
+                    }
+
+                    result._equipDetails = equipDetails;
+                    const primaryWeapon = CLASS_WEAPONS[cls];
+                    if (primaryWeapon) {
+                      let valid = false;
+                      for (const eqItem of equipDetails) {
+                        if (!eqItem) continue;
+                        if (eqItem.slotPos === 1 || eqItem.slotPos === 2) {
+                          if (
+                            (eqItem.categoryName || "").startsWith(
+                              primaryWeapon,
+                            )
+                          ) {
+                            valid = true;
+                            break;
+                          }
+                        }
+                      }
+                      if (!valid) {
+                        result._equip = null;
+                        result._equipDetails = [];
+                      }
+                    }
+                    await setCachedPlayer(
+                      db,
+                      p.characterId,
+                      p.serverId,
+                      p.region,
+                      result._equip,
+                      equipDetails,
+                    );
+                    mc++;
+                    sendEvent({
+                      type: "log",
+                      message: `Scanned ${p.characterName} (${mc}/${limit})`,
+                    });
+                    return result;
+                  });
+                const moreResults = await runPool(moreTasks, CONCURRENCY);
+                for (const r of moreResults) {
+                  if (!r || enriched.length >= limit) continue;
+                  enriched.push(r);
+                  for (const item of r._equip?.equipment?.equipmentList || []) {
+                    if ((item.slotPosName || "").startsWith("Arcana"))
+                      allArcanaIds.push(item.id);
+                  }
+                }
+              }
+              extraPage++;
+            }
+          }
+        }
+
+        sendEvent({ type: "progress", current: limit, total: limit });
+        sendEvent({
+          type: "log",
+          message: `Finished scanning ${enriched.length} valid players. Fetching Arcana dictionary...`,
+        });
+
+        // ═══════════════════════════════════════════════════════════════════
+        // PHASE 4: Fetch arcana item details in parallel batches
+        // ═══════════════════════════════════════════════════════════════════
+        const uniqueItemIds = [...new Set(allArcanaIds)];
+        const itemDetailsMap = {};
+
+        if (uniqueItemIds.length > 0) {
+          const chunks = [];
+          for (let i = 0; i < uniqueItemIds.length; i += 50) {
+            chunks.push(uniqueItemIds.slice(i, i + 50));
+          }
+          const arcanaChunkTasks = chunks.map((chunk) => async () => {
+            try {
+              const data = await fetchJSON(
+                `${BASE}/api/items/batch-details`,
+                headers,
+                "POST",
+                { itemIds: chunk },
+              );
+              return data?.items || data || [];
+            } catch {
+              return [];
+            }
+          });
+
+          const arcanaResults = await runPool(arcanaChunkTasks, 5);
+          for (const items of arcanaResults) {
+            for (const item of items) {
+              if (item?.id) itemDetailsMap[item.id] = item;
+            }
+          }
+        }
+
+        sendEvent({ type: "log", message: `Aggregating final results...` });
+
+        const builds = enriched.map((p) =>
+          extractBuild(p, itemDetailsMap, p._equipDetails || []),
+        );
+        const stats = aggregate(builds);
+
+        sendEvent({ type: "done", stats, count: enriched.length });
+        if (isActive) {
+          try {
+            controller.close();
+          } catch (e) {}
+          isActive = false;
+        }
+      } catch (error) {
+        console.error(error);
+        sendEvent({ type: "error", message: error.message });
+        if (isActive) {
+          try {
+            controller.close();
+          } catch (e) {}
+          isActive = false;
+        }
+      }
+    },
+    cancel() {
+      isActive = false;
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+    },
+  });
+}

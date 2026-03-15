@@ -1,0 +1,9 @@
+name = "daeva"
+pages_build_output_dir = ".vercel/output/static"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "player-cache"
+database_id = "96abefbe-4fbf-4469-93da-3d8be0693df7"
