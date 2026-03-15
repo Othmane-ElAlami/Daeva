@@ -1,36 +1,80 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
+# Daeva
 
-## Getting Started
+A Next.js leaderboard viewer for [shugo.gg](https://shugo.gg), deployed on Cloudflare Pages with a D1 database for player equipment caching.
 
-First, run the development server:
+## Prerequisites
+
+- [Node.js](https://nodejs.org/) v25+
+- A [Cloudflare](https://cloudflare.com) account (for D1 and Pages)
+- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/) (included as a dev dependency)
+
+## Local Development Setup
+
+### 1. Install dependencies
+
+```bash
+npm install
+```
+
+### 2. Create the local D1 database table
+
+The app uses a Cloudflare D1 database (`player-cache`) to cache player equipment data. On a fresh clone, the local SQLite database has no tables. Run this once to initialise it:
+
+```bash
+npx wrangler d1 execute player-cache --local --command="CREATE TABLE IF NOT EXISTS player_cache (character_id TEXT NOT NULL, server_id TEXT NOT NULL, region TEXT, equip_data TEXT NOT NULL, equip_details TEXT NOT NULL, fetched_at INTEGER NOT NULL, PRIMARY KEY (character_id, server_id))"
+```
+
+### 3. Start the development server
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+> The dev server uses `@cloudflare/next-on-pages/next-dev` to emulate the Cloudflare runtime (including D1 bindings) locally via `next.config.mjs`.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Available Scripts
 
-## Learn More
+| Script | Description |
+| --- | --- |
+| `npm run dev` | Start the Next.js development server |
+| `npm run build` | Build the Next.js app |
+| `npm run pages:build` | Build for Cloudflare Pages using `next-on-pages` |
+| `npm run preview` | Build and preview locally with Wrangler |
+| `npm run deploy` | Build and deploy to Cloudflare Pages |
+| `npm run lint` | Run ESLint |
 
-To learn more about Next.js, take a look at the following resources:
+## Deploying to Cloudflare Pages
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### 1. Create the remote D1 database
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+npx wrangler d1 create player-cache
+```
 
-## Deploy on Vercel
+Copy the `database_id` from the output and update `wrangler.toml` if it differs.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### 2. Create the table in the remote database
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+npx wrangler d1 execute player-cache --remote --command="CREATE TABLE IF NOT EXISTS player_cache (character_id TEXT NOT NULL, server_id TEXT NOT NULL, region TEXT, equip_data TEXT NOT NULL, equip_details TEXT NOT NULL, fetched_at INTEGER NOT NULL, PRIMARY KEY (character_id, server_id))"
+```
+
+### 3. Deploy
+
+```bash
+npm run deploy
+```
+
+## Project Structure
+
+```text
+app/
+  api/scrape/route.js   # Edge API route — scrapes shugo.gg leaderboards and caches player data
+  layout.js / page.js   # Root layout and main page
+src/
+  lib/db.js             # D1 helper functions (getCachedPlayer, setCachedPlayer)
+wrangler.toml           # Cloudflare Workers / Pages + D1 binding config
+next.config.mjs         # Next.js config with Cloudflare dev platform setup
+```
