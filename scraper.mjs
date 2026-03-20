@@ -8,6 +8,9 @@
 import { writeFileSync } from "fs";
 import { argv } from "process";
 import { createInterface } from "readline";
+import { createCliLogger } from "./src/lib/logger.js";
+
+const log = createCliLogger();
 
 // ── CLI Args ─────────────────────────────────────────────────────────────────
 const args = argv.slice(2);
@@ -84,7 +87,7 @@ async function resolveConfig() {
     } else if (LEADERBOARD_TYPES[ans.toLowerCase()]) {
       lbType = ans.toLowerCase();
     } else {
-      console.error("  ❌ Invalid leaderboard type.");
+      log.error("resolveConfig", "Invalid leaderboard type.");
       process.exit(1);
     }
   }
@@ -101,7 +104,7 @@ async function resolveConfig() {
     } else if (CLASSES.includes(ans.toLowerCase())) {
       cls = ans.toLowerCase();
     } else {
-      console.error("  ❌ Invalid class.");
+      log.error("resolveConfig", "Invalid class.");
       process.exit(1);
     }
   }
@@ -165,9 +168,7 @@ async function fetchWithRetry(fn, maxAttempts = 3, baseDelayMs = 500) {
 
         // If we hit a rate limit, add an extra 5s penalty
         if (err.message && err.message.includes("HTTP 429")) {
-          console.log(
-            `      ...Rate limited (HTTP 429). Waiting ${((wait + 5000) / 1000).toFixed(1)}s before retry ${attempt}/${maxAttempts}...`,
-          );
+          log.warn("fetchWithRetry", `Rate limited (HTTP 429). Waiting ${((wait + 5000) / 1000).toFixed(1)}s before retry ${attempt}/${maxAttempts}...`);
           wait += 5000;
         }
 
@@ -209,7 +210,7 @@ async function fetchLeaderboard(config, headers) {
 
   while (players.length < limit && page <= 10) {
     const url = `${BASE}/api/leaderboard?contentType=${lbInfo.contentType}&rankingType=${rankingType}&page=${page}&limit=100`;
-    console.log(`  Page ${page}...`);
+    log.info("fetchLeaderboard", `Fetching page ${page}...`);
     try {
       const data = await fetchJSON(url, headers);
       const rankings = data?.rankings || [];
@@ -218,13 +219,13 @@ async function fetchLeaderboard(config, headers) {
       page++;
       await sleep(DELAY_MS);
     } catch (err) {
-      console.error(`  ⚠ Error: ${err.message}`);
+      log.warn("fetchLeaderboard", `Page ${page} error: ${err.message}`);
       break;
     }
   }
 
   const result = players.slice(0, limit);
-  console.log(`  ✅ ${result.length} player(s) found`);
+  log.success("fetchLeaderboard", `${result.length} player(s) found`);
   return result;
 }
 
@@ -241,12 +242,14 @@ async function fetchCharacterBuild(player, headers, config) {
     };
     const apiBase = getRegionalApiBase(player.region);
 
-    const equipData = await fetchJSON(
-      proxyUrl(
-        `${apiBase}/character/equipment?lang=en&characterId=${charId}&serverId=${serverId}`,
-      ),
-      headers,
-    );
+    const targetPath = `/character/equipment?lang=en&characterId=${encodeURIComponent(charId)}&serverId=${serverId}`;
+    let equipData;
+    try {
+      equipData = await fetchJSON(proxyUrl(`${apiBase}${targetPath}`), headers);
+    } catch (proxyErr) {
+      log.warn(player.characterName, `Proxy failed, trying direct fallback: ${proxyErr.message}`);
+      equipData = await fetchJSON(`${apiBase}${targetPath}`, headers);
+    }
 
     // 2. Validate class by checking equipped weapons
     // Some leaderboard entries are stale/switched classes, so we check if their
@@ -299,7 +302,53 @@ async function fetchItemDetails(itemIds, headers) {
   return map;
 }
 
-// ── Fetch Equipment Details (actual substats) ───────────────────────────────
+// ── Item Level helpers (matches Shugo.gg's exact iLvl source) ────────────────
+// Shugo.gg reads ItemLevel directly from character/info stat.statList.
+// Checks both statList and statSecondList and alternate names for robustness.
+function extractItemLevelFromInfo(infoData) {
+  const lists = [
+    infoData?.stat?.statList,
+    infoData?.stat?.statSecondList,
+    infoData?.stat?.statListThird,
+    infoData?.profile?.stat?.statList,
+    infoData?.statList,
+  ];
+
+  // Possible names for the Gear Score / Item Level stat
+  const statNames = ["itemlevel", "gearscore", "ilvl"];
+
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const name of statNames) {
+      const stat = list.find((s) => s?.type?.toLowerCase() === name);
+      if (stat != null) {
+        const num = Number(stat.value);
+        if (!isNaN(num) && num > 0) return num;
+      }
+    }
+  }
+  return null;
+}
+
+async function fetchItemLevel(player, headers) {
+  try {
+    const apiBase =
+      player.region === "TW"
+        ? "https://tw.ncsoft.com/aion2/api"
+        : "https://aion2.plaync.com/api";
+    const infoData = await fetchJSON(
+      proxyUrl(
+        `${apiBase}/character/info?lang=en&characterId=${player.characterId}&serverId=${player.serverId}`,
+      ),
+      headers,
+    );
+    return extractItemLevelFromInfo(infoData);
+  } catch {
+    return null;
+  }
+}
+
+// ── Fetch Equipment Details (actual substats) ────────────────────────────────
 async function fetchEquipmentDetails(player, headers) {
   const equip = player._equip;
   const eqList = equip?.equipment?.equipmentList || [];
@@ -331,11 +380,18 @@ async function fetchEquipmentDetails(player, headers) {
 }
 
 // ── Extract Build ────────────────────────────────────────────────────────────
-function extractBuild(player, itemDetailsMap, equipDetailsList) {
+// itemLevel: game's own ItemLevel stat from character/info (no fallback formula).
+function extractBuild(
+  player,
+  itemDetailsMap,
+  equipDetailsList,
+  itemLevel = null,
+) {
   const equip = player._equip;
   const build = {
     name: player.characterName || "Unknown",
     rank: player.rank,
+    gearScore: null,
     activeSkills: [],
     stigmaSkills: [], // Dp category in API = Stigma in-game
     passiveSkills: [],
@@ -382,6 +438,10 @@ function extractBuild(player, itemDetailsMap, equipDetailsList) {
 
   // Arcanas
   const equipList = equip?.equipment?.equipmentList || [];
+
+  // Gear score: the game's own ItemLevel stat from character/info (exact match with Shugo.gg iLvl).
+  build.gearScore = itemLevel ?? null;
+
   const setCounts = {}; // setName -> piece count
   const seenSets = new Set();
   for (const item of equipList) {
@@ -812,16 +872,14 @@ async function main() {
     `${BASE}/leaderboard/${config.lbType}?class=${config.cls}`,
   );
 
-  console.log(`\n  ▸ Leaderboard: ${config.lbInfo.label}`);
-  console.log(`  ▸ Class:       ${config.cls}`);
-  console.log(`  ▸ Limit:       ${config.limit}`);
+  log.info("main", `Leaderboard: ${config.lbInfo.label}`);
+  log.info("main", `Class: ${config.cls}`);
+  log.info("main", `Limit: ${config.limit}`);
 
   // 1. Leaderboard
   const players = await fetchLeaderboard(config, headers);
   if (players.length === 0) {
-    console.error(
-      "\n  ❌ No players found. Try a different leaderboard type or check shugo.gg.",
-    );
+    log.error("main", "No players found. Try a different leaderboard type or check shugo.gg.");
     process.exit(1);
   }
 
@@ -858,7 +916,7 @@ async function main() {
         lbPage++;
         await sleep(DELAY_MS);
       } catch (err) {
-        console.error(`  ⚠ Could not fetch more pages: ${err.message}`);
+        log.warn("main", `Could not fetch more pages: ${err.message}`);
         break;
       }
     }
@@ -866,9 +924,8 @@ async function main() {
     const p = players[playerCursor++];
     scanned++;
     const name = p.characterName || "Unknown";
-    console.log(
-      `  [Scanned: ${String(scanned).padStart(3)} | Found: ${String(enriched.length + 1).padStart(3)}/${config.limit}] ${name}`,
-    );
+    const gs = p.gearScore;
+    log.info(name, `Scanned: ${scanned} | Found: ${enriched.length + 1}/${config.limit}${gs ? ` (GS: ${gs.toLocaleString()})` : ""}`);
 
     // Fetch build (with retry)
     let result = null;
@@ -879,9 +936,7 @@ async function main() {
         RETRY_BASE_MS,
       );
     } catch (err) {
-      console.log(
-        `    ↳ Skipped: failed after ${MAX_RETRIES} attempts (${err.message})`,
-      );
+      log.warn(name, `Skipped: failed after ${MAX_RETRIES} attempts (${err.message})`);
       await sleep(DELAY_MS);
       continue;
     }
@@ -900,22 +955,24 @@ async function main() {
         RETRY_BASE_MS,
       );
     } catch (err) {
-      console.log(
-        `    ↳ Skipped: equipment API empty after ${MAX_RETRIES} retries — ${err.message}`,
-      );
-      await sleep(DELAY_MS);
-      continue;
+      log.warn(name, `Failed equipment (using partial data) — ${err.message}`);
+      result._equip = null;
     }
     result._equipDetails = equipDetails;
 
     // Class validation: check MainHand/SubHand against this class's primary weapon
+    // Supports localized names (e.g. TW "法杖" for Staff)
     const primaryWeapon = CLASS_WEAPONS[config.cls.toLowerCase()];
     let hasValidWeapon = !primaryWeapon;
 
-    if (primaryWeapon) {
+    if (primaryWeapon && result._equip && equipDetails.length > 0) {
+      const validLabels = [primaryWeapon];
+      if (primaryWeapon === "Staff") validLabels.push("法杖"); // TW localized
+
       for (const eqItem of equipDetails) {
         if (eqItem.slotPos === 1 || eqItem.slotPos === 2) {
-          if ((eqItem.categoryName || "").startsWith(primaryWeapon)) {
+          const cat = eqItem.categoryName || "";
+          if (validLabels.some((label) => cat.startsWith(label))) {
             hasValidWeapon = true;
             break;
           }
@@ -923,29 +980,18 @@ async function main() {
       }
 
       if (!hasValidWeapon) {
-        if (equipDetails.length === 0) {
-          console.log(
-            `    ↳ Skipped: equipment API returned empty (can't verify class)`,
-          );
-          await sleep(DELAY_MS);
-          continue;
-        } else {
-          const wps = equipDetails
-            .filter((e) => e.slotPos === 1 || e.slotPos === 2)
-            .map((e) => e.categoryName)
-            .join(", ");
-          console.log(
-            `    ↳ Weapons [${wps}] don't match ${config.cls} (expected ${primaryWeapon}). Ignoring equipment data.`,
-          );
-          
-          // Clear equipment data so they still count towards the leaderboard limit
-          // but their irrelevant class stats aren't analyzed.
-          result._equip = null;
-          equipDetails = [];
-          result._equipDetails = [];
-        }
+        log.warn(name, `Weapons don't match ${config.cls}. Ignoring equipment data.`);
+        // Clear equipment data so they still count towards the leaderboard limit
+        // but their irrelevant class stats aren't analyzed.
+        result._equip = null;
+        equipDetails = [];
+        result._equipDetails = [];
       }
     }
+
+    // Fetch the game's own ItemLevel stat from character/info (matches Shugo.gg iLvl exactly)
+    const itemLevel = await fetchItemLevel(result, headers);
+    result._itemLevel = itemLevel;
 
     enriched.push(result);
     // Collect arcana item IDs for set info
@@ -959,20 +1005,16 @@ async function main() {
     await sleep(DELAY_MS);
   }
 
-  console.log(
-    `\n  ✅ ${enriched.length}/${config.limit} builds fetched (scanned ${scanned} candidates)`,
-  );
+  log.success("main", `${enriched.length}/${config.limit} builds fetched (scanned ${scanned} candidates)`);
 
   // 3. Fetch arcana item details (for set bonuses)
-  console.log("  📦 Fetching Arcana set details...");
+  log.info("main", "Fetching Arcana set details...");
   const itemDetails = await fetchItemDetails(allArcanaIds, headers);
-  console.log(
-    `  ✅ ${Object.keys(itemDetails).length} unique Arcana items resolved`,
-  );
+  log.success("main", `${Object.keys(itemDetails).length} unique Arcana items resolved`);
 
   // 4. Extract & Aggregate
   const builds = enriched.map((p) =>
-    extractBuild(p, itemDetails, p._equipDetails || []),
+    extractBuild(p, itemDetails, p._equipDetails || [], p._itemLevel ?? null),
   );
   const stats = aggregate(builds);
 
@@ -983,10 +1025,10 @@ async function main() {
   // 6. Save report as readable text
   const filename = `${config.cls}_${config.lbType}_builds.txt`;
   writeFileSync(filename, report, "utf-8");
-  console.log(`📁 Report saved to: ${filename}\n`);
+  log.success("main", `Report saved to: ${filename}`);
 }
 
 main().catch((err) => {
-  console.error("\n💥 Fatal error:", err);
+  log.error("main", `Fatal error: ${err.message || err}`);
   process.exit(1);
 });

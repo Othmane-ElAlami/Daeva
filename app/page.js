@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Search,
@@ -142,11 +142,26 @@ export default function Home() {
     serverId: "all",
   });
 
+  const logContainerRef = useRef(null);
+  const resultsLogContainerRef = useRef(null);
+
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  useEffect(() => {
+    if (logContainerRef.current) {
+      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
+    }
+  }, [logs]);
+
+  useEffect(() => {
+    if (resultsLogContainerRef.current) {
+      resultsLogContainerRef.current.scrollTop = resultsLogContainerRef.current.scrollHeight;
+    }
+  }, [logs, data]);
 
   if (!mounted) {
     return null;
@@ -192,13 +207,23 @@ export default function Home() {
                     ...prev,
                     {
                       text: event.message,
-                      time: new Date().toLocaleTimeString("en-US", {
-                        hour12: false,
-                        hour: "2-digit",
-                        minute: "2-digit",
-                        second: "2-digit",
-                        fractionalSecondDigits: 3,
-                      }),
+                      level: event.level || "INFO",
+                      context: event.context || "",
+                      time: event.timestamp
+                        ? new Date(event.timestamp).toLocaleTimeString("en-US", {
+                            hour12: false,
+                            hour: "2-digit",
+                            minute: "2-digit",
+                            second: "2-digit",
+                            fractionalSecondDigits: 3,
+                          })
+                        : new Date().toLocaleTimeString("en-US", {
+                            hour12: false,
+                            hour: "2-digit",
+                            minute: "2-digit",
+                            second: "2-digit",
+                            fractionalSecondDigits: 3,
+                          }),
                     },
                   ]);
                 } else if (event.type === "progress") {
@@ -721,6 +746,7 @@ export default function Home() {
                     />
                   </div>
                   <div
+                    ref={logContainerRef}
                     className="custom-scrollbar-slim"
                     style={{
                       padding: "12px 16px",
@@ -732,44 +758,25 @@ export default function Home() {
                     }}
                   >
                     <div className="flex-col gap-2">
-                      {[...logs].reverse().map((log, i) => (
+                      {logs.map((log, i) => {
+                        const levelIcon = { SUCCESS: "✅", INFO: "ℹ️", WARN: "⚠️", ERROR: "❌" }[log.level] || "ℹ️";
+                        const levelClass = `log-${(log.level || "INFO").toLowerCase()}`;
+                        return (
                         <motion.div
-                          key={logs.length - i}
+                          key={i}
                           initial={{ opacity: 0, x: -6 }}
                           animate={{ opacity: 1, x: 0 }}
-                          style={{
-                            display: "flex",
-                            alignItems: "flex-start",
-                            gap: "8px",
-                          }}
+                          className={`log-entry ${levelClass}`}
                         >
-                          <span
-                            style={{
-                              color: "var(--text-tertiary)",
-                              flexShrink: 0,
-                              userSelect: "none",
-                            }}
-                          >
-                            {log.time}
-                          </span>
-                          <span
-                            style={{
-                              color: "rgba(124,58,237,0.5)",
-                              flexShrink: 0,
-                            }}
-                          >
-                            {"›"}
-                          </span>
-                          <span
-                            style={{
-                              color: "#d4d4d8",
-                              wordBreak: "break-word",
-                            }}
-                          >
-                            {log.text}
-                          </span>
+                          <span className="log-icon">{levelIcon}</span>
+                          <span className="log-time">{log.time}</span>
+                          {log.context && (
+                            <span className="log-context">({log.context})</span>
+                          )}
+                          <span className="log-message">{log.text}</span>
                         </motion.div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 </div>
@@ -2189,6 +2196,22 @@ export default function Home() {
                                   {p.faction && p.faction !== "Unknown" && (
                                     <span>⚔️ {p.faction}</span>
                                   )}
+                                  {p.gearScore && (
+                                    <span
+                                      style={{
+                                        padding: "1px 6px",
+                                        borderRadius: "4px",
+                                        fontSize: "0.55rem",
+                                        fontWeight: 700,
+                                        background: "rgba(251,191,36,0.12)",
+                                        color: "#fbbf24",
+                                        border:
+                                          "1px solid rgba(251,191,36,0.2)",
+                                      }}
+                                    >
+                                      GS {p.gearScore.toLocaleString()}
+                                    </span>
+                                  )}
                                 </div>
                               </div>
                               <div
@@ -2251,6 +2274,7 @@ export default function Home() {
                         </span>
                       </div>
                       <div
+                        ref={resultsLogContainerRef}
                         className="custom-scrollbar-slim"
                         style={{
                           padding: "12px 16px",
@@ -2262,42 +2286,23 @@ export default function Home() {
                         }}
                       >
                         <div className="flex-col gap-2">
-                          {[...logs].reverse().map((log, i) => (
+                          {logs.map((log, i) => {
+                            const levelIcon = { SUCCESS: "\u2705", INFO: "\u2139\ufe0f", WARN: "\u26a0\ufe0f", ERROR: "\u274c" }[log.level] || "\u2139\ufe0f";
+                            const levelClass = `log-${(log.level || "INFO").toLowerCase()}`;
+                            return (
                             <div
-                              key={logs.length - i}
-                              style={{
-                                display: "flex",
-                                alignItems: "flex-start",
-                                gap: "8px",
-                              }}
+                              key={i}
+                              className={`log-entry ${levelClass}`}
                             >
-                              <span
-                                style={{
-                                  color: "var(--text-tertiary)",
-                                  flexShrink: 0,
-                                  userSelect: "none",
-                                }}
-                              >
-                                {log.time}
-                              </span>
-                              <span
-                                style={{
-                                  color: "rgba(124,58,237,0.5)",
-                                  flexShrink: 0,
-                                }}
-                              >
-                                {"›"}
-                              </span>
-                              <span
-                                style={{
-                                  color: "#d4d4d8",
-                                  wordBreak: "break-word",
-                                }}
-                              >
-                                {log.text}
-                              </span>
+                              <span className="log-icon">{levelIcon}</span>
+                              <span className="log-time">{log.time}</span>
+                              {log.context && (
+                                <span className="log-context">({log.context})</span>
+                              )}
+                              <span className="log-message">{log.text}</span>
                             </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                     </div>

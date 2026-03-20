@@ -1,5 +1,6 @@
 import { getCachedPlayer, setCachedPlayer } from "@/lib/db";
 import { getRequestContext } from "@cloudflare/next-on-pages";
+import { createWebLogger } from "@/lib/logger";
 
 export const runtime = "edge";
 
@@ -132,7 +133,13 @@ function proxyUrl(apiPath) {
 }
 
 // ── Extraction Logic ───
-function extractBuild(player, itemDetailsMap, equipDetailsList) {
+// itemLevel: the game's own ItemLevel stat from character/info (required — no fallback formula).
+function extractBuild(
+  player,
+  itemDetailsMap,
+  equipDetailsList,
+  itemLevel = null,
+) {
   const equip = player._equip;
   const serverId = player.serverId;
   const serverName =
@@ -150,6 +157,7 @@ function extractBuild(player, itemDetailsMap, equipDetailsList) {
       equip?.profile?.raceName ||
       "Unknown",
     globalRank: player.globalRank || player.rank,
+    gearScore: null,
     activeSkills: [],
     stigmaSkills: [],
     passiveSkills: [],
@@ -180,7 +188,7 @@ function extractBuild(player, itemDetailsMap, equipDetailsList) {
   const slotPosToName = {};
   const slotPosToGrade = {};
   for (const item of equipList) {
-    if (item.name && item.slotPos != null) {
+    if (item.slotPos != null) {
       slotPosToName[item.slotPos] = item.name;
       slotPosToGrade[item.slotPos] = item.grade ?? null;
     }
@@ -209,6 +217,9 @@ function extractBuild(player, itemDetailsMap, equipDetailsList) {
       build.equipItems.push({ categoryName: cat, itemName, grade });
     }
   }
+
+  // Gear score: use the game's own ItemLevel stat (matches Shugo.gg iLvl exactly).
+  build.gearScore = itemLevel ?? null;
 
   const setCounts = {};
   const seenSets = new Set();
@@ -356,6 +367,7 @@ function aggregate(builds) {
       region: b.region,
       faction: b.faction,
       globalRank: b.globalRank,
+      gearScore: b.gearScore,
     });
   }
 
@@ -393,6 +405,58 @@ async function runPool(tasks, concurrency) {
   return results;
 }
 
+// Extracts the game's own ItemLevel stat from character/info API response.
+// Shugo.gg displays this value directly as iLvl — so we do the same.
+// Checks both statList and statSecondList and alternate names for robustness.
+function extractItemLevelFromInfo(infoData) {
+  const lists = [
+    infoData?.stat?.statList,
+    infoData?.stat?.statSecondList,
+    infoData?.stat?.statListThird, // Sometimes exists in alternate API versions
+    infoData?.profile?.stat?.statList,
+    infoData?.statList,
+  ];
+
+  // Possible names for the Gear Score / Item Level stat
+  const statNames = ["itemlevel", "gearscore", "ilvl"];
+
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const name of statNames) {
+      const stat = list.find((s) => s?.type?.toLowerCase() === name);
+      if (stat != null) {
+        const num = Number(stat.value);
+        if (!isNaN(num) && num > 0) {
+          // If the value is suspicious (e.g. 1661 while others are 4k),
+          // we still return it as it's the game's reported value.
+          return num;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+// Fetches the ItemLevel from the game's character/info endpoint.
+// Returns null on failure (caller should fall back to manual calc).
+async function fetchItemLevel(p, headers) {
+  try {
+    const apiBase =
+      p.region === "TW"
+        ? "https://tw.ncsoft.com/aion2/api"
+        : "https://aion2.plaync.com/api";
+    const infoData = await fetchJSON(
+      proxyUrl(
+        `${apiBase}/character/info?lang=en&characterId=${p.characterId}&serverId=${p.serverId}`,
+      ),
+      headers,
+    );
+    return extractItemLevelFromInfo(infoData);
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(req) {
   const { lbType, cls, limit, region, serverId } = await req.json();
   const lbInfo = LEADERBOARD_TYPES[lbType];
@@ -422,13 +486,12 @@ export async function POST(req) {
       };
 
       try {
+        const log = createWebLogger(sendEvent);
+
         // ═══════════════════════════════════════════════════════════════════
         // PHASE 1: Fetch all leaderboard pages in parallel
         // ═══════════════════════════════════════════════════════════════════
-        sendEvent({
-          type: "log",
-          message: `Fetching ${lbInfo.label} leaderboard...`,
-        });
+        log.info("leaderboard", `Fetching ${lbInfo.label} leaderboard...`);
 
         // Estimate how many pages we need (100 per page), fetch them concurrently
         // When filtering by server/region, we need many more pages since most
@@ -470,10 +533,7 @@ export async function POST(req) {
           }
         }
 
-        sendEvent({
-          type: "log",
-          message: `Found ${allPlayers.length} unique candidates (${rawPlayers.length} raw).`,
-        });
+        log.info("leaderboard", `Found ${allPlayers.length} unique candidates (${rawPlayers.length} raw).`);
 
         // ═══════════════════════════════════════════════════════════════════
         // PHASE 2: Filter by region/server, then split cached vs uncached
@@ -501,6 +561,7 @@ export async function POST(req) {
               ...p,
               _equip: cached.equipData,
               _equipDetails: cached.equipDetails,
+              _itemLevel: cached.itemLevel ?? null,
             };
             cachedResults.push(result);
             for (const item of result._equip?.equipment?.equipmentList || []) {
@@ -517,10 +578,8 @@ export async function POST(req) {
         for (const r of cachedResults) {
           if (enriched.length >= limit) break;
           enriched.push(r);
-          sendEvent({
-            type: "log",
-            message: `[CACHED] ${r.characterName} (${enriched.length}/${limit})`,
-          });
+          const cachedGs = r._itemLevel;
+          log.success(r.characterName, `[CACHED]${cachedGs ? ` (GS: ${cachedGs})` : ""} (${enriched.length}/${limit})`);
         }
 
         if (enriched.length >= limit) {
@@ -534,10 +593,7 @@ export async function POST(req) {
         }
 
         const stillNeeded = limit - enriched.length;
-        sendEvent({
-          type: "log",
-          message: `${cachedResults.length} cached, ${Math.min(uncachedPlayers.length, stillNeeded)} need fetching.`,
-        });
+        log.info("cache", `${cachedResults.length} cached, ${Math.min(uncachedPlayers.length, stillNeeded)} need fetching.`);
 
         // ═══════════════════════════════════════════════════════════════════
         // PHASE 3: Fetch uncached players concurrently in batches
@@ -558,8 +614,7 @@ export async function POST(req) {
           const playerTasks = toFetch.map((p) => async () => {
             if (!isActive || reservedCount >= limit) return null;
 
-            // Reserve the slot synchronously (before any await) so that
-            // concurrent tasks don't all pass the guard with the same counter.
+            // Reserve the slot synchronously (before any await)
             reservedCount++;
 
             sendEvent({
@@ -569,105 +624,116 @@ export async function POST(req) {
               target: p.characterName,
             });
 
-            // Fetch equipment
-            let result;
-            try {
-              result = await fetchWithRetry(
-                async () => {
-                  const apiBase =
-                    p.region === "TW"
-                      ? "https://tw.ncsoft.com/aion2/api"
-                      : "https://aion2.plaync.com/api";
-                  const equipData = await fetchJSON(
-                    proxyUrl(
-                      `${apiBase}/character/equipment?lang=en&characterId=${p.characterId}&serverId=${p.serverId}`,
-                    ),
-                    headers,
-                  );
-                  if (!equipData?.equipment?.equipmentList?.length)
-                    throw new Error("Empty equipmentList");
-                  return { ...p, _equip: equipData };
-                },
-                MAX_RETRIES,
-                RETRY_BASE_MS,
-              );
-            } catch {
-              reservedCount--; // Release the reserved slot
-              sendEvent({
-                type: "log",
-                message: `Failed equipment for ${p.characterName}, skipping.`,
-              });
-              return null;
-            }
+            let result = { ...p };
+            let equipDetails = [];
 
-            // Fetch equipment details (substats)
-            let equipDetails;
+            let warnings = [];
             try {
-              equipDetails = await fetchWithRetry(
-                async () => {
-                  const eqList = result._equip?.equipment?.equipmentList || [];
-                  if (!eqList.length) return [];
+              // 1. Fetch equipment
+              try {
+                const apiBase =
+                  p.region === "TW"
+                    ? "https://tw.ncsoft.com/aion2/api"
+                    : "https://aion2.plaync.com/api";
+                const targetPath = `/character/equipment?lang=en&characterId=${encodeURIComponent(p.characterId)}&serverId=${p.serverId}`;
+                let equipData;
+                try {
+                  equipData = await fetchWithRetry(
+                    () =>
+                      fetchJSON(proxyUrl(`${apiBase}${targetPath}`), headers),
+                    MAX_RETRIES,
+                    RETRY_BASE_MS,
+                  );
+                } catch (proxyErr) {
+                  // Fallback: Try direct fetch without proxy
+                  log.warn(p.characterName, `Proxy failed, trying direct fallback: ${proxyErr.message}`);
+                  equipData = await fetchWithRetry(
+                    () => fetchJSON(`${apiBase}${targetPath}`, headers),
+                    MAX_RETRIES,
+                    RETRY_BASE_MS,
+                  );
+                }
+
+                if (equipData?.equipment?.equipmentList?.length) {
+                  result._equip = equipData;
+                } else {
+                  throw new Error("Empty equipmentList");
+                }
+              } catch (err) {
+                warnings.push(`Gear Failed: ${err.message}`);
+                result._equip = null;
+              }
+
+              // 2. Fetch equipment details (substats) if we have gear
+              if (result._equip) {
+                try {
+                  const eqList = result._equip.equipment.equipmentList;
                   const items = eqList.map((e) => ({
                     itemId: e.id,
                     enchantLevel: e.enchantLevel || 0,
                     slotPos: e.slotPos,
                   }));
-                  const data = await fetchJSON(
-                    `${BASE}/api/items/batch-equipment`,
-                    headers,
-                    "POST",
-                    {
-                      items,
-                      characterId: p.characterId,
-                      serverId: p.serverId,
-                      region: p.region,
-                    },
+                  const data = await fetchWithRetry(
+                    () =>
+                      fetchJSON(
+                        `${BASE}/api/items/batch-equipment`,
+                        headers,
+                        "POST",
+                        {
+                          items,
+                          characterId: p.characterId,
+                          serverId: p.serverId,
+                          region: p.region || "KR",
+                        },
+                      ),
+                    MAX_RETRIES,
+                    RETRY_BASE_MS,
                   );
-                  const arr = Array.isArray(data?.items || data)
+                  equipDetails = Array.isArray(data?.items || data)
                     ? data?.items || data
                     : [];
-                  if (!arr.length) throw new Error("Empty equip details");
-                  return arr;
-                },
-                MAX_RETRIES,
-                RETRY_BASE_MS,
-              );
-            } catch {
-              reservedCount--; // Release the reserved slot
-              sendEvent({
-                type: "log",
-                message: `Failed substats for ${p.characterName}, skipping.`,
-              });
-              return null;
-            }
-
-            result._equipDetails = equipDetails;
-
-            // Validate weapon class
-            const primaryWeapon = CLASS_WEAPONS[cls];
-            if (primaryWeapon) {
-              let hasValidWeapon = false;
-              for (const eqItem of equipDetails) {
-                if (!eqItem) continue;
-                if (eqItem.slotPos === 1 || eqItem.slotPos === 2) {
-                  if ((eqItem.categoryName || "").startsWith(primaryWeapon)) {
-                    hasValidWeapon = true;
-                    break;
-                  }
+                } catch (err) {
+                  warnings.push(`Substats Failed: ${err.message}`);
                 }
               }
-              if (!hasValidWeapon) {
-                sendEvent({
-                  type: "log",
-                  message: `${p.characterName} has mismatched weapon. Ignoring equipment data.`,
-                });
-                result._equip = null;
-                result._equipDetails = [];
-                equipDetails = [];
+
+              result._equipDetails = equipDetails;
+
+              // ... 3. Class validation ...
+              const clsLower = (cls || "").toLowerCase();
+              const primaryWeapon = CLASS_WEAPONS[clsLower];
+
+              if (primaryWeapon && result._equip && equipDetails.length > 0) {
+                const validLabels = [primaryWeapon];
+                if (primaryWeapon === "Staff") validLabels.push("法杖"); // TW localized
+
+                let hasValidWeapon = false;
+                for (const eqItem of equipDetails) {
+                  if (eqItem.slotPos === 1 || eqItem.slotPos === 2) {
+                    const cat = eqItem.categoryName || "";
+                    if (validLabels.some((label) => cat.startsWith(label))) {
+                      hasValidWeapon = true;
+                      break;
+                    }
+                  }
+                }
+
+                if (!hasValidWeapon) {
+                  warnings.push("Mismatched Weapon");
+                  result._equip = null;
+                  result._equipDetails = [];
+                  equipDetails = [];
+                }
               }
+            } catch (err) {
+              warnings.push(`Error: ${err.message}`);
             }
 
-            // Cache the result
+            // 4. Always fetch ItemLevel (authoritative for GS)
+            const itemLevel = await fetchItemLevel(p, headers);
+            result._itemLevel = itemLevel;
+
+            // 5. Cache the result
             await setCachedPlayer(
               db,
               p.characterId,
@@ -675,13 +741,17 @@ export async function POST(req) {
               p.region,
               result._equip,
               equipDetails,
+              itemLevel,
             );
 
             const playerNum = ++doneCount;
-            sendEvent({
-              type: "log",
-              message: `Scanned ${p.characterName} (${playerNum}/${limit})`,
-            });
+            const warningStr =
+              warnings.length > 0 ? ` [${warnings.join(", ")}]` : "";
+            if (warnings.length > 0) {
+              log.warn(p.characterName, `Scanned${itemLevel ? ` (GS: ${itemLevel})` : ""} (${playerNum}/${limit})${warningStr}`);
+            } else {
+              log.success(p.characterName, `Scanned${itemLevel ? ` (GS: ${itemLevel})` : ""} (${playerNum}/${limit})`);
+            }
 
             return result;
           });
@@ -707,10 +777,7 @@ export async function POST(req) {
           let extraPage = pagesNeeded + 1;
           while (enriched.length < limit && extraPage <= 50) {
             if (!isActive) break;
-            sendEvent({
-              type: "log",
-              message: `Need more candidates, fetching page ${extraPage}...`,
-            });
+            log.info("leaderboard", `Need more candidates, fetching page ${extraPage}...`);
             const url = `${BASE}/api/leaderboard?contentType=${lbInfo.contentType}&rankingType=${rankingType}&page=${extraPage}&limit=100`;
             let moreRankings;
             try {
@@ -756,6 +823,7 @@ export async function POST(req) {
                   ...p,
                   _equip: cached.equipData,
                   _equipDetails: cached.equipDetails,
+                  _itemLevel: cached.itemLevel ?? null,
                 };
                 enriched.push(result);
                 for (const item of result._equip?.equipment?.equipmentList ||
@@ -763,10 +831,8 @@ export async function POST(req) {
                   if ((item.slotPosName || "").startsWith("Arcana"))
                     allArcanaIds.push(item.id);
                 }
-                sendEvent({
-                  type: "log",
-                  message: `[CACHED] ${p.characterName} (${enriched.length}/${limit})`,
-                });
+                const cachedGs2 = result._itemLevel;
+                log.success(p.characterName, `[CACHED]${cachedGs2 ? ` (GS: ${cachedGs2})` : ""} (${enriched.length}/${limit})`);
               } else {
                 moreUncached.push(p);
               }
@@ -859,6 +925,9 @@ export async function POST(req) {
                       result._equipDetails = [];
                     }
                   }
+                  // Fetch the game's own ItemLevel stat (matches Shugo.gg iLvl)
+                  const itemLevel2 = await fetchItemLevel(p, headers);
+                  result._itemLevel = itemLevel2;
                   await setCachedPlayer(
                     db,
                     p.characterId,
@@ -866,12 +935,11 @@ export async function POST(req) {
                     p.region,
                     result._equip,
                     equipDetails,
+                    itemLevel2,
                   );
                   mc++;
-                  sendEvent({
-                    type: "log",
-                    message: `Scanned ${p.characterName} (${mc}/${limit})`,
-                  });
+                  const gs2 = itemLevel2;
+                  log.success(p.characterName, `Scanned${gs2 ? ` (GS: ${gs2})` : ""} (${mc}/${limit})`);
                   return result;
                 });
               const moreResults = await runPool(moreTasks, CONCURRENCY);
@@ -889,10 +957,7 @@ export async function POST(req) {
         }
 
         sendEvent({ type: "progress", current: limit, total: limit });
-        sendEvent({
-          type: "log",
-          message: `Finished scanning ${enriched.length} valid players. Fetching Arcana dictionary...`,
-        });
+        log.success("aggregate", `Finished scanning ${enriched.length} valid players. Fetching Arcana dictionary...`);
 
         // ═══════════════════════════════════════════════════════════════════
         // PHASE 4: Fetch arcana item details in parallel batches
@@ -927,10 +992,15 @@ export async function POST(req) {
           }
         }
 
-        sendEvent({ type: "log", message: `Aggregating final results...` });
+        log.info("aggregate", `Aggregating final results...`);
 
         const builds = enriched.map((p) =>
-          extractBuild(p, itemDetailsMap, p._equipDetails || []),
+          extractBuild(
+            p,
+            itemDetailsMap,
+            p._equipDetails || [],
+            p._itemLevel ?? null,
+          ),
         );
         const stats = aggregate(builds);
 
@@ -942,7 +1012,7 @@ export async function POST(req) {
           isActive = false;
         }
       } catch (error) {
-        console.error(error);
+        log.error("POST", error.message);
         sendEvent({ type: "error", message: error.message });
         if (isActive) {
           try {
