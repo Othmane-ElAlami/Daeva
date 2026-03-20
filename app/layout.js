@@ -9,6 +9,17 @@ const inter = Inter({
 export const metadata = {
   title: "Daeva Analyzer",
   description: "Aion 2 Build Dashboard",
+  icons: {
+    icon: [
+      { url: '/favicon/favicon-96x96.png', sizes: '96x96', type: 'image/png' },
+      { url: '/favicon/favicon.svg', type: 'image/svg+xml' },
+      { url: '/favicon/favicon.ico' },
+      { url: '/favicon/apple-touch-icon.png' },
+    ],
+    shortcut: '/favicon/favicon.ico',
+    apple: '/favicon/apple-touch-icon.png',
+  },
+  manifest: '/favicon/site.webmanifest',
 };
 
 export default function RootLayout({ children }) {
