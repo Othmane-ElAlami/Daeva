@@ -1,4 +1,4 @@
-import { Inter } from "next/font/google";
+import { Inter, Cinzel } from "next/font/google";
 import "./globals.css";
 
 const inter = Inter({
@@ -6,25 +6,28 @@ const inter = Inter({
   weight: ["400", "500", "600", "700", "800"],
 });
 
+const cinzel = Cinzel({
+  subsets: ["latin"],
+  weight: ["400", "700", "900"],
+  variable: "--font-cinzel",
+});
+
 export const metadata = {
   title: "Daeva Analyzer",
   description: "Aion 2 Build Dashboard",
-  icons: {
-    icon: [
-      { url: '/favicon/favicon-96x96.png', sizes: '96x96', type: 'image/png' },
-      { url: '/favicon/favicon.svg', type: 'image/svg+xml' },
-      { url: '/favicon/favicon.ico' },
-      { url: '/favicon/apple-touch-icon.png' },
-    ],
-    shortcut: '/favicon/favicon.ico',
-    apple: '/favicon/apple-touch-icon.png',
-  },
-  manifest: '/favicon/site.webmanifest',
 };
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en" className={inter.className} suppressHydrationWarning>
+    <html
+      lang="en"
+      className={`${inter.className} ${cinzel.variable}`}
+      suppressHydrationWarning
+    >
+      <head>
+        <meta name="darkreader-lock" />
+        <meta name="color-scheme" content="dark" />
+      </head>
       <body suppressHydrationWarning>{children}</body>
     </html>
   );

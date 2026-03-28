@@ -5,46 +5,48 @@
    ═══════════════════════════════════════════ */
 
 :root {
-  --bg-primary: #08090e;
-  --bg-secondary: #0e1018;
-  --bg-elevated: #14161f;
-  --bg-surface: rgba(255, 255, 255, 0.025);
+  color-scheme: dark;
 
-  --border-subtle: rgba(255, 255, 255, 0.05);
-  --border-default: rgba(255, 255, 255, 0.08);
-  --border-hover: rgba(255, 255, 255, 0.14);
-  --border-accent: rgba(124, 58, 237, 0.3);
+  --bg-primary: #050814;
+  --bg-secondary: #080c1a;
+  --bg-elevated: #0a0f24;
+  --bg-surface: rgba(255, 255, 255, 0.015);
 
-  --text-primary: #eef0f4;
-  --text-secondary: #7c8499;
-  --text-tertiary: #4a5064;
+  --border-subtle: rgba(255, 255, 255, 0.03);
+  --border-default: rgba(255, 255, 255, 0.05);
+  --border-hover: rgba(185, 28, 28, 0.4);
+  --border-accent: rgba(185, 28, 28, 0.5);
 
-  --accent: #7c3aed;
-  --accent-light: #a78bfa;
-  --accent-muted: rgba(124, 58, 237, 0.15);
-  --accent-glow: rgba(124, 58, 237, 0.2);
+  --text-primary: #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-tertiary: #475569;
+
+  --accent: #b91c1c;
+  --accent-light: #f87171;
+  --accent-muted: rgba(185, 28, 28, 0.15);
+  --accent-glow: rgba(185, 28, 28, 0.25);
 
   --success: #10b981;
   --warning: #f59e0b;
   --error: #ef4444;
 
-  --stat-offense: #fb7185;
-  --stat-defense: #60a5fa;
-  --stat-utility: #2dd4bf;
+  --stat-offense: #b91c1c;
+  --stat-defense: #22c55e;
+  --stat-utility: #3b82f6;
   --stat-skill: #c084fc;
-  --stat-deity: #fbbf24;
-  --stat-base: #94a3b8;
+  --stat-deity: #b45309;
+  --stat-base: #64748b;
 
-  --arcana-pure-blood: #ef4444;
-  --arcana-primal-vigor: #22c55e;
-  --arcana-magic-armor: #3b82f6;
-  --arcana-frenzy: #f97316;
+  --arcana-pure-blood: #b91c1c;
+  --arcana-primal-vigor: #15803d;
+  --arcana-magic-armor: #1d4ed8;
+  --arcana-frenzy: #ea580c;
   --arcana-none: #475569;
 
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-xl: 20px;
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 6px;
+  --radius-xl: 8px;
 }
 
 * {
@@ -69,9 +71,9 @@ body::before {
   position: fixed;
   inset: 0;
   background:
-    radial-gradient(ellipse 60% 50% at 20% 20%, rgba(124, 58, 237, 0.06) 0%, transparent 70%),
-    radial-gradient(ellipse 50% 40% at 80% 60%, rgba(37, 99, 235, 0.04) 0%, transparent 70%),
-    radial-gradient(ellipse 40% 30% at 50% 90%, rgba(168, 85, 247, 0.03) 0%, transparent 60%);
+    radial-gradient(ellipse 60% 50% at 20% 20%, rgba(185, 28, 28, 0.06) 0%, transparent 70%),
+    radial-gradient(ellipse 50% 40% at 80% 60%, rgba(30, 58, 138, 0.05) 0%, transparent 70%),
+    radial-gradient(ellipse 40% 30% at 50% 90%, rgba(153, 27, 27, 0.04) 0%, transparent 60%);
   pointer-events: none;
   z-index: 0;
 }
@@ -94,20 +96,17 @@ body::after {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
   padding: 24px;
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
   box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.02) inset,
-    0 4px 24px rgba(0, 0, 0, 0.4),
-    0 1px 2px rgba(0, 0, 0, 0.3);
+    0 0 0 1px rgba(255, 255, 255, 0.01) inset,\n    inset 0 1px 0 rgba(255, 255, 255, 0.05),\n    0 4px 24px rgba(0, 0, 0, 0.8),\n    0 1px 2px rgba(0, 0, 0, 0.6);
   transition: border-color 0.3s ease, box-shadow 0.3s ease;
 }
 
 .glass-panel:hover {
   border-color: var(--border-hover);
   box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.03) inset,
-    0 8px 40px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(185, 28, 28, 0.05) inset,\n    inset 0 1px 0 rgba(185, 28, 28, 0.1),\n    0 8px 40px rgba(0, 0, 0, 0.9),
     0 0 30px -10px var(--accent-glow);
 }
 
@@ -250,9 +249,9 @@ select option {
 /* ─── Buttons ─── */
 .btn-primary {
   position: relative;
-  background: linear-gradient(135deg, var(--accent), #5b21b6);
+  background: linear-gradient(135deg, var(--accent), #7f1d1d);
   color: white;
-  border: none;
+  border: 1px solid rgba(185, 28, 28, 0.5);
   border-radius: var(--radius-sm);
   padding: 12px 20px;
   font-size: 0.9rem;
@@ -265,7 +264,7 @@ select option {
   gap: 8px;
   width: 100%;
   transition: transform 0.15s, box-shadow 0.25s, filter 0.25s;
-  box-shadow: 0 4px 16px var(--accent-glow), 0 0 0 1px rgba(124, 58, 237, 0.3) inset;
+  box-shadow: 0 4px 16px var(--accent-glow), 0 0 0 1px rgba(185, 28, 28, 0.3) inset;
   overflow: hidden;
 }
 
@@ -279,7 +278,7 @@ select option {
 
 .btn-primary:hover {
   transform: translateY(-1px);
-  box-shadow: 0 8px 30px var(--accent-glow), 0 0 0 1px rgba(124, 58, 237, 0.4) inset;
+  box-shadow: 0 8px 30px var(--accent-glow), 0 0 0 1px rgba(185, 28, 28, 0.4) inset;
   filter: brightness(1.1);
 }
 
@@ -322,7 +321,7 @@ select option {
   letter-spacing: 0.04em;
   background: var(--accent-muted);
   color: var(--accent-light);
-  border: 1px solid rgba(124, 58, 237, 0.25);
+  border: 1px solid rgba(185, 28, 28, 0.25);
 }
 
 .badge-success {
@@ -349,7 +348,7 @@ select option {
 
 .stat-card-header {
   padding: 12px 16px;
-  background: linear-gradient(135deg, rgba(124, 58, 237, 0.08), transparent);
+  background: linear-gradient(135deg, rgba(185, 28, 28, 0.08), transparent);
   border-bottom: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
@@ -514,7 +513,7 @@ select option {
 
 .bg-emerald-grad { background: linear-gradient(135deg, rgba(16, 185, 129, 0.04), transparent); }
 .border-emerald { border-color: rgba(16, 185, 129, 0.15); }
-.border-purple-20 { border-color: rgba(168, 85, 247, 0.2); }
+.border-purple-20 { border-color: rgba(239, 68, 68, 0.2); }
 
 /* ─── Scrollbar ─── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -586,12 +585,14 @@ select option {
   flex-shrink: 0;
   font-size: 0.65rem;
   line-height: 1.6;
+  -webkit-user-select: none;
   user-select: none;
 }
 
 .log-time {
   color: var(--text-tertiary);
   flex-shrink: 0;
+  -webkit-user-select: none;
   user-select: none;
   font-size: 0.7rem;
 }
@@ -632,4 +633,3 @@ select option {
   background: rgba(248, 113, 113, 0.04);
 }
 .log-error .log-message { color: #f87171; }
-
