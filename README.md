@@ -1,6 +1,6 @@
 # Daeva
 
-A Next.js leaderboard viewer for [shugo.gg](https://shugo.gg), deployed on Cloudflare Pages with a D1 database for player equipment caching.
+A Next.js leaderboard and build analyzer for Aion 2. Leaderboards are sourced from [shugo.gg](https://shugo.gg/leaderboard), while player equipment and metadata are fetched from the official API. Deployed on Cloudflare Pages with a D1 database for player equipment caching.
 
 ## Prerequisites
 
@@ -71,7 +71,7 @@ npm run deploy
 
 ```text
 app/
-  api/scrape/route.js   # Edge API route — scrapes shugo.gg leaderboards and caches player data
+  api/scrape/route.js   # Edge API route — scans shugo.gg leaderboards and fetches character data from official API
   layout.js / page.js   # Root layout and main page
 src/
   lib/db.js             # D1 helper functions (getCachedPlayer, setCachedPlayer)
