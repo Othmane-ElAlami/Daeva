@@ -20,10 +20,12 @@
   },
   "devDependencies": {
     "@cloudflare/next-on-pages": "^1",
+    "@eslint/eslintrc": "^3.3.5",
     "@tailwindcss/postcss": "^4",
     "eslint": "^9",
     "eslint-config-next": "15.5.2",
     "tailwindcss": "^4",
+    "typescript": "^6.0.2",
     "wrangler": "^4.65.0"
   }
 }
