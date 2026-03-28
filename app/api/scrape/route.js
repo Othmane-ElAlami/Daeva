@@ -1,474 +1,193 @@
 import { getCachedPlayer, setCachedPlayer } from "@/lib/db";
 import { getRequestContext } from "@cloudflare/next-on-pages";
 import { createWebLogger } from "@/lib/logger";
+import {
+  baseUrl,
+  leaderboardTypes,
+  classRankingIds,
+  classWeapons,
+  makeHeaders,
+  makeDirectHeaders,
+  proxyUrl,
+  fetchJSON,
+  fetchWithRetry,
+  runPool,
+  subrequestBudgetExhausted,
+  createBudget,
+  fetchItemLevelAndCP,
+  extractItemLevelFromInfo,
+  extractCombatPowerFromInfo,
+  extractBuild,
+  aggregate,
+} from "@/lib/scraper-shared";
 
 export const runtime = "edge";
 
-const BASE = "https://shugo.gg";
-
-const LEADERBOARD_TYPES = {
-  nightmare: { contentType: 3, label: "Nightmare" },
-  abyss: { contentType: 1, label: "Abyss" },
-  "arena-solo": { contentType: 5, label: "Arena Solo" },
-  "arena-coop": { contentType: 6, label: "Arena Coop" },
-  transcendence: { contentType: 4, label: "Transcendence" },
-  ascension: { contentType: 21, label: "Ascension" },
-  raid: { contentType: 20, label: "Raid" },
-};
-
-const CLASS_RANKING_IDS = {
-  gladiator: 2,
-  templar: 3,
-  ranger: 4,
-  assassin: 5,
-  spiritmaster: 6,
-  sorcerer: 7,
-  cleric: 8,
-  chanter: 9,
-};
-
-const CLASS_WEAPONS = {
-  gladiator: "Greatsword",
-  templar: "Longsword",
-  ranger: "Bow",
-  assassin: "Dagger",
-  spiritmaster: "Orb",
-  sorcerer: "Spellbook",
-  cleric: "Mace",
-  chanter: "Staff",
-};
-
-const SERVER_NAMES = {
-  // Elyos (1xxx)
-  1001: "Siel",
-  1002: "Nezekan",
-  1003: "Vaizel",
-  1004: "Kaisinel",
-  1005: "Yustiel",
-  1006: "Ariel",
-  1007: "Fregion",
-  1008: "Meslamtaeda",
-  1009: "Hithanya",
-  1010: "Nania",
-  1011: "Tahavatha",
-  1012: "Luteros",
-  1013: "Phernos",
-  1014: "Daminu",
-  1015: "Kasaka",
-  1016: "Bakarma",
-  1017: "Tsenka",
-  1018: "Kochi",
-  1019: "Ishtar",
-  1020: "Tiamat",
-  1021: "Poeta",
-  // Asmodian (2xxx)
-  2001: "Israphel",
-  2002: "Zikel",
-  2003: "Triniel",
-  2004: "Lumiel",
-  2005: "Marchutan",
-  2006: "Azphel",
-  2007: "Ereshkigal",
-  2008: "Beritra",
-  2009: "Nemon",
-  2010: "Hadala",
-  2011: "Ludra",
-  2012: "Ulgorn",
-  2013: "Munin",
-  2014: "Odar",
-  2015: "Zemurru",
-  2016: "Kromede",
-  2017: "Quai",
-  2018: "Baba",
-  2019: "Fafnir",
-  2020: "Indnah",
-  2021: "Pandemonium",
-};
-
-function makeHeaders(referer) {
-  return {
-    "User-Agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    Accept: "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-    Referer: referer,
-    Origin: BASE,
-  };
-}
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-async function fetchJSON(url, headers, method = "GET", body = null) {
-  const opts = { headers, method };
-  if (body) {
-    opts.body = JSON.stringify(body);
-    opts.headers = { ...headers, "Content-Type": "application/json" };
-  }
-  const res = await fetch(url, opts);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
-}
-
-async function fetchWithRetry(fn, maxAttempts = 3, baseDelayMs = 500) {
-  let lastErr;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastErr = err;
-      if (attempt < maxAttempts) {
-        let wait = baseDelayMs * Math.pow(2, attempt - 1);
-        if (err.message && err.message.includes("HTTP 429")) {
-          wait += 5000;
-        }
-        await sleep(wait);
-      }
-    }
-  }
-  throw lastErr;
-}
-
-function proxyUrl(apiPath) {
-  return `${BASE}/api/proxy?url=${encodeURIComponent(apiPath)}`;
-}
-
-// ── Extraction Logic ───
-// itemLevel: the game's own ItemLevel stat from character/info (required — no fallback formula).
-function extractBuild(
-  player,
-  itemDetailsMap,
-  equipDetailsList,
-  itemLevel = null,
-) {
-  const equip = player._equip;
-  const serverId = player.serverId;
-  const serverName =
-    SERVER_NAMES[serverId] || (serverId ? `Server ${serverId}` : "Unknown");
-
-  const build = {
-    name: player.characterName || "Unknown",
-    serverId: serverId || null,
-    serverName: serverName,
-    race: serverId >= 2000 ? "Asmo" : serverId >= 1000 ? "Elyos" : "Unknown",
-    region: player.region || "Unknown",
-    faction:
-      player.faction ||
-      equip?.profile?.factionName ||
-      equip?.profile?.raceName ||
-      "Unknown",
-    globalRank: player.globalRank || player.rank,
-    gearScore: null,
-    activeSkills: [],
-    stigmaSkills: [],
-    passiveSkills: [],
-    arcanas: [],
-    arcanaSets: [],
-    equipSubStats: [],
-    equipItems: [],
-  };
-
-  const skillList = equip?.skill?.skillList || [];
-  for (const s of skillList) {
-    const isPassive = s.category === "Passive";
-    const isStigma = s.category === "Dp";
-    if (!isPassive && !isStigma && !s.equip) continue;
-    const info = {
-      name: s.name,
-      level: s.skillLevel || 0,
-      equipped: !!s.equip,
-    };
-    if (s.category === "Active") build.activeSkills.push(info);
-    if (s.category === "Dp") build.stigmaSkills.push(info);
-    if (isPassive) build.passiveSkills.push(info);
-  }
-
-  const equipList = equip?.equipment?.equipmentList || [];
-
-  // Build maps from slotPos to item name/grade from the equipment list
-  const slotPosToName = {};
-  const slotPosToGrade = {};
-  for (const item of equipList) {
-    if (item.slotPos != null) {
-      slotPosToName[item.slotPos] = item.name;
-      slotPosToGrade[item.slotPos] = item.grade ?? null;
-    }
-  }
-
-  for (const eqItem of equipDetailsList) {
-    if (!eqItem) continue;
-    const cat = eqItem.categoryName;
-    if (!cat) continue;
-    const subs = (eqItem.subStats || []).map((s) => ({
-      name: s.name,
-      value: s.value,
-    }));
-    const skills = (eqItem.subSkills || []).map((s) => ({
-      name: s.name,
-      value: "+" + s.level,
-    }));
-    const combined = [...subs, ...skills];
-    if (combined.length > 0) {
-      build.equipSubStats.push({ categoryName: cat, subStats: combined });
-    }
-    // Track item name per slot
-    const itemName = slotPosToName[eqItem.slotPos];
-    if (itemName) {
-      const grade = slotPosToGrade[eqItem.slotPos] ?? null;
-      build.equipItems.push({ categoryName: cat, itemName, grade });
-    }
-  }
-
-  // Gear score: use the game's own ItemLevel stat (matches Shugo.gg iLvl exactly).
-  build.gearScore = itemLevel ?? null;
-
-  const setCounts = {};
-  const seenSets = new Set();
-  for (const item of equipList) {
-    if (!(item.slotPosName || "").startsWith("Arcana")) continue;
-    const detail = itemDetailsMap[item.id];
-    const arcana = {
-      name: item.name,
-      slot: item.slotPosName,
-      grade: item.grade,
-      enchantLevel: item.enchantLevel || 0,
-      mainStat: null,
-      setName: null,
-    };
-    if (detail) {
-      if (detail.mainStats?.[0]) {
-        arcana.mainStat =
-          detail.mainStats[0].name + ": " + detail.mainStats[0].value;
-      }
-      if (detail.set) {
-        arcana.setName = detail.set.name;
-        setCounts[detail.set.name] = (setCounts[detail.set.name] || 0) + 1;
-        if (!seenSets.has(detail.set.name)) {
-          seenSets.add(detail.set.name);
-          build.arcanaSets.push({
-            name: detail.set.name,
-            bonuses: (detail.set.bonuses || []).map(
-              (b) => `(${b.degree}-piece) ${b.descriptions.join(", ")}`,
-            ),
-          });
-        }
-      }
-    }
-    build.arcanas.push(arcana);
-  }
-
-  build.arcanaSetCombo =
-    Object.entries(setCounts)
-      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-      .map(([name, count]) => `${name}(${count})`)
-      .join(" + ") || "None";
-
-  return build;
-}
-
-function aggregate(builds) {
-  const total = builds.length;
-  const stats = {
-    total,
-    activeSkills: {},
-    stigmaSkills: {},
-    passiveSkills: {},
-    arcanaUsage: {},
-    arcanaSets: {},
-    arcanaSetCombos: {},
-    arcanaMainStats: {},
-    equippedStigmaCombos: {},
-    subStatsBySlot: {},
-    itemsBySlot: {},
-    scannedPlayers: [],
-  };
-
-  for (const b of builds) {
-    for (const s of b.activeSkills) {
-      const e = (stats.activeSkills[s.name] ||= {
-        totalLv: 0,
-        count: 0,
-        maxLv: 0,
-        equippedCount: 0,
-      });
-      e.totalLv += s.level;
-      e.count++;
-      e.maxLv = Math.max(e.maxLv, s.level);
-      if (s.equipped) e.equippedCount++;
-    }
-    for (const s of b.stigmaSkills) {
-      const e = (stats.stigmaSkills[s.name] ||= {
-        totalLv: 0,
-        count: 0,
-        maxLv: 0,
-        equippedCount: 0,
-      });
-      e.totalLv += s.level;
-      e.count++;
-      e.maxLv = Math.max(e.maxLv, s.level);
-      if (s.equipped) e.equippedCount++;
-    }
-    const topStigmas = [...b.stigmaSkills]
-      .sort((a, b) => b.level - a.level || a.name.localeCompare(b.name))
-      .slice(0, 4)
-      .map((s) => s.name)
-      .sort();
-    if (topStigmas.length > 0) {
-      const combo = topStigmas.join(" + ");
-      stats.equippedStigmaCombos[combo] =
-        (stats.equippedStigmaCombos[combo] || 0) + 1;
-    }
-    for (const s of b.passiveSkills) {
-      const e = (stats.passiveSkills[s.name] ||= {
-        totalLv: 0,
-        count: 0,
-        maxLv: 0,
-      });
-      e.totalLv += s.level;
-      e.count++;
-      e.maxLv = Math.max(e.maxLv, s.level);
-    }
-    for (const a of b.arcanas) {
-      stats.arcanaUsage[a.name] = (stats.arcanaUsage[a.name] || 0) + 1;
-      if (a.mainStat)
-        stats.arcanaMainStats[a.mainStat] =
-          (stats.arcanaMainStats[a.mainStat] || 0) + 1;
-    }
-    for (const s of b.arcanaSets) {
-      if (!stats.arcanaSets[s.name])
-        stats.arcanaSets[s.name] = { count: 0, bonuses: s.bonuses };
-      stats.arcanaSets[s.name].count++;
-    }
-    if (b.arcanaSetCombo) {
-      stats.arcanaSetCombos[b.arcanaSetCombo] =
-        (stats.arcanaSetCombos[b.arcanaSetCombo] || 0) + 1;
-    }
-    for (const eq of b.equipSubStats) {
-      const slotStats = (stats.subStatsBySlot[eq.categoryName] ||= {});
-      for (const s of eq.subStats) {
-        const entry = (slotStats[s.name] ||= { count: 0, values: [] });
-        entry.count++;
-        entry.values.push(s.value);
-      }
-    }
-    for (const eq of b.equipItems) {
-      const slotItems = (stats.itemsBySlot[eq.categoryName] ||= {});
-      const existing = slotItems[eq.itemName];
-      if (existing) {
-        existing.count++;
-      } else {
-        slotItems[eq.itemName] = { count: 1, grade: eq.grade };
-      }
-    }
-    stats.scannedPlayers.push({
-      name: b.name,
-      serverId: b.serverId,
-      serverName: b.serverName,
-      race: b.race,
-      region: b.region,
-      faction: b.faction,
-      globalRank: b.globalRank,
-      gearScore: b.gearScore,
-    });
-  }
-
-  for (const map of [
-    stats.activeSkills,
-    stats.stigmaSkills,
-    stats.passiveSkills,
-  ]) {
-    for (const d of Object.values(map)) {
-      d.avgLv = +(d.totalLv / d.count).toFixed(1);
-    }
-  }
-  return stats;
-}
-
-// ── Concurrency-limited task runner ──────────────────────────────────────────
-// Runs up to `concurrency` async tasks in parallel from `tasks` iterator/array.
-// Returns results in order.
-async function runPool(tasks, concurrency) {
-  const results = new Array(tasks.length);
-  let idx = 0;
-
-  async function worker() {
-    while (idx < tasks.length) {
-      const i = idx++;
-      results[i] = await tasks[i]();
-    }
-  }
-
-  const workers = Array.from(
-    { length: Math.min(concurrency, tasks.length) },
-    () => worker(),
-  );
-  await Promise.all(workers);
-  return results;
-}
-
-// Extracts the game's own ItemLevel stat from character/info API response.
-// Shugo.gg displays this value directly as iLvl — so we do the same.
-// Checks both statList and statSecondList and alternate names for robustness.
-function extractItemLevelFromInfo(infoData) {
-  const lists = [
-    infoData?.stat?.statList,
-    infoData?.stat?.statSecondList,
-    infoData?.stat?.statListThird, // Sometimes exists in alternate API versions
-    infoData?.profile?.stat?.statList,
-    infoData?.statList,
+// Sanitize error messages so internal/infrastructure details are never shown to users.
+function sanitizeErrorMessage(msg) {
+  if (!msg) return "An unexpected error occurred. Please try again.";
+  const internalPatterns = [
+    /subrequest/i,
+    /worker invocation/i,
+    /cloudflare/i,
+    /wrangler/i,
+    /D1_ERROR/i,
+    /SQLITE/i,
+    /too many/i,
+    /developers\.cloudflare/i,
+    /binding/i,
+    /UnsafeEval/i,
   ];
-
-  // Possible names for the Gear Score / Item Level stat
-  const statNames = ["itemlevel", "gearscore", "ilvl"];
-
-  for (const list of lists) {
-    if (!Array.isArray(list)) continue;
-    for (const name of statNames) {
-      const stat = list.find((s) => s?.type?.toLowerCase() === name);
-      if (stat != null) {
-        const num = Number(stat.value);
-        if (!isNaN(num) && num > 0) {
-          // If the value is suspicious (e.g. 1661 while others are 4k),
-          // we still return it as it's the game's reported value.
-          return num;
-        }
-      }
+  for (const pattern of internalPatterns) {
+    if (pattern.test(msg)) {
+      return "The server is temporarily busy. Please try again with a smaller limit or wait a moment.";
     }
   }
-  return null;
+  if (msg.startsWith("HTTP ")) {
+    return "A network error occurred while fetching data. Please try again.";
+  }
+  return "An unexpected error occurred. Please try again.";
 }
 
-// Fetches the ItemLevel from the game's character/info endpoint.
-// Returns null on failure (caller should fall back to manual calc).
-async function fetchItemLevel(p, headers) {
-  try {
-    const apiBase =
-      p.region === "TW"
-        ? "https://tw.ncsoft.com/aion2/api"
-        : "https://aion2.plaync.com/api";
-    const infoData = await fetchJSON(
-      proxyUrl(
-        `${apiBase}/character/info?lang=en&characterId=${p.characterId}&serverId=${p.serverId}`,
-      ),
-      headers,
-    );
-    return extractItemLevelFromInfo(infoData);
-  } catch {
-    return null;
-  }
+const MAX_LIMIT = 100;
+const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
+
+// Extract top skills by usage count for the landing page meta snapshot widget.
+function topSkills(skillMap, total, limit = 6) {
+  return Object.entries(skillMap)
+    .sort((a, b) => b[1].count - a[1].count)
+    .slice(0, limit)
+    .map(([name, data]) => ({
+      name,
+      count: data.count,
+      pct: +((data.count / total) * 100).toFixed(1),
+      avgLv: data.avgLv,
+    }));
+}
+
+// Save aggregated stats as a meta snapshot for the landing page widget.
+async function saveMetaSnapshot(db, cls, lbType, stats) {
+  if (!stats || stats.total < 5) return; // don't save tiny samples
+
+  const stigmas = topSkills(stats.stigmaSkills, stats.total);
+  const actives = topSkills(stats.activeSkills, stats.total);
+  const passives = topSkills(stats.passiveSkills, stats.total);
+
+  // Top arcana set combos with usage pct
+  const combos = Object.entries(stats.arcanaSetCombos || {})
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([combo, count]) => ({
+      combo,
+      count,
+      pct: +((count / stats.total) * 100).toFixed(1),
+    }));
+
+  await db
+    .prepare(
+      `INSERT OR REPLACE INTO meta_snapshots
+       (class, leaderboard, total_players, stigma_skills, active_skills, passive_skills, arcana_set_combos, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      cls,
+      lbType,
+      stats.total,
+      JSON.stringify(stigmas),
+      JSON.stringify(actives),
+      JSON.stringify(passives),
+      JSON.stringify(combos),
+      Date.now(),
+    )
+    .run();
 }
 
 export async function POST(req) {
-  const { lbType, cls, limit, region, serverId } = await req.json();
-  const lbInfo = LEADERBOARD_TYPES[lbType];
-  const rankingType = CLASS_RANKING_IDS[cls] || 0;
-  const headers = makeHeaders(`${BASE}/leaderboard/${lbType}?class=${cls}`);
   const { env } = getRequestContext();
   const db = env.DB;
 
+  // --- Rate limiting: 1 analysis per minute per IP ---
+  // Only trust cf-connecting-ip (set by Cloudflare) — x-forwarded-for is trivially spoofable.
+  const ip = req.headers.get("cf-connecting-ip") || "unknown";
+  const now = Date.now();
+
+  try {
+    const row = await db
+      .prepare("SELECT last_request_at FROM rate_limits WHERE ip = ?")
+      .bind(ip)
+      .first();
+
+    if (row && now - row.last_request_at < RATE_LIMIT_WINDOW_MS) {
+      const retryAfter = Math.ceil(
+        (RATE_LIMIT_WINDOW_MS - (now - row.last_request_at)) / 1000,
+      );
+      return new Response(
+        JSON.stringify({
+          error: `Rate limit exceeded. Please wait ${retryAfter}s before starting another analysis.`,
+        }),
+        {
+          status: 429,
+          headers: {
+            "Content-Type": "application/json",
+            "Retry-After": String(retryAfter),
+          },
+        },
+      );
+    }
+
+    await db
+      .prepare(
+        "INSERT INTO rate_limits (ip, last_request_at) VALUES (?, ?) ON CONFLICT(ip) DO UPDATE SET last_request_at = excluded.last_request_at",
+      )
+      .bind(ip, now)
+      .run();
+  } catch (err) {
+    // Only skip rate limiting if the table hasn't been created yet.
+    // Re-throw all other DB errors to avoid silently disabling rate limits.
+    if (err?.message && /no such table/i.test(err.message)) {
+      // Table not yet migrated — proceed without rate limiting
+    } else {
+      console.error("[rate-limit] DB error:", err?.message || err);
+    }
+  }
+
+  let body;
+  try {
+    body = await req.json();
+  } catch {
+    return new Response(JSON.stringify({ error: "Invalid JSON body." }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  const { lbType, cls, region, serverId } = body;
+
+  // --- Input validation: whitelist all user-provided values ---
+  if (!lbType || !leaderboardTypes[lbType]) {
+    return new Response(
+      JSON.stringify({ error: "Invalid leaderboard type." }),
+      { status: 400, headers: { "Content-Type": "application/json" } },
+    );
+  }
+  if (!cls || !classRankingIds[cls]) {
+    return new Response(JSON.stringify({ error: "Invalid class." }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  const limit = Math.max(1, Math.min(parseInt(body.limit) || 10, MAX_LIMIT));
+
+  const lbInfo = leaderboardTypes[lbType];
+  const rankingType = classRankingIds[cls];
+  const headers = makeHeaders(`${baseUrl}/leaderboard/${lbType}?class=${cls}`);
+
   // Tuning: max concurrent API requests for player data
-  const CONCURRENCY = 15;
-  const MAX_RETRIES = 3;
-  const RETRY_BASE_MS = 400;
+  const concurrency = 15;
+  const maxRetries = 2;
+  const retryBaseMs = 400;
+  const budget = createBudget();
 
   const encoder = new TextEncoder();
   let isActive = true;
@@ -485,9 +204,11 @@ export async function POST(req) {
         }
       };
 
-      try {
-        const log = createWebLogger(sendEvent);
+      const log = createWebLogger(sendEvent);
+      const enriched = [];
+      const allArcanaIds = [];
 
+      try {
         // ═══════════════════════════════════════════════════════════════════
         // PHASE 1: Fetch all leaderboard pages in parallel
         // ═══════════════════════════════════════════════════════════════════
@@ -505,22 +226,24 @@ export async function POST(req) {
         const lbPageTasks = Array.from({ length: pagesNeeded }, (_, i) => {
           const pg = i + 1;
           return async () => {
-            const url = `${BASE}/api/leaderboard?contentType=${lbInfo.contentType}&rankingType=${rankingType}&page=${pg}&limit=100`;
+            const url = `${baseUrl}/api/leaderboard?contentType=${lbInfo.contentType}&rankingType=${rankingType}&page=${pg}&limit=100`;
             try {
               const data = await fetchWithRetry(
-                () => fetchJSON(url, headers),
-                MAX_RETRIES,
-                RETRY_BASE_MS,
+                () => fetchJSON(url, headers, "GET", null, budget, log),
+                maxRetries,
+                retryBaseMs,
+                budget,
               );
               return data?.rankings || [];
-            } catch {
+            } catch (err) {
+              if (err instanceof subrequestBudgetExhausted) throw err;
               return [];
             }
           };
         });
 
-        const lbResults = await runPool(lbPageTasks, 5);
-        const rawPlayers = lbResults.flat();
+        const lbResults = await runPool(lbPageTasks, 5, budget);
+        const rawPlayers = lbResults.flat().filter(Boolean);
 
         // Deduplicate by characterId + serverId
         const seen = new Set();
@@ -533,7 +256,10 @@ export async function POST(req) {
           }
         }
 
-        log.info("leaderboard", `Found ${allPlayers.length} unique candidates (${rawPlayers.length} raw).`);
+        log.info(
+          "leaderboard",
+          `Found ${allPlayers.length} unique candidates (${rawPlayers.length} raw).`,
+        );
 
         // ═══════════════════════════════════════════════════════════════════
         // PHASE 2: Filter by region/server, then split cached vs uncached
@@ -551,35 +277,59 @@ export async function POST(req) {
         // Batch cache lookup: separate cached from uncached up-front
         const cachedResults = [];
         const uncachedPlayers = [];
-        const allArcanaIds = [];
 
         for (const p of candidates) {
           if (cachedResults.length + uncachedPlayers.length >= limit * 2) break;
           const cached = await getCachedPlayer(db, p.characterId, p.serverId);
           if (cached) {
-            const result = {
-              ...p,
-              _equip: cached.equipData,
-              _equipDetails: cached.equipDetails,
-              _itemLevel: cached.itemLevel ?? null,
-            };
-            cachedResults.push(result);
-            for (const item of result._equip?.equipment?.equipmentList || []) {
-              if ((item.slotPosName || "").startsWith("Arcana"))
-                allArcanaIds.push(item.id);
+            const hasEquip = !!cached.equipData;
+            const equipCount =
+              cached.equipData?.equipment?.equipmentList?.length || 0;
+            const detailCount = Array.isArray(cached.equipDetails)
+              ? cached.equipDetails.length
+              : 0;
+            const isComplete = hasEquip && detailCount > 0;
+
+            if (isComplete) {
+              const result = {
+                ...p,
+                _equip: cached.equipData,
+                _equipDetails: cached.equipDetails,
+                _itemLevel: cached.itemLevel ?? null,
+                _combatPower: cached.equipData?.profile?.combatPower ?? null,
+              };
+              cachedResults.push(result);
+              for (const item of result._equip?.equipment?.equipmentList ||
+                []) {
+                if ((item.slotPosName || "").startsWith("Arcana"))
+                  allArcanaIds.push(item.id);
+              }
+            } else {
+              // Incomplete cache — schedule for re-fetch
+              log.warn(
+                p.characterName,
+                `[CACHED ✗ incomplete] equip: ${hasEquip ? `✓ (${equipCount} items)` : "✗ missing"} | details: ${detailCount > 0 ? `✓ (${detailCount})` : "✗ none"} | GS: ${cached.itemLevel ?? "✗ none"} → will re-fetch`,
+              );
+              uncachedPlayers.push(p);
             }
           } else {
             uncachedPlayers.push(p);
           }
         }
 
-        // Report cached hits
-        const enriched = [];
+        // Report valid cached hits
         for (const r of cachedResults) {
           if (enriched.length >= limit) break;
           enriched.push(r);
+          const equipCount = r._equip?.equipment?.equipmentList?.length || 0;
+          const detailCount = Array.isArray(r._equipDetails)
+            ? r._equipDetails.length
+            : 0;
           const cachedGs = r._itemLevel;
-          log.success(r.characterName, `[CACHED]${cachedGs ? ` (GS: ${cachedGs})` : ""} (${enriched.length}/${limit})`);
+          log.success(
+            r.characterName,
+            `[CACHED ✓] equip: ✓ (${equipCount} items) | details: ✓ (${detailCount}) | GS: ${cachedGs ?? "✗ none"} (${enriched.length}/${limit})`,
+          );
         }
 
         if (enriched.length >= limit) {
@@ -593,7 +343,10 @@ export async function POST(req) {
         }
 
         const stillNeeded = limit - enriched.length;
-        log.info("cache", `${cachedResults.length} cached, ${Math.min(uncachedPlayers.length, stillNeeded)} need fetching.`);
+        log.info(
+          "cache",
+          `${cachedResults.length} cached, ${Math.min(uncachedPlayers.length, stillNeeded)} need fetching.`,
+        );
 
         // ═══════════════════════════════════════════════════════════════════
         // PHASE 3: Fetch uncached players concurrently in batches
@@ -612,7 +365,8 @@ export async function POST(req) {
 
           // Build task list: each task fetches equip + details for one player
           const playerTasks = toFetch.map((p) => async () => {
-            if (!isActive || reservedCount >= limit) return null;
+            if (!isActive || reservedCount >= limit || !budget.canAfford(3))
+              return null;
 
             // Reserve the slot synchronously (before any await)
             reservedCount++;
@@ -629,7 +383,7 @@ export async function POST(req) {
 
             let warnings = [];
             try {
-              // 1. Fetch equipment
+              // 1. Fetch equipment — try direct first (avoids proxy HTTP 500)
               try {
                 const apiBase =
                   p.region === "TW"
@@ -640,18 +394,44 @@ export async function POST(req) {
                 try {
                   equipData = await fetchWithRetry(
                     () =>
-                      fetchJSON(proxyUrl(`${apiBase}${targetPath}`), headers),
-                    MAX_RETRIES,
-                    RETRY_BASE_MS,
+                      fetchJSON(
+                        `${apiBase}${targetPath}`,
+                        makeDirectHeaders(),
+                        "GET",
+                        null,
+                        budget,
+                        log,
+                      ),
+                    maxRetries,
+                    retryBaseMs,
+                    budget,
                   );
-                } catch (proxyErr) {
-                  // Fallback: Try direct fetch without proxy
-                  log.warn(p.characterName, `Proxy failed, trying direct fallback: ${proxyErr.message}`);
-                  equipData = await fetchWithRetry(
-                    () => fetchJSON(`${apiBase}${targetPath}`, headers),
-                    MAX_RETRIES,
-                    RETRY_BASE_MS,
-                  );
+                } catch (directErr) {
+                  if (directErr instanceof subrequestBudgetExhausted)
+                    throw directErr;
+                  // Fallback: Try proxy only if we have budget
+                  if (budget.canAfford()) {
+                    log.warn(
+                      p.characterName,
+                      `Direct API failed, trying proxy fallback`,
+                    );
+                    equipData = await fetchWithRetry(
+                      () =>
+                        fetchJSON(
+                          proxyUrl(`${apiBase}${targetPath}`),
+                          headers,
+                          "GET",
+                          null,
+                          budget,
+                          log,
+                        ),
+                      maxRetries,
+                      retryBaseMs,
+                      budget,
+                    );
+                  } else {
+                    throw directErr;
+                  }
                 }
 
                 if (equipData?.equipment?.equipmentList?.length) {
@@ -660,6 +440,7 @@ export async function POST(req) {
                   throw new Error("Empty equipmentList");
                 }
               } catch (err) {
+                if (err instanceof subrequestBudgetExhausted) throw err;
                 warnings.push(`Gear Failed: ${err.message}`);
                 result._equip = null;
               }
@@ -667,16 +448,18 @@ export async function POST(req) {
               // 2. Fetch equipment details (substats) if we have gear
               if (result._equip) {
                 try {
-                  const eqList = result._equip.equipment.equipmentList;
-                  const items = eqList.map((e) => ({
-                    itemId: e.id,
-                    enchantLevel: e.enchantLevel || 0,
-                    slotPos: e.slotPos,
-                  }));
+                  const eqList = result._equip.equipment.equipmentList || [];
+                  const items = eqList
+                    .filter((e) => e)
+                    .map((e) => ({
+                      itemId: e.id,
+                      enchantLevel: e.enchantLevel || 0,
+                      slotPos: e.slotPos,
+                    }));
                   const data = await fetchWithRetry(
                     () =>
                       fetchJSON(
-                        `${BASE}/api/items/batch-equipment`,
+                        `${baseUrl}/api/items/batch-equipment`,
                         headers,
                         "POST",
                         {
@@ -685,33 +468,48 @@ export async function POST(req) {
                           serverId: p.serverId,
                           region: p.region || "KR",
                         },
+                        budget,
+                        log,
                       ),
-                    MAX_RETRIES,
-                    RETRY_BASE_MS,
+                    maxRetries,
+                    retryBaseMs,
+                    budget,
                   );
                   equipDetails = Array.isArray(data?.items || data)
                     ? data?.items || data
                     : [];
                 } catch (err) {
+                  if (err instanceof subrequestBudgetExhausted) throw err;
                   warnings.push(`Substats Failed: ${err.message}`);
                 }
               }
 
               result._equipDetails = equipDetails;
 
-              // ... 3. Class validation ...
+              // ... 3. Class validation — use item names from direct API,
+              // NOT categoryName from batch-equipment (which returns null items).
               const clsLower = (cls || "").toLowerCase();
-              const primaryWeapon = CLASS_WEAPONS[clsLower];
+              const primaryWeapon = classWeapons[clsLower];
 
-              if (primaryWeapon && result._equip && equipDetails.length > 0) {
-                const validLabels = [primaryWeapon];
-                if (primaryWeapon === "Staff") validLabels.push("法杖"); // TW localized
+              if (primaryWeapon && result._equip) {
+                const validLabels = Array.isArray(primaryWeapon)
+                  ? [...primaryWeapon]
+                  : [primaryWeapon];
+                if (validLabels.includes("Staff")) validLabels.push("法杖"); // TW localized
 
                 let hasValidWeapon = false;
-                for (const eqItem of equipDetails) {
-                  if (eqItem.slotPos === 1 || eqItem.slotPos === 2) {
-                    const cat = eqItem.categoryName || "";
-                    if (validLabels.some((label) => cat.startsWith(label))) {
+                const eqList = result._equip.equipment?.equipmentList || [];
+                for (const item of eqList) {
+                  if (!item) continue;
+                  if (item.slotPos === 1 || item.slotPos === 2) {
+                    const itemName = item.name || "";
+                    const cat = item.categoryName || "";
+                    if (
+                      validLabels.some(
+                        (label) =>
+                          itemName.includes(label) || cat.startsWith(label),
+                      )
+                    ) {
                       hasValidWeapon = true;
                       break;
                     }
@@ -726,12 +524,43 @@ export async function POST(req) {
                 }
               }
             } catch (err) {
+              if (err instanceof subrequestBudgetExhausted) throw err;
               warnings.push(`Error: ${err.message}`);
             }
 
-            // 4. Always fetch ItemLevel (authoritative for GS)
-            const itemLevel = await fetchItemLevel(p, headers);
+            // 4. Always fetch ItemLevel and CP — try direct first, proxy fallback
+            let itemLevel = null;
+            let cp = null;
+            try {
+              const gsApiBase =
+                p.region === "TW"
+                  ? "https://tw.ncsoft.com/aion2/api"
+                  : "https://aion2.plaync.com/api";
+              const infoData = await fetchJSON(
+                `${gsApiBase}/character/info?lang=en&characterId=${p.characterId}&serverId=${p.serverId}`,
+                makeDirectHeaders(),
+                "GET",
+                null,
+                budget,
+                log,
+              );
+              itemLevel = extractItemLevelFromInfo(infoData);
+              cp = extractCombatPowerFromInfo(infoData);
+            } catch {
+              const stats = await fetchItemLevelAndCP(p, headers, budget, log);
+              if (stats) {
+                itemLevel = stats.itemLevel;
+                cp = stats.combatPower;
+              }
+            }
             result._itemLevel = itemLevel;
+            result._combatPower = cp;
+
+            // Inject CP into equipData before caching
+            if (result._equip && cp != null) {
+              if (!result._equip.profile) result._equip.profile = {};
+              result._equip.profile.combatPower = cp;
+            }
 
             // 5. Cache the result
             await setCachedPlayer(
@@ -747,17 +576,29 @@ export async function POST(req) {
             const playerNum = ++doneCount;
             const warningStr =
               warnings.length > 0 ? ` [${warnings.join(", ")}]` : "";
+            const statsStr = [
+              itemLevel ? `GS: ${itemLevel}` : "",
+              cp ? `CP: ${cp}` : "",
+            ]
+              .filter(Boolean)
+              .join(" | ");
             if (warnings.length > 0) {
-              log.warn(p.characterName, `Scanned${itemLevel ? ` (GS: ${itemLevel})` : ""} (${playerNum}/${limit})${warningStr}`);
+              log.warn(
+                p.characterName,
+                `Scanned${statsStr ? ` (${statsStr})` : ""} (${playerNum}/${limit})${warningStr}`,
+              );
             } else {
-              log.success(p.characterName, `Scanned${itemLevel ? ` (GS: ${itemLevel})` : ""} (${playerNum}/${limit})`);
+              log.success(
+                p.characterName,
+                `Scanned${statsStr ? ` (${statsStr})` : ""} (${playerNum}/${limit})`,
+              );
             }
 
             return result;
           });
 
           // Run all player tasks with concurrency pool
-          const results = await runPool(playerTasks, CONCURRENCY);
+          const results = await runPool(playerTasks, concurrency, budget);
 
           // Collect successful results
           for (const r of results) {
@@ -773,21 +614,26 @@ export async function POST(req) {
         // ═══════════════════════════════════════════════════════════════════
         // PHASE 3b: Fetch additional leaderboard pages if still short
         // ═══════════════════════════════════════════════════════════════════
-        if (enriched.length < limit) {
+        if (enriched.length < limit && budget.canAfford(5)) {
           let extraPage = pagesNeeded + 1;
           while (enriched.length < limit && extraPage <= 50) {
-            if (!isActive) break;
-            log.info("leaderboard", `Need more candidates, fetching page ${extraPage}...`);
-            const url = `${BASE}/api/leaderboard?contentType=${lbInfo.contentType}&rankingType=${rankingType}&page=${extraPage}&limit=100`;
+            if (!isActive || !budget.canAfford(5)) break;
+            log.info(
+              "leaderboard",
+              `Need more candidates, fetching page ${extraPage}...`,
+            );
+            const url = `${baseUrl}/api/leaderboard?contentType=${lbInfo.contentType}&rankingType=${rankingType}&page=${extraPage}&limit=100`;
             let moreRankings;
             try {
               const data = await fetchWithRetry(
-                () => fetchJSON(url, headers),
-                MAX_RETRIES,
-                RETRY_BASE_MS,
+                () => fetchJSON(url, headers, "GET", null, budget, log),
+                maxRetries,
+                retryBaseMs,
+                budget,
               );
               moreRankings = data?.rankings || [];
-            } catch {
+            } catch (err) {
+              if (err instanceof subrequestBudgetExhausted) break;
               break;
             }
             if (!moreRankings.length) break;
@@ -818,21 +664,41 @@ export async function POST(req) {
                 p.serverId,
               );
               if (cached) {
-                if (enriched.length >= limit) break;
-                const result = {
-                  ...p,
-                  _equip: cached.equipData,
-                  _equipDetails: cached.equipDetails,
-                  _itemLevel: cached.itemLevel ?? null,
-                };
-                enriched.push(result);
-                for (const item of result._equip?.equipment?.equipmentList ||
-                  []) {
-                  if ((item.slotPosName || "").startsWith("Arcana"))
-                    allArcanaIds.push(item.id);
+                const hasEquip2 = !!cached.equipData;
+                const equipCount2 =
+                  cached.equipData?.equipment?.equipmentList?.length || 0;
+                const detailCount2 = Array.isArray(cached.equipDetails)
+                  ? cached.equipDetails.length
+                  : 0;
+                const isComplete2 = hasEquip2 && detailCount2 > 0;
+
+                if (isComplete2) {
+                  if (enriched.length >= limit) break;
+                  const result = {
+                    ...p,
+                    _equip: cached.equipData,
+                    _equipDetails: cached.equipDetails,
+                    _itemLevel: cached.itemLevel ?? null,
+                    _combatPower:
+                      cached.equipData?.profile?.combatPower ?? null,
+                  };
+                  enriched.push(result);
+                  for (const item of result._equip?.equipment?.equipmentList ||
+                    []) {
+                    if ((item.slotPosName || "").startsWith("Arcana"))
+                      allArcanaIds.push(item.id);
+                  }
+                  log.success(
+                    p.characterName,
+                    `[CACHED ✓] equip: ✓ (${equipCount2} items) | details: ✓ (${detailCount2}) | GS: ${cached.itemLevel ?? "✗ none"} (${enriched.length}/${limit})`,
+                  );
+                } else {
+                  log.warn(
+                    p.characterName,
+                    `[CACHED ✗ incomplete] equip: ${hasEquip2 ? `✓ (${equipCount2} items)` : "✗ missing"} | details: ${detailCount2 > 0 ? `✓ (${detailCount2})` : "✗ none"} | GS: ${cached.itemLevel ?? "✗ none"} → will re-fetch`,
+                  );
+                  moreUncached.push(p);
                 }
-                const cachedGs2 = result._itemLevel;
-                log.success(p.characterName, `[CACHED]${cachedGs2 ? ` (GS: ${cachedGs2})` : ""} (${enriched.length}/${limit})`);
               } else {
                 moreUncached.push(p);
               }
@@ -843,7 +709,8 @@ export async function POST(req) {
               const moreTasks = moreUncached
                 .slice(0, limit - enriched.length + 5)
                 .map((p) => async () => {
-                  if (!isActive || mc >= limit) return null;
+                  if (!isActive || mc >= limit || !budget.canAfford(3))
+                    return null;
                   let result;
                   try {
                     result = await fetchWithRetry(
@@ -852,20 +719,38 @@ export async function POST(req) {
                           p.region === "TW"
                             ? "https://tw.ncsoft.com/aion2/api"
                             : "https://aion2.plaync.com/api";
-                        const equipData = await fetchJSON(
-                          proxyUrl(
+                        let equipData;
+                        try {
+                          equipData = await fetchJSON(
                             `${apiBase}/character/equipment?lang=en&characterId=${p.characterId}&serverId=${p.serverId}`,
-                          ),
-                          headers,
-                        );
+                            makeDirectHeaders(),
+                            "GET",
+                            null,
+                            budget,
+                            log,
+                          );
+                        } catch {
+                          equipData = await fetchJSON(
+                            proxyUrl(
+                              `${apiBase}/character/equipment?lang=en&characterId=${p.characterId}&serverId=${p.serverId}`,
+                            ),
+                            headers,
+                            "GET",
+                            null,
+                            budget,
+                            log,
+                          );
+                        }
                         if (!equipData?.equipment?.equipmentList?.length)
                           throw new Error("Empty equipmentList");
                         return { ...p, _equip: equipData };
                       },
-                      MAX_RETRIES,
-                      RETRY_BASE_MS,
+                      maxRetries,
+                      retryBaseMs,
+                      budget,
                     );
-                  } catch {
+                  } catch (err) {
+                    if (err instanceof subrequestBudgetExhausted) return null;
                     return null;
                   }
 
@@ -882,7 +767,7 @@ export async function POST(req) {
                           slotPos: e.slotPos,
                         }));
                         const data = await fetchJSON(
-                          `${BASE}/api/items/batch-equipment`,
+                          `${baseUrl}/api/items/batch-equipment`,
                           headers,
                           "POST",
                           {
@@ -891,6 +776,8 @@ export async function POST(req) {
                             serverId: p.serverId,
                             region: p.region,
                           },
+                          budget,
+                          log,
                         );
                         const arr = Array.isArray(data?.items || data)
                           ? data?.items || data
@@ -898,22 +785,36 @@ export async function POST(req) {
                         if (!arr.length) throw new Error("Empty equip details");
                         return arr;
                       },
-                      MAX_RETRIES,
-                      RETRY_BASE_MS,
+                      maxRetries,
+                      retryBaseMs,
+                      budget,
                     );
-                  } catch {
+                  } catch (err) {
+                    if (err instanceof subrequestBudgetExhausted) return null;
                     return null;
                   }
 
                   result._equipDetails = equipDetails;
-                  const primaryWeapon = CLASS_WEAPONS[cls];
-                  if (primaryWeapon) {
+                  // Validate weapon from direct API item names
+                  const primaryWeapon = classWeapons[cls];
+                  if (primaryWeapon && result._equip) {
+                    const validLabels = Array.isArray(primaryWeapon)
+                      ? [...primaryWeapon]
+                      : [primaryWeapon];
+                    if (validLabels.includes("Staff")) validLabels.push("法杖");
                     let valid = false;
-                    for (const eqItem of equipDetails) {
-                      if (!eqItem) continue;
-                      if (eqItem.slotPos === 1 || eqItem.slotPos === 2) {
+                    const eqList2 =
+                      result._equip.equipment?.equipmentList || [];
+                    for (const item of eqList2) {
+                      if (!item) continue;
+                      if (item.slotPos === 1 || item.slotPos === 2) {
+                        const itemName = item.name || "";
+                        const cat = item.categoryName || "";
                         if (
-                          (eqItem.categoryName || "").startsWith(primaryWeapon)
+                          validLabels.some(
+                            (label) =>
+                              itemName.includes(label) || cat.startsWith(label),
+                          )
                         ) {
                           valid = true;
                           break;
@@ -925,9 +826,43 @@ export async function POST(req) {
                       result._equipDetails = [];
                     }
                   }
-                  // Fetch the game's own ItemLevel stat (matches Shugo.gg iLvl)
-                  const itemLevel2 = await fetchItemLevel(p, headers);
+                  // Fetch the game's own ItemLevel and CP stat — direct first
+                  let itemLevel2 = null;
+                  let cp2 = null;
+                  try {
+                    const gsApiBase2 =
+                      p.region === "TW"
+                        ? "https://tw.ncsoft.com/aion2/api"
+                        : "https://aion2.plaync.com/api";
+                    const infoD = await fetchJSON(
+                      `${gsApiBase2}/character/info?lang=en&characterId=${p.characterId}&serverId=${p.serverId}`,
+                      makeDirectHeaders(),
+                      "GET",
+                      null,
+                      budget,
+                      log,
+                    );
+                    itemLevel2 = extractItemLevelFromInfo(infoD);
+                    cp2 = extractCombatPowerFromInfo(infoD);
+                  } catch {
+                    const stats = await fetchItemLevelAndCP(
+                      p,
+                      headers,
+                      budget,
+                      log,
+                    );
+                    if (stats) {
+                      itemLevel2 = stats.itemLevel;
+                      cp2 = stats.combatPower;
+                    }
+                  }
                   result._itemLevel = itemLevel2;
+                  result._combatPower = cp2;
+
+                  if (result._equip && cp2 != null) {
+                    if (!result._equip.profile) result._equip.profile = {};
+                    result._equip.profile.combatPower = cp2;
+                  }
                   await setCachedPlayer(
                     db,
                     p.characterId,
@@ -939,10 +874,20 @@ export async function POST(req) {
                   );
                   mc++;
                   const gs2 = itemLevel2;
-                  log.success(p.characterName, `Scanned${gs2 ? ` (GS: ${gs2})` : ""} (${mc}/${limit})`);
+                  const cp2Log = cp2;
+                  const statsStr2 = [
+                    gs2 ? `GS: ${gs2}` : "",
+                    cp2Log ? `CP: ${cp2Log}` : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" | ");
+                  log.success(
+                    p.characterName,
+                    `Scanned${statsStr2 ? ` (${statsStr2})` : ""} (${mc}/${limit})`,
+                  );
                   return result;
                 });
-              const moreResults = await runPool(moreTasks, CONCURRENCY);
+              const moreResults = await runPool(moreTasks, concurrency, budget);
               for (const r of moreResults) {
                 if (!r || enriched.length >= limit) continue;
                 enriched.push(r);
@@ -957,7 +902,10 @@ export async function POST(req) {
         }
 
         sendEvent({ type: "progress", current: limit, total: limit });
-        log.success("aggregate", `Finished scanning ${enriched.length} valid players. Fetching Arcana dictionary...`);
+        log.success(
+          "aggregate",
+          `Finished scanning ${enriched.length} valid players. Fetching Arcana dictionary...`,
+        );
 
         // ═══════════════════════════════════════════════════════════════════
         // PHASE 4: Fetch arcana item details in parallel batches
@@ -973,19 +921,26 @@ export async function POST(req) {
           const arcanaChunkTasks = chunks.map((chunk) => async () => {
             try {
               const data = await fetchJSON(
-                `${BASE}/api/items/batch-details`,
+                `${baseUrl}/api/items/batch-details`,
                 headers,
                 "POST",
                 { itemIds: chunk },
+                budget,
+                log,
               );
               return data?.items || data || [];
-            } catch {
+            } catch (err) {
+              log.warn(
+                "arcana",
+                `Batch detail fetch failed: ${err?.message || err}`,
+              );
               return [];
             }
           });
 
-          const arcanaResults = await runPool(arcanaChunkTasks, 5);
+          const arcanaResults = await runPool(arcanaChunkTasks, 5, budget);
           for (const items of arcanaResults) {
+            if (!Array.isArray(items)) continue;
             for (const item of items) {
               if (item?.id) itemDetailsMap[item.id] = item;
             }
@@ -1000,9 +955,21 @@ export async function POST(req) {
             itemDetailsMap,
             p._equipDetails || [],
             p._itemLevel ?? null,
+            p._combatPower ?? null,
           ),
         );
         const stats = aggregate(builds);
+
+        // Save meta snapshot for the landing page widget
+        try {
+          await saveMetaSnapshot(db, cls, lbType, stats);
+        } catch (snapshotErr) {
+          // Non-critical — don't fail the analysis
+          console.error(
+            "[meta-snapshot] Save failed:",
+            snapshotErr?.message || snapshotErr,
+          );
+        }
 
         sendEvent({ type: "done", stats, count: enriched.length });
         if (isActive) {
@@ -1012,8 +979,47 @@ export async function POST(req) {
           isActive = false;
         }
       } catch (error) {
-        log.error("POST", error.message);
-        sendEvent({ type: "error", message: error.message });
+        // Budget exhausted — return partial results gracefully
+        if (
+          error instanceof subrequestBudgetExhausted ||
+          (error.message && error.message.includes("subrequest"))
+        ) {
+          log.warn(
+            "system",
+            `Request limit reached. Returning ${enriched.length} players scanned so far.`,
+          );
+
+          // Still try to aggregate what we have
+          if (enriched.length > 0) {
+            const itemDetailsMap = {};
+            const builds = enriched.map((p) =>
+              extractBuild(
+                p,
+                itemDetailsMap,
+                p._equipDetails || [],
+                p._itemLevel ?? null,
+                p._combatPower ?? null,
+              ),
+            );
+            const stats = aggregate(builds);
+            try {
+              await saveMetaSnapshot(db, cls, lbType, stats);
+            } catch (_) {}
+            sendEvent({ type: "done", stats, count: enriched.length });
+          } else {
+            sendEvent({
+              type: "error",
+              message:
+                "Unable to scan players at this time. Please try again with a smaller limit.",
+            });
+          }
+        } else {
+          // Sanitize: never expose internal/infrastructure errors to the user
+          const rawMsg = String(error?.message || error || "");
+          const safeMessage = sanitizeErrorMessage(rawMsg);
+          log.error("POST", rawMsg);
+          sendEvent({ type: "error", message: safeMessage });
+        }
         if (isActive) {
           try {
             controller.close();

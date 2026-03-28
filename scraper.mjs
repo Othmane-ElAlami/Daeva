@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // ─────────────────────────────────────────────────────────────────────────────
-// Shugo.gg Leaderboard Scraper & Build Analyzer
+// Aion 2 Leaderboard Scraper (shugo.gg) & Build Analyzer (Official API)
 // Fetches top players and analyzes Active, Stigma, Passive skills + Arcanas
 // Usage: node scraper.mjs [--class chanter] [--type nightmare] [--limit 100]
 // ─────────────────────────────────────────────────────────────────────────────
@@ -9,6 +9,24 @@ import { writeFileSync } from "fs";
 import { argv } from "process";
 import { createInterface } from "readline";
 import { createCliLogger } from "./src/lib/logger.js";
+import {
+  baseUrl,
+  leaderboardTypes,
+  classRankingIds,
+  classWeapons,
+  classes,
+  makeHeaders,
+  makeDirectHeaders,
+  sleep,
+  proxyUrl,
+  fetchJSON,
+  fetchWithRetry,
+  fetchItemLevelAndCP,
+  extractItemLevelFromInfo,
+  extractCombatPowerFromInfo,
+  extractBuild,
+  aggregate,
+} from "./src/lib/scraper-shared.js";
 
 const log = createCliLogger();
 
@@ -30,44 +48,6 @@ function ask(question) {
   );
 }
 
-// ── Leaderboard types ────────────────────────────────────────────────────────
-const LEADERBOARD_TYPES = {
-  nightmare: { contentType: 3, label: "Nightmare" },
-  abyss: { contentType: 1, label: "Abyss" },
-  "arena-solo": { contentType: 5, label: "Arena Solo" },
-  "arena-coop": { contentType: 6, label: "Arena Coop" },
-  transcendence: { contentType: 4, label: "Transcendence" },
-  ascension: { contentType: 21, label: "Ascension" },
-  raid: { contentType: 20, label: "Raid" },
-};
-
-const CLASS_RANKING_IDS = {
-  gladiator: 2,
-  templar: 3,
-  ranger: 4,
-  assassin: 5,
-  spiritmaster: 6,
-  sorcerer: 7,
-  cleric: 8,
-  chanter: 9,
-};
-
-// ── Primary weapon per class (verified from shugo.gg API) ───────────────────────
-// categoryName from batch-equipment. "(Extend)" suffix = stat stick in secondary slot.
-// We use startsWith so both "Staff" and "Staff(Extend)" pass for a Chanter.
-const CLASS_WEAPONS = {
-  gladiator: "Greatsword",
-  templar: "Longsword",
-  ranger: "Bow",
-  assassin: "Dagger",
-  spiritmaster: "Orb",
-  sorcerer: "Spellbook",
-  cleric: "Mace",
-  chanter: "Staff",
-};
-
-const CLASSES = Object.keys(CLASS_RANKING_IDS);
-
 // ── Resolve config ───────────────────────────────────────────────────────────
 async function resolveConfig() {
   let lbType = getArg("type");
@@ -76,15 +56,15 @@ async function resolveConfig() {
 
   if (!lbType) {
     console.log("\n  Available leaderboard types:");
-    Object.entries(LEADERBOARD_TYPES).forEach(([key, v], i) =>
+    Object.entries(leaderboardTypes).forEach(([key, v], i) =>
       console.log(`    ${i + 1}. ${v.label} (${key})`),
     );
     const ans = await ask("\n  Choose leaderboard type (name or number): ");
-    const keys = Object.keys(LEADERBOARD_TYPES);
+    const keys = Object.keys(leaderboardTypes);
     const num = parseInt(ans, 10);
     if (num >= 1 && num <= keys.length) {
       lbType = keys[num - 1];
-    } else if (LEADERBOARD_TYPES[ans.toLowerCase()]) {
+    } else if (leaderboardTypes[ans.toLowerCase()]) {
       lbType = ans.toLowerCase();
     } else {
       log.error("resolveConfig", "Invalid leaderboard type.");
@@ -94,14 +74,14 @@ async function resolveConfig() {
 
   if (!cls) {
     console.log("\n  Available classes:");
-    CLASSES.forEach((c, i) =>
+    classes.forEach((c, i) =>
       console.log(`    ${i + 1}. ${c.charAt(0).toUpperCase() + c.slice(1)}`),
     );
     const ans = await ask("\n  Choose class (name or number): ");
     const num = parseInt(ans, 10);
-    if (num >= 1 && num <= CLASSES.length) {
-      cls = CLASSES[num - 1];
-    } else if (CLASSES.includes(ans.toLowerCase())) {
+    if (num >= 1 && num <= classes.length) {
+      cls = classes[num - 1];
+    } else if (classes.includes(ans.toLowerCase())) {
       cls = ans.toLowerCase();
     } else {
       log.error("resolveConfig", "Invalid class.");
@@ -120,65 +100,17 @@ async function resolveConfig() {
 
   return {
     lbType: lbType.toLowerCase(),
-    lbInfo: LEADERBOARD_TYPES[lbType.toLowerCase()],
+    lbInfo: leaderboardTypes[lbType.toLowerCase()],
     cls: cls.toLowerCase(),
     limit,
   };
 }
 
-// ── Constants ────────────────────────────────────────────────────────────────
-const BASE = "https://shugo.gg";
-const DELAY_MS = 250;
+// ── CLI-only Constants ───────────────────────────────────────────────────────
+const delayMs = 250;
+const fetchTimeoutMs = 15000; // 15s timeout per request
 
-function makeHeaders(referer) {
-  return {
-    "User-Agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    Accept: "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-    Referer: referer,
-    Origin: BASE,
-  };
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-async function fetchJSON(url, headers, method = "GET", body = null) {
-  const opts = { headers, method };
-  if (body) {
-    opts.body = JSON.stringify(body);
-    opts.headers = { ...headers, "Content-Type": "application/json" };
-  }
-  const res = await fetch(url, opts);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
-}
-
-// Retry wrapper: attempts up to `maxAttempts` times with exponential back-off.
-async function fetchWithRetry(fn, maxAttempts = 3, baseDelayMs = 500) {
-  let lastErr;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastErr = err;
-      if (attempt < maxAttempts) {
-        let wait = baseDelayMs * Math.pow(2, attempt - 1);
-
-        // If we hit a rate limit, add an extra 5s penalty
-        if (err.message && err.message.includes("HTTP 429")) {
-          log.warn("fetchWithRetry", `Rate limited (HTTP 429). Waiting ${((wait + 5000) / 1000).toFixed(1)}s before retry ${attempt}/${maxAttempts}...`);
-          wait += 5000;
-        }
-
-        await sleep(wait);
-      }
-    }
-  }
-  throw lastErr;
-}
-
+// ── CLI-only Helpers ─────────────────────────────────────────────────────────
 function percent(count, total) {
   return total === 0 ? "0.0" : ((count / total) * 100).toFixed(1);
 }
@@ -195,21 +127,17 @@ function printHeader(title) {
   console.log("═".repeat(64));
 }
 
-function proxyUrl(apiPath) {
-  return `${BASE}/api/proxy?url=${encodeURIComponent(apiPath)}`;
-}
-
 // ── Fetch Leaderboard ────────────────────────────────────────────────────────
 async function fetchLeaderboard(config, headers) {
   printHeader("📋 FETCHING LEADERBOARD");
 
   const { lbInfo, limit, cls } = config;
-  const rankingType = CLASS_RANKING_IDS[cls] || 0;
+  const rankingType = classRankingIds[cls] || 0;
   const players = [];
   let page = 1;
 
   while (players.length < limit && page <= 10) {
-    const url = `${BASE}/api/leaderboard?contentType=${lbInfo.contentType}&rankingType=${rankingType}&page=${page}&limit=100`;
+    const url = `${baseUrl}/api/leaderboard?contentType=${lbInfo.contentType}&rankingType=${rankingType}&page=${page}&limit=100`;
     log.info("fetchLeaderboard", `Fetching page ${page}...`);
     try {
       const data = await fetchJSON(url, headers);
@@ -217,7 +145,7 @@ async function fetchLeaderboard(config, headers) {
       if (rankings.length === 0) break;
       players.push(...rankings);
       page++;
-      await sleep(DELAY_MS);
+      await sleep(delayMs);
     } catch (err) {
       log.warn("fetchLeaderboard", `Page ${page} error: ${err.message}`);
       break;
@@ -232,10 +160,15 @@ async function fetchLeaderboard(config, headers) {
 // ── Fetch Character Equipment + Skills ───────────────────────────────────────
 async function fetchCharacterBuild(player, headers, config) {
   const { characterId: charId, serverId } = player;
-  if (!charId || !serverId) return null;
+  if (!charId || !serverId) {
+    log.warn(
+      player.characterName || "Unknown",
+      "Missing characterId or serverId — skipped",
+    );
+    return null;
+  }
 
   try {
-    // 1. Fetch equipment directly
     const getRegionalApiBase = (region) => {
       if (region === "TW") return "https://tw.ncsoft.com/aion2/api";
       return "https://aion2.plaync.com/api";
@@ -244,35 +177,34 @@ async function fetchCharacterBuild(player, headers, config) {
 
     const targetPath = `/character/equipment?lang=en&characterId=${encodeURIComponent(charId)}&serverId=${serverId}`;
     let equipData;
+
+    // CLI scraper: try direct API first (more reliable, no proxy overhead).
+    // Direct calls MUST NOT include Origin / Referer headers (CORS rejection).
     try {
+      equipData = await fetchJSON(
+        `${apiBase}${targetPath}`,
+        makeDirectHeaders(),
+      );
+    } catch (directErr) {
+      log.warn(
+        player.characterName,
+        `Direct API failed (${directErr.message}), trying proxy fallback…`,
+      );
       equipData = await fetchJSON(proxyUrl(`${apiBase}${targetPath}`), headers);
-    } catch (proxyErr) {
-      log.warn(player.characterName, `Proxy failed, trying direct fallback: ${proxyErr.message}`);
-      equipData = await fetchJSON(`${apiBase}${targetPath}`, headers);
     }
 
-    // 2. Validate class by checking equipped weapons
-    // Some leaderboard entries are stale/switched classes, so we check if their
-    // MainHand or SubHand matches the expected weapon types for the requested class.
     const eqList = equipData?.equipment?.equipmentList || [];
 
-    // If the API returns a successful response but with no equipment, this is
-    // often a transient rate limit or data sync issue. Throw so we retry.
     if (eqList.length === 0) {
       throw new Error("character/equipment returned empty equipmentList");
     }
 
-    const expectedWeapons = CLASS_WEAPONS[config.cls.toLowerCase()] || [];
-
-    let hasValidWeapon = false;
-    for (const eq of eqList) {
-      if (eq.slotPosName === "MainHand" || eq.slotPosName === "SubHand") {
-        // We defer actual parsing to the main loop since we need categoryName
-      }
-    }
-
     return { ...player, _equip: equipData };
-  } catch {
+  } catch (err) {
+    log.warn(
+      player.characterName || "Unknown",
+      `Build fetch failed: ${err.message}`,
+    );
     return null;
   }
 }
@@ -286,7 +218,7 @@ async function fetchItemDetails(itemIds, headers) {
     const chunk = unique.slice(i, i + 50);
     try {
       const data = await fetchJSON(
-        `${BASE}/api/items/batch-details`,
+        `${baseUrl}/api/items/batch-details`,
         headers,
         "POST",
         { itemIds: chunk },
@@ -302,66 +234,22 @@ async function fetchItemDetails(itemIds, headers) {
   return map;
 }
 
-// ── Item Level helpers (matches Shugo.gg's exact iLvl source) ────────────────
-// Shugo.gg reads ItemLevel directly from character/info stat.statList.
-// Checks both statList and statSecondList and alternate names for robustness.
-function extractItemLevelFromInfo(infoData) {
-  const lists = [
-    infoData?.stat?.statList,
-    infoData?.stat?.statSecondList,
-    infoData?.stat?.statListThird,
-    infoData?.profile?.stat?.statList,
-    infoData?.statList,
-  ];
-
-  // Possible names for the Gear Score / Item Level stat
-  const statNames = ["itemlevel", "gearscore", "ilvl"];
-
-  for (const list of lists) {
-    if (!Array.isArray(list)) continue;
-    for (const name of statNames) {
-      const stat = list.find((s) => s?.type?.toLowerCase() === name);
-      if (stat != null) {
-        const num = Number(stat.value);
-        if (!isNaN(num) && num > 0) return num;
-      }
-    }
-  }
-  return null;
-}
-
-async function fetchItemLevel(player, headers) {
-  try {
-    const apiBase =
-      player.region === "TW"
-        ? "https://tw.ncsoft.com/aion2/api"
-        : "https://aion2.plaync.com/api";
-    const infoData = await fetchJSON(
-      proxyUrl(
-        `${apiBase}/character/info?lang=en&characterId=${player.characterId}&serverId=${player.serverId}`,
-      ),
-      headers,
-    );
-    return extractItemLevelFromInfo(infoData);
-  } catch {
-    return null;
-  }
-}
-
 // ── Fetch Equipment Details (actual substats) ────────────────────────────────
 async function fetchEquipmentDetails(player, headers) {
   const equip = player._equip;
   const eqList = equip?.equipment?.equipmentList || [];
   if (eqList.length === 0) return [];
 
-  const items = eqList.map((e) => ({
-    itemId: e.id,
-    enchantLevel: e.enchantLevel || 0,
-    slotPos: e.slotPos,
-  }));
+  const items = eqList
+    .filter((e) => e)
+    .map((e) => ({
+      itemId: e.id,
+      enchantLevel: e.enchantLevel || 0,
+      slotPos: e.slotPos,
+    }));
 
   const data = await fetchJSON(
-    `${BASE}/api/items/batch-equipment`,
+    `${baseUrl}/api/items/batch-equipment`,
     headers,
     "POST",
     {
@@ -377,229 +265,6 @@ async function fetchEquipmentDetails(player, headers) {
   // the API simply hasn't responded yet. This lets fetchWithRetry do its job.
   if (arr.length === 0) throw new Error("batch-equipment returned empty");
   return arr;
-}
-
-// ── Extract Build ────────────────────────────────────────────────────────────
-// itemLevel: game's own ItemLevel stat from character/info (no fallback formula).
-function extractBuild(
-  player,
-  itemDetailsMap,
-  equipDetailsList,
-  itemLevel = null,
-) {
-  const equip = player._equip;
-  const build = {
-    name: player.characterName || "Unknown",
-    rank: player.rank,
-    gearScore: null,
-    activeSkills: [],
-    stigmaSkills: [], // Dp category in API = Stigma in-game
-    passiveSkills: [],
-    arcanas: [],
-    arcanaSets: [],
-    equipSubStats: [], // { categoryName, subStats: [{ name, value }] }
-  };
-
-  // Skills — Active and Stigma (Dp) skills must be equipped (equip === true) to count.
-  // The API returns all skills a character has ever leveled across all classes;
-  // filtering by equip keeps only the actively slotted class skills.
-  // Passive skills are always active (no equip slot), so include all of them.
-  const skillList = equip?.skill?.skillList || [];
-  for (const s of skillList) {
-    const isPassive = s.category === "Passive";
-    if (!isPassive && !s.equip) continue; // Active/Stigma: skip unequipped / other-class skills
-    const info = {
-      name: s.name,
-      level: s.skillLevel || 0,
-      equipped: !!s.equip,
-    };
-    if (s.category === "Active") build.activeSkills.push(info);
-    if (s.category === "Dp") build.stigmaSkills.push(info);
-    if (isPassive) build.passiveSkills.push(info);
-  }
-
-  // Equipment substats (from batch-equipment)
-  for (const eqItem of equipDetailsList) {
-    const cat = eqItem.categoryName;
-    if (!cat) continue;
-    const subs = (eqItem.subStats || []).map((s) => ({
-      name: s.name,
-      value: s.value,
-    }));
-    const skills = (eqItem.subSkills || []).map((s) => ({
-      name: s.name,
-      value: "+" + s.level,
-    }));
-    const combined = [...subs, ...skills];
-    if (combined.length > 0) {
-      build.equipSubStats.push({ categoryName: cat, subStats: combined });
-    }
-  }
-
-  // Arcanas
-  const equipList = equip?.equipment?.equipmentList || [];
-
-  // Gear score: the game's own ItemLevel stat from character/info (exact match with Shugo.gg iLvl).
-  build.gearScore = itemLevel ?? null;
-
-  const setCounts = {}; // setName -> piece count
-  const seenSets = new Set();
-  for (const item of equipList) {
-    if (!(item.slotPosName || "").startsWith("Arcana")) continue;
-
-    const detail = itemDetailsMap[item.id];
-    const arcana = {
-      name: item.name,
-      slot: item.slotPosName,
-      grade: item.grade,
-      enchantLevel: item.enchantLevel || 0,
-      mainStat: null,
-      setName: null,
-    };
-
-    if (detail) {
-      if (detail.mainStats?.[0]) {
-        arcana.mainStat =
-          detail.mainStats[0].name + ": " + detail.mainStats[0].value;
-      }
-      if (detail.set) {
-        arcana.setName = detail.set.name;
-        setCounts[detail.set.name] = (setCounts[detail.set.name] || 0) + 1;
-        if (!seenSets.has(detail.set.name)) {
-          seenSets.add(detail.set.name);
-          build.arcanaSets.push({
-            name: detail.set.name,
-            bonuses: (detail.set.bonuses || []).map(
-              (b) => `(${b.degree}-piece) ${b.descriptions.join(", ")}`,
-            ),
-          });
-        }
-      }
-    }
-    build.arcanas.push(arcana);
-  }
-
-  // Build combo string, e.g. "Primal Vigor(4) + Pure Blood(2)"
-  build.arcanaSetCombo =
-    Object.entries(setCounts)
-      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-      .map(([name, count]) => `${name}(${count})`)
-      .join(" + ") || "None";
-
-  return build;
-}
-
-// ── Aggregate Stats ──────────────────────────────────────────────────────────
-function aggregate(builds) {
-  const total = builds.length;
-  const stats = {
-    total,
-    activeSkills: {}, // name -> { totalLv, count, maxLv, equippedCount }
-    stigmaSkills: {},
-    passiveSkills: {},
-    arcanaUsage: {}, // name -> count
-    arcanaSets: {}, // setName -> { count, bonuses }
-    arcanaSetCombos: {}, // comboString -> count
-    arcanaMainStats: {}, // statName -> count
-    equippedStigmaCombos: {},
-    subStatsBySlot: {}, // categoryName -> { statName -> { count, totalValue (numeric ones), values: [] } }
-  };
-
-  for (const b of builds) {
-    // Active
-    for (const s of b.activeSkills) {
-      const e = (stats.activeSkills[s.name] ||= {
-        totalLv: 0,
-        count: 0,
-        maxLv: 0,
-        equippedCount: 0,
-      });
-      e.totalLv += s.level;
-      e.count++;
-      e.maxLv = Math.max(e.maxLv, s.level);
-      if (s.equipped) e.equippedCount++;
-    }
-    // Stigma (Dp)
-    for (const s of b.stigmaSkills) {
-      const e = (stats.stigmaSkills[s.name] ||= {
-        totalLv: 0,
-        count: 0,
-        maxLv: 0,
-        equippedCount: 0,
-      });
-      e.totalLv += s.level;
-      e.count++;
-      e.maxLv = Math.max(e.maxLv, s.level);
-      if (s.equipped) e.equippedCount++;
-    }
-    // Equipped stigma combo
-    // Players can only equip up to 4 stigmas at a time.
-    // If the API shows more, it's a merged list from multiple loadouts.
-    // We only count valid single-loadout combinations (<= 4 stigmas).
-    const equipped = b.stigmaSkills
-      .filter((s) => s.equipped)
-      .map((s) => s.name)
-      .sort();
-
-    if (equipped.length > 0 && equipped.length <= 4) {
-      const combo = equipped.join(" + ");
-      stats.equippedStigmaCombos[combo] =
-        (stats.equippedStigmaCombos[combo] || 0) + 1;
-    }
-
-    // Passive
-    for (const s of b.passiveSkills) {
-      const e = (stats.passiveSkills[s.name] ||= {
-        totalLv: 0,
-        count: 0,
-        maxLv: 0,
-      });
-      e.totalLv += s.level;
-      e.count++;
-      e.maxLv = Math.max(e.maxLv, s.level);
-    }
-    // Arcanas
-    for (const a of b.arcanas) {
-      stats.arcanaUsage[a.name] = (stats.arcanaUsage[a.name] || 0) + 1;
-      if (a.mainStat)
-        stats.arcanaMainStats[a.mainStat] =
-          (stats.arcanaMainStats[a.mainStat] || 0) + 1;
-    }
-    // Arcana sets
-    for (const s of b.arcanaSets) {
-      if (!stats.arcanaSets[s.name]) {
-        stats.arcanaSets[s.name] = { count: 0, bonuses: s.bonuses };
-      }
-      stats.arcanaSets[s.name].count++;
-    }
-    // Arcana set combos
-    if (b.arcanaSetCombo) {
-      stats.arcanaSetCombos[b.arcanaSetCombo] =
-        (stats.arcanaSetCombos[b.arcanaSetCombo] || 0) + 1;
-    }
-    // Equipment substats by slot type
-    for (const eq of b.equipSubStats) {
-      const slotStats = (stats.subStatsBySlot[eq.categoryName] ||= {});
-      for (const s of eq.subStats) {
-        const entry = (slotStats[s.name] ||= { count: 0, values: [] });
-        entry.count++;
-        entry.values.push(s.value);
-      }
-    }
-  }
-
-  // Compute averages
-  for (const map of [
-    stats.activeSkills,
-    stats.stigmaSkills,
-    stats.passiveSkills,
-  ]) {
-    for (const d of Object.values(map)) {
-      d.avgLv = +(d.totalLv / d.count).toFixed(1);
-    }
-  }
-
-  return stats;
 }
 
 // ── Format Report ────────────────────────────────────────────────────────────
@@ -749,35 +414,43 @@ function formatReport(stats, config) {
     }
   }
 
+  // ─── Equipment Items By Slot Type ────────────────────────────
+  if (Object.keys(stats.itemsBySlot).length > 0) {
+    hdr("🛡️  EQUIPMENT ITEMS BY SLOT TYPE");
+    const slotTypeOrder = [
+      "Mace", "Spellbook", "Staff", "Greatsword", "Longsword", "Sword", "Dagger", "Bow", "Orb", "Pistol", "Harp", "Guard",
+      "Top", "Legs", "Helm", "Pauldrons", "Gloves", "Shoes", "Cloak", 
+      "Belt", "Necklace", "Earrings", "Ring", "Bracelet", "Rune", "Amulet"
+    ];
+    const orderedTypes = slotTypeOrder.filter((s) => stats.itemsBySlot[s]);
+    for (const s of Object.keys(stats.itemsBySlot)) {
+      if (!orderedTypes.includes(s)) orderedTypes.push(s);
+    }
+
+    for (const slotType of orderedTypes) {
+      const slotItems = stats.itemsBySlot[slotType];
+      const totalItems = Object.values(slotItems).reduce((acc, curr) => acc + curr.count, 0);
+      const sorted = Object.entries(slotItems).sort((a, b) => b[1].count - a[1].count);
+      
+      ln();
+      ln(`  ── ${slotType} (${totalItems} items equipped) ──`);
+      const mLen = Math.max(...sorted.map(([n]) => n.length), 1);
+      
+      for (const [itemName, data] of sorted) {
+        const pct = percent(data.count, totalItems);
+        ln(`    ${bar(data.count, totalItems, 10)}  ${itemName.padEnd(mLen)}  ${data.count}/${totalItems} (${pct.padStart(5)}%)  [${data.grade || "Unknown"}]`);
+      }
+    }
+  }
+
   // ─── Equipment Substats By Slot Type ─────────────────────────
   if (Object.keys(stats.subStatsBySlot).length > 0) {
     hdr("⚙️  EQUIPMENT SUBSTATS BY SLOT TYPE");
     // Group by slot type in a logical order
     const slotTypeOrder = [
-      "Mace",
-      "Spellbook",
-      "Staff",
-      "Greatsword",
-      "Sword",
-      "Dagger",
-      "Bow",
-      "Pistol",
-      "Harp",
-      "Guard",
-      "Top",
-      "Legs",
-      "Helm",
-      "Pauldrons",
-      "Gloves",
-      "Shoes",
-      "Cloak",
-      "Belt",
-      "Necklace",
-      "Earrings",
-      "Ring",
-      "Bracelet",
-      "Rune",
-      "Amulet",
+      "Mace", "Spellbook", "Staff", "Greatsword", "Longsword", "Sword", "Dagger", "Bow", "Orb", "Pistol", "Harp", "Guard",
+      "Top", "Legs", "Helm", "Pauldrons", "Gloves", "Shoes", "Cloak", 
+      "Belt", "Necklace", "Earrings", "Ring", "Bracelet", "Rune", "Amulet"
     ];
     const orderedTypes = slotTypeOrder.filter((s) => stats.subStatsBySlot[s]);
     for (const s of Object.keys(stats.subStatsBySlot)) {
@@ -869,7 +542,7 @@ async function main() {
 
   const config = await resolveConfig();
   const headers = makeHeaders(
-    `${BASE}/leaderboard/${config.lbType}?class=${config.cls}`,
+    `${baseUrl}/leaderboard/${config.lbType}?class=${config.cls}`,
   );
 
   log.info("main", `Leaderboard: ${config.lbInfo.label}`);
@@ -879,7 +552,10 @@ async function main() {
   // 1. Leaderboard
   const players = await fetchLeaderboard(config, headers);
   if (players.length === 0) {
-    log.error("main", "No players found. Try a different leaderboard type or check shugo.gg.");
+    log.error(
+      "main",
+      "No players found. Try a different leaderboard type or check shugo.gg.",
+    );
     process.exit(1);
   }
 
@@ -894,27 +570,27 @@ async function main() {
   let playerCursor = 0; // index into `players`
   let lbPage = Math.ceil(players.length / 100) + 1; // next page to fetch
   let scanned = 0; // total candidates examined (for display)
-  const MAX_RETRIES = 3;
-  const RETRY_BASE_MS = 500;
+  const maxRetries = 3;
+  const retryBaseMs = 500;
 
   while (enriched.length < config.limit) {
     // Refill the candidate pool if we've consumed everything fetched so far
     if (playerCursor >= players.length) {
       if (lbPage > 20) break; // hard cap — don't hammer the API forever
       const { lbInfo, cls } = config;
-      const rankingType = CLASS_RANKING_IDS[cls] || 0;
-      const url = `${BASE}/api/leaderboard?contentType=${lbInfo.contentType}&rankingType=${rankingType}&page=${lbPage}&limit=100`;
+      const rankingType = classRankingIds[cls] || 0;
+      const url = `${baseUrl}/api/leaderboard?contentType=${lbInfo.contentType}&rankingType=${rankingType}&page=${lbPage}&limit=100`;
       try {
         const data = await fetchWithRetry(
           () => fetchJSON(url, headers),
-          MAX_RETRIES,
-          RETRY_BASE_MS,
+          maxRetries,
+          retryBaseMs,
         );
         const rankings = data?.rankings || [];
         if (rankings.length === 0) break; // no more pages
         players.push(...rankings);
         lbPage++;
-        await sleep(DELAY_MS);
+        await sleep(delayMs);
       } catch (err) {
         log.warn("main", `Could not fetch more pages: ${err.message}`);
         break;
@@ -924,25 +600,33 @@ async function main() {
     const p = players[playerCursor++];
     scanned++;
     const name = p.characterName || "Unknown";
-    const gs = p.gearScore;
-    log.info(name, `Scanned: ${scanned} | Found: ${enriched.length + 1}/${config.limit}${gs ? ` (GS: ${gs.toLocaleString()})` : ""}`);
+    const pGs = p.gearScore;
+    const pCp = p.combatPower;
+    const statsStr = [pGs ? `GS: ${pGs.toLocaleString()}` : "", pCp ? `CP: ${pCp.toLocaleString()}` : ""].filter(Boolean).join(" | ");
+    log.info(
+      name,
+      `Scanned: ${scanned} | Found: ${enriched.length + 1}/${config.limit}${statsStr ? ` (${statsStr})` : ""}`,
+    );
 
     // Fetch build (with retry)
     let result = null;
     try {
       result = await fetchWithRetry(
         () => fetchCharacterBuild(p, headers, config),
-        MAX_RETRIES,
-        RETRY_BASE_MS,
+        maxRetries,
+        retryBaseMs,
       );
     } catch (err) {
-      log.warn(name, `Skipped: failed after ${MAX_RETRIES} attempts (${err.message})`);
-      await sleep(DELAY_MS);
+      log.warn(
+        name,
+        `Skipped: failed after ${maxRetries} attempts (${err.message})`,
+      );
+      await sleep(delayMs);
       continue;
     }
 
     if (!result) {
-      await sleep(DELAY_MS);
+      await sleep(delayMs);
       continue;
     }
 
@@ -951,28 +635,41 @@ async function main() {
     try {
       equipDetails = await fetchWithRetry(
         () => fetchEquipmentDetails(result, headers),
-        MAX_RETRIES,
-        RETRY_BASE_MS,
+        maxRetries,
+        retryBaseMs,
       );
     } catch (err) {
-      log.warn(name, `Failed equipment (using partial data) — ${err.message}`);
-      result._equip = null;
+      log.warn(
+        name,
+        `Failed equipment substats (skills/gear still usable) — ${err.message}`,
+      );
+      // DO NOT null-out _equip here — it contains already-fetched skills + equipment
+      // that are perfectly valid.  Only the equipment substats are missing.
     }
     result._equipDetails = equipDetails;
 
-    // Class validation: check MainHand/SubHand against this class's primary weapon
-    // Supports localized names (e.g. TW "法杖" for Staff)
-    const primaryWeapon = CLASS_WEAPONS[config.cls.toLowerCase()];
+    // Class validation: check MainHand/SubHand against this class's primary weapon.
+    // Uses item names from the direct API (reliable) rather than categoryName from
+    // batch-equipment (which often returns null items).
+    const primaryWeapon = classWeapons[config.cls.toLowerCase()];
     let hasValidWeapon = !primaryWeapon;
 
-    if (primaryWeapon && result._equip && equipDetails.length > 0) {
-      const validLabels = [primaryWeapon];
-      if (primaryWeapon === "Staff") validLabels.push("法杖"); // TW localized
+    if (primaryWeapon && result._equip) {
+      const validLabels = Array.isArray(primaryWeapon)
+        ? [...primaryWeapon]
+        : [primaryWeapon];
 
-      for (const eqItem of equipDetails) {
-        if (eqItem.slotPos === 1 || eqItem.slotPos === 2) {
-          const cat = eqItem.categoryName || "";
-          if (validLabels.some((label) => cat.startsWith(label))) {
+      const eqList = result._equip.equipment?.equipmentList || [];
+      for (const item of eqList) {
+        if (!item) continue;
+        if (item.slotPos === 1 || item.slotPos === 2) {
+          const itemName = item.name || "";
+          const cat = item.categoryName || "";
+          if (
+            validLabels.some(
+              (label) => itemName.includes(label) || cat.startsWith(label),
+            )
+          ) {
             hasValidWeapon = true;
             break;
           }
@@ -980,7 +677,10 @@ async function main() {
       }
 
       if (!hasValidWeapon) {
-        log.warn(name, `Weapons don't match ${config.cls}. Ignoring equipment data.`);
+        log.warn(
+          name,
+          `Weapons don't match ${config.cls}. Ignoring equipment data.`,
+        );
         // Clear equipment data so they still count towards the leaderboard limit
         // but their irrelevant class stats aren't analyzed.
         result._equip = null;
@@ -989,9 +689,31 @@ async function main() {
       }
     }
 
-    // Fetch the game's own ItemLevel stat from character/info (matches Shugo.gg iLvl exactly)
-    const itemLevel = await fetchItemLevel(result, headers);
+    // Fetch the game's own ItemLevel and CP stat from character/info.
+    // Try direct API first (faster / more reliable from CLI), then proxy fallback.
+    let itemLevel = null;
+    let cp = null;
+    try {
+      const apiBase2 =
+        result.region === "TW"
+          ? "https://tw.ncsoft.com/aion2/api"
+          : "https://aion2.plaync.com/api";
+      const infoData = await fetchJSON(
+        `${apiBase2}/character/info?lang=en&characterId=${result.characterId}&serverId=${result.serverId}`,
+        makeDirectHeaders(),
+      );
+      itemLevel = extractItemLevelFromInfo(infoData);
+      cp = extractCombatPowerFromInfo(infoData);
+    } catch {
+      // Direct failed — fall back to the proxy-based helper
+      const stats = await fetchItemLevelAndCP(result, headers);
+      if (stats) {
+        itemLevel = stats.itemLevel;
+        cp = stats.combatPower;
+      }
+    }
     result._itemLevel = itemLevel;
+    result._combatPower = cp;
 
     enriched.push(result);
     // Collect arcana item IDs for set info
@@ -1002,19 +724,25 @@ async function main() {
       }
     }
 
-    await sleep(DELAY_MS);
+    await sleep(delayMs);
   }
 
-  log.success("main", `${enriched.length}/${config.limit} builds fetched (scanned ${scanned} candidates)`);
+  log.success(
+    "main",
+    `${enriched.length}/${config.limit} builds fetched (scanned ${scanned} candidates)`,
+  );
 
   // 3. Fetch arcana item details (for set bonuses)
   log.info("main", "Fetching Arcana set details...");
-  const itemDetails = await fetchItemDetails(allArcanaIds, headers);
-  log.success("main", `${Object.keys(itemDetails).length} unique Arcana items resolved`);
+  const itemDetailsMap = await fetchItemDetails(allArcanaIds, headers);
+  log.success(
+    "main",
+    `${Object.keys(itemDetailsMap).length} unique Arcana items resolved`,
+  );
 
   // 4. Extract & Aggregate
   const builds = enriched.map((p) =>
-    extractBuild(p, itemDetails, p._equipDetails || [], p._itemLevel ?? null),
+    extractBuild(p, itemDetailsMap, p._equipDetails || [], p._itemLevel ?? null, p._combatPower ?? null),
   );
   const stats = aggregate(builds);
 
