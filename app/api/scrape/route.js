@@ -212,7 +212,7 @@ export async function POST(req) {
         // ═══════════════════════════════════════════════════════════════════
         // PHASE 1: Fetch all leaderboard pages in parallel
         // ═══════════════════════════════════════════════════════════════════
-        log.info("leaderboard", `Fetching ${lbInfo.label} leaderboard...`);
+        log.info("leaderboard", `Searching ${lbInfo.label} rankings...`);
 
         // Estimate how many pages we need (100 per page), fetch them concurrently
         // When filtering by server/region, we need many more pages since most
@@ -258,7 +258,7 @@ export async function POST(req) {
 
         log.info(
           "leaderboard",
-          `Found ${allPlayers.length} unique candidates (${rawPlayers.length} raw).`,
+          `Found ${allPlayers.length} players to analyze.`,
         );
 
         // ═══════════════════════════════════════════════════════════════════
@@ -308,7 +308,7 @@ export async function POST(req) {
               // Incomplete cache — schedule for re-fetch
               log.warn(
                 p.characterName,
-                `[CACHED ✗ incomplete] equip: ${hasEquip ? `✓ (${equipCount} items)` : "✗ missing"} | details: ${detailCount > 0 ? `✓ (${detailCount})` : "✗ none"} | GS: ${cached.itemLevel ?? "✗ none"} → will re-fetch`,
+                `Cached data incomplete, re-fetching...`,
               );
               uncachedPlayers.push(p);
             }
@@ -328,7 +328,7 @@ export async function POST(req) {
           const cachedGs = r._itemLevel;
           log.success(
             r.characterName,
-            `[CACHED ✓] equip: ✓ (${equipCount} items) | details: ✓ (${detailCount}) | GS: ${cachedGs ?? "✗ none"} (${enriched.length}/${limit})`,
+            `Loaded from cache${cachedGs ? ` (GS: ${cachedGs})` : ""} (${enriched.length}/${limit})`,
           );
         }
 
@@ -345,7 +345,7 @@ export async function POST(req) {
         const stillNeeded = limit - enriched.length;
         log.info(
           "cache",
-          `${cachedResults.length} cached, ${Math.min(uncachedPlayers.length, stillNeeded)} need fetching.`,
+          `${cachedResults.length} players loaded from cache, ${Math.min(uncachedPlayers.length, stillNeeded)} remaining.`,
         );
 
         // ═══════════════════════════════════════════════════════════════════
@@ -413,7 +413,7 @@ export async function POST(req) {
                   if (budget.canAfford()) {
                     log.warn(
                       p.characterName,
-                      `Direct API failed, trying proxy fallback`,
+                      `Retrying with alternate method...`,
                     );
                     equipData = await fetchWithRetry(
                       () =>
@@ -620,7 +620,7 @@ export async function POST(req) {
             if (!isActive || !budget.canAfford(5)) break;
             log.info(
               "leaderboard",
-              `Need more candidates, fetching page ${extraPage}...`,
+              `Searching for more players (page ${extraPage})...`,
             );
             const url = `${baseUrl}/api/leaderboard?contentType=${lbInfo.contentType}&rankingType=${rankingType}&page=${extraPage}&limit=100`;
             let moreRankings;
@@ -690,12 +690,12 @@ export async function POST(req) {
                   }
                   log.success(
                     p.characterName,
-                    `[CACHED ✓] equip: ✓ (${equipCount2} items) | details: ✓ (${detailCount2}) | GS: ${cached.itemLevel ?? "✗ none"} (${enriched.length}/${limit})`,
+                    `Loaded from cache${cached.itemLevel ? ` (GS: ${cached.itemLevel})` : ""} (${enriched.length}/${limit})`,
                   );
                 } else {
                   log.warn(
                     p.characterName,
-                    `[CACHED ✗ incomplete] equip: ${hasEquip2 ? `✓ (${equipCount2} items)` : "✗ missing"} | details: ${detailCount2 > 0 ? `✓ (${detailCount2})` : "✗ none"} | GS: ${cached.itemLevel ?? "✗ none"} → will re-fetch`,
+                    `Cached data incomplete, re-fetching...`,
                   );
                   moreUncached.push(p);
                 }
@@ -904,7 +904,7 @@ export async function POST(req) {
         sendEvent({ type: "progress", current: limit, total: limit });
         log.success(
           "aggregate",
-          `Finished scanning ${enriched.length} valid players. Fetching Arcana dictionary...`,
+          `Finished scanning ${enriched.length} players. Loading arcana data...`,
         );
 
         // ═══════════════════════════════════════════════════════════════════
@@ -932,7 +932,7 @@ export async function POST(req) {
             } catch (err) {
               log.warn(
                 "arcana",
-                `Batch detail fetch failed: ${err?.message || err}`,
+                `Failed to load some arcana details, skipping batch`,
               );
               return [];
             }
@@ -947,7 +947,7 @@ export async function POST(req) {
           }
         }
 
-        log.info("aggregate", `Aggregating final results...`);
+        log.info("aggregate", `Building analysis results...`);
 
         const builds = enriched.map((p) =>
           extractBuild(

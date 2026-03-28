@@ -772,9 +772,7 @@ export default function Home() {
                             <span className="log-icon">{levelIcon}</span>
                             <span className="log-time">{log.time}</span>
                             {log.context && (
-                              <span className="log-context">
-                                ({log.context})
-                              </span>
+                              <span className="log-context">{log.context}</span>
                             )}
                             <span className="log-message">{log.text}</span>
                           </motion.div>
@@ -2374,7 +2372,7 @@ export default function Home() {
                                 <span className="log-time">{log.time}</span>
                                 {log.context && (
                                   <span className="log-context">
-                                    ({log.context})
+                                    {log.context}
                                   </span>
                                 )}
                                 <span className="log-message">{log.text}</span>

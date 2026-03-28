@@ -600,8 +600,15 @@ select option {
 .log-context {
   color: #7dd3fc;
   flex-shrink: 0;
-  font-size: 0.65rem;
-  opacity: 0.7;
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: rgba(125, 211, 252, 0.1);
+  border: 1px solid rgba(125, 211, 252, 0.2);
+  border-radius: 4px;
+  padding: 1px 6px;
+  line-height: 1.6;
 }
 
 .log-message {

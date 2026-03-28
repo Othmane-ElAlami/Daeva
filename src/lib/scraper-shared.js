@@ -154,6 +154,25 @@ export function createBudget() {
 }
 
 // ── Fetch Helpers ────────────────────────────────────────────────────────────
+
+// Map raw API URLs to user-friendly descriptions for logs.
+function friendlyFetchLabel(url) {
+  // Unwrap proxy URLs to inspect the inner path
+  if (url.includes("/api/proxy?url=")) {
+    const inner = decodeURIComponent(url.split("url=")[1] || "");
+    if (inner) return friendlyFetchLabel(inner);
+  }
+  if (url.includes("/api/leaderboard")) {
+    const page = url.match(/page=(\d+)/)?.[1];
+    return `Scanning rankings${page ? ` (page ${page})` : ""}`;
+  }
+  if (url.includes("/character/equipment")) return "Reading gear";
+  if (url.includes("/character/info")) return "Reading player stats";
+  if (url.includes("/items/batch-equipment")) return "Resolving substats";
+  if (url.includes("/items/batch-details")) return "Resolving arcana";
+  return "Loading";
+}
+
 export async function fetchJSON(
   url,
   headers,
@@ -171,8 +190,7 @@ export async function fetchJSON(
     opts.body = JSON.stringify(body);
     opts.headers = { ...headers, "Content-Type": "application/json" };
   }
-  // Derive a short label from the URL for readable logs
-  const shortUrl = url.length > 120 ? url.slice(0, 120) + "…" : url;
+  const label = friendlyFetchLabel(url);
   let res;
   try {
     res = await fetch(url, opts);
@@ -185,12 +203,10 @@ export async function fetchJSON(
   }
   clearTimeout(timer);
   if (!res.ok) {
-    if (logger)
-      logger.error("fetch", `${method} ${shortUrl} → HTTP ${res.status}`);
+    if (logger) logger.error("fetch", `${label} — failed (HTTP ${res.status})`);
     throw new Error(`HTTP ${res.status}`);
   }
-  if (logger)
-    logger.success("fetch", `${method} ${shortUrl} → ${res.status} OK`);
+  if (logger) logger.success("fetch", `${label} ✓`);
   return res.json();
 }
 
