@@ -15,6 +15,14 @@ const cinzel = Cinzel({
 export const metadata = {
   title: "Daeva Analyzer",
   description: "Aion 2 Build Dashboard",
+  icons: {
+    icon: [
+      { url: "/icon0.svg", type: "image/svg+xml" },
+      { url: "/icon1.png", type: "image/png" },
+    ],
+    apple: "/apple-icon.png",
+  },
+  manifest: "/manifest.json",
 };
 
 export default function RootLayout({ children }) {
