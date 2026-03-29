@@ -50,7 +50,7 @@ function sanitizeErrorMessage(msg) {
 }
 
 const MAX_LIMIT = 100;
-const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
+const RATE_LIMIT_WINDOW_MS = 30_000; // 30 seconds
 
 // Extract top skills by usage count for the landing page meta snapshot widget.
 function topSkills(skillMap, total, limit = 6) {
@@ -106,51 +106,6 @@ export async function POST(req) {
   const { env } = getRequestContext();
   const db = env.DB;
 
-  // --- Rate limiting: 1 analysis per minute per IP ---
-  // Only trust cf-connecting-ip (set by Cloudflare) — x-forwarded-for is trivially spoofable.
-  const ip = req.headers.get("cf-connecting-ip") || "unknown";
-  const now = Date.now();
-
-  try {
-    const row = await db
-      .prepare("SELECT last_request_at FROM rate_limits WHERE ip = ?")
-      .bind(ip)
-      .first();
-
-    if (row && now - row.last_request_at < RATE_LIMIT_WINDOW_MS) {
-      const retryAfter = Math.ceil(
-        (RATE_LIMIT_WINDOW_MS - (now - row.last_request_at)) / 1000,
-      );
-      return new Response(
-        JSON.stringify({
-          error: `Rate limit exceeded. Please wait ${retryAfter}s before starting another analysis.`,
-        }),
-        {
-          status: 429,
-          headers: {
-            "Content-Type": "application/json",
-            "Retry-After": String(retryAfter),
-          },
-        },
-      );
-    }
-
-    await db
-      .prepare(
-        "INSERT INTO rate_limits (ip, last_request_at) VALUES (?, ?) ON CONFLICT(ip) DO UPDATE SET last_request_at = excluded.last_request_at",
-      )
-      .bind(ip, now)
-      .run();
-  } catch (err) {
-    // Only skip rate limiting if the table hasn't been created yet.
-    // Re-throw all other DB errors to avoid silently disabling rate limits.
-    if (err?.message && /no such table/i.test(err.message)) {
-      // Table not yet migrated — proceed without rate limiting
-    } else {
-      console.error("[rate-limit] DB error:", err?.message || err);
-    }
-  }
-
   let body;
   try {
     body = await req.json();
@@ -161,7 +116,59 @@ export async function POST(req) {
     });
   }
 
-  const { lbType, cls, region, serverId } = body;
+  const { lbType, cls, region, serverId, continuation } = body;
+  const isContinuation = !!(
+    continuation &&
+    Array.isArray(continuation.players) &&
+    continuation.players.length > 0
+  );
+
+  // --- Rate limiting: 1 analysis per minute per IP ---
+  // Skip for continuation requests (same analysis, not a new one).
+  if (!isContinuation) {
+    const ip = req.headers.get("cf-connecting-ip") || "unknown";
+    const now = Date.now();
+
+    try {
+      const row = await db
+        .prepare("SELECT last_request_at FROM rate_limits WHERE ip = ?")
+        .bind(ip)
+        .first();
+
+      if (row && now - row.last_request_at < RATE_LIMIT_WINDOW_MS) {
+        const retryAfter = Math.ceil(
+          (RATE_LIMIT_WINDOW_MS - (now - row.last_request_at)) / 1000,
+        );
+        return new Response(
+          JSON.stringify({
+            error: `Rate limit exceeded. Please wait ${retryAfter}s before starting another analysis.`,
+          }),
+          {
+            status: 429,
+            headers: {
+              "Content-Type": "application/json",
+              "Retry-After": String(retryAfter),
+            },
+          },
+        );
+      }
+
+      await db
+        .prepare(
+          "INSERT INTO rate_limits (ip, last_request_at) VALUES (?, ?) ON CONFLICT(ip) DO UPDATE SET last_request_at = excluded.last_request_at",
+        )
+        .bind(ip, now)
+        .run();
+    } catch (err) {
+      // Only skip rate limiting if the table hasn't been created yet.
+      // Re-throw all other DB errors to avoid silently disabling rate limits.
+      if (err?.message && /no such table/i.test(err.message)) {
+        // Table not yet migrated — proceed without rate limiting
+      } else {
+        console.error("[rate-limit] DB error:", err?.message || err);
+      }
+    }
+  }
 
   // --- Input validation: whitelist all user-provided values ---
   if (!lbType || !leaderboardTypes[lbType]) {
@@ -184,7 +191,7 @@ export async function POST(req) {
   const headers = makeHeaders(`${baseUrl}/leaderboard/${lbType}?class=${cls}`);
 
   // Tuning: max concurrent API requests for player data
-  const concurrency = 15;
+  const concurrency = 5;
   const maxRetries = 2;
   const retryBaseMs = 400;
   const budget = createBudget();
@@ -210,56 +217,67 @@ export async function POST(req) {
 
       try {
         // ═══════════════════════════════════════════════════════════════════
-        // PHASE 1: Fetch all leaderboard pages in parallel
+        // PHASE 1: Fetch leaderboard (or resume from continuation)
         // ═══════════════════════════════════════════════════════════════════
-        log.info("leaderboard", `Searching ${lbInfo.label} rankings...`);
-
-        // Estimate how many pages we need (100 per page), fetch them concurrently
-        // When filtering by server/region, we need many more pages since most
-        // entries will be discarded by the client-side filter.
-        const isFiltered =
-          (region && region !== "all") || (serverId && serverId !== "all");
-        const pagesNeeded = Math.min(
-          Math.ceil((limit * (isFiltered ? 8 : 1.5)) / 100),
-          20,
-        );
-        const lbPageTasks = Array.from({ length: pagesNeeded }, (_, i) => {
-          const pg = i + 1;
-          return async () => {
-            const url = `${baseUrl}/api/leaderboard?contentType=${lbInfo.contentType}&rankingType=${rankingType}&page=${pg}&limit=100`;
-            try {
-              const data = await fetchWithRetry(
-                () => fetchJSON(url, headers, "GET", null, budget, log),
-                maxRetries,
-                retryBaseMs,
-                budget,
-              );
-              return data?.rankings || [];
-            } catch (err) {
-              if (err instanceof subrequestBudgetExhausted) throw err;
-              return [];
-            }
-          };
-        });
-
-        const lbResults = await runPool(lbPageTasks, 5, budget);
-        const rawPlayers = lbResults.flat().filter(Boolean);
-
-        // Deduplicate by characterId + serverId
         const seen = new Set();
         let allPlayers = [];
-        for (const p of rawPlayers) {
-          const key = `${p.characterId}_${p.serverId}`;
-          if (!seen.has(key)) {
-            seen.add(key);
-            allPlayers.push(p);
-          }
-        }
+        let pagesNeeded = 0;
 
-        log.info(
-          "leaderboard",
-          `Found ${allPlayers.length} players to analyze.`,
-        );
+        if (isContinuation) {
+          // Continuation: skip leaderboard fetch, use provided player list
+          allPlayers = continuation.players;
+          log.info(
+            "system",
+            `Resuming analysis (${continuation.processedCount || 0} already processed)...`,
+          );
+        } else {
+          log.info("leaderboard", `Searching ${lbInfo.label} rankings...`);
+
+          // Estimate how many pages we need (100 per page), fetch them concurrently
+          // When filtering by server/region, we need many more pages since most
+          // entries will be discarded by the client-side filter.
+          const isFiltered =
+            (region && region !== "all") || (serverId && serverId !== "all");
+          pagesNeeded = Math.min(
+            Math.ceil((limit * (isFiltered ? 8 : 1.5)) / 100),
+            20,
+          );
+          const lbPageTasks = Array.from({ length: pagesNeeded }, (_, i) => {
+            const pg = i + 1;
+            return async () => {
+              const url = `${baseUrl}/api/leaderboard?contentType=${lbInfo.contentType}&rankingType=${rankingType}&page=${pg}&limit=100`;
+              try {
+                const data = await fetchWithRetry(
+                  () => fetchJSON(url, headers, "GET", null, budget, log),
+                  maxRetries,
+                  retryBaseMs,
+                  budget,
+                );
+                return data?.rankings || [];
+              } catch (err) {
+                if (err instanceof subrequestBudgetExhausted) throw err;
+                return [];
+              }
+            };
+          });
+
+          const lbResults = await runPool(lbPageTasks, 5, budget);
+          const rawPlayers = lbResults.flat().filter(Boolean);
+
+          // Deduplicate by characterId + serverId
+          for (const p of rawPlayers) {
+            const key = `${p.characterId}_${p.serverId}`;
+            if (!seen.has(key)) {
+              seen.add(key);
+              allPlayers.push(p);
+            }
+          }
+
+          log.info(
+            "leaderboard",
+            `Found ${allPlayers.length} players to analyze.`,
+          );
+        }
 
         // ═══════════════════════════════════════════════════════════════════
         // PHASE 2: Filter by region/server, then split cached vs uncached
@@ -317,11 +335,13 @@ export async function POST(req) {
         for (const r of cachedResults) {
           if (enriched.length >= limit) break;
           enriched.push(r);
-          const cachedGs = r._itemLevel;
-          log.success(
-            "scan",
-            `${r.characterName}${cachedGs ? `  ·  GS ${cachedGs}` : ""}  (${enriched.length}/${limit})`,
-          );
+          if (!isContinuation) {
+            const cachedGs = r._itemLevel;
+            log.success(
+              "scan",
+              `${r.characterName}${cachedGs ? `  ·  GS ${cachedGs}` : ""}  (${enriched.length}/${limit})`,
+            );
+          }
         }
 
         if (enriched.length >= limit) {
@@ -335,10 +355,17 @@ export async function POST(req) {
         }
 
         const stillNeeded = limit - enriched.length;
-        log.info(
-          "cache",
-          `${cachedResults.length} players loaded from cache, ${Math.min(uncachedPlayers.length, stillNeeded)} remaining.`,
-        );
+        if (!isContinuation) {
+          log.info(
+            "cache",
+            `${cachedResults.length} players loaded from cache, ${Math.min(uncachedPlayers.length, stillNeeded)} remaining.`,
+          );
+        } else {
+          log.info(
+            "cache",
+            `${cachedResults.length} cached,  ${Math.min(uncachedPlayers.length, stillNeeded)} remaining to fetch.`,
+          );
+        }
 
         // ═══════════════════════════════════════════════════════════════════
         // PHASE 3: Fetch uncached players concurrently in batches
@@ -530,7 +557,8 @@ export async function POST(req) {
               );
               itemLevel = extractItemLevelFromInfo(infoData);
               cp = extractCombatPowerFromInfo(infoData);
-            } catch {
+            } catch (infoErr) {
+              if (infoErr instanceof subrequestBudgetExhausted) throw infoErr;
               const stats = await fetchItemLevelAndCP(p, headers, budget);
               if (stats) {
                 itemLevel = stats.itemLevel;
@@ -595,10 +623,48 @@ export async function POST(req) {
           }
         }
 
+        // ─── Continuation check: if budget exhausted before finishing, hand off ───
+        if (enriched.length < limit && !budget.canAfford(3)) {
+          const processedIds = new Set(
+            enriched.map((p) => `${p.characterId}_${p.serverId}`),
+          );
+          const remainingPlayers = allPlayers.filter(
+            (p) => !processedIds.has(`${p.characterId}_${p.serverId}`),
+          );
+
+          if (remainingPlayers.length > 0) {
+            log.info(
+              "system",
+              `Subrequest budget reached — continuing in next batch (${enriched.length}/${limit} done)...`,
+            );
+            sendEvent({
+              type: "continue",
+              players: remainingPlayers.map((p) => ({
+                characterId: p.characterId,
+                characterName: p.characterName,
+                serverId: p.serverId,
+                region: p.region,
+                globalRank: p.globalRank,
+                rank: p.rank,
+                faction: p.faction,
+              })),
+              processedCount: enriched.length,
+            });
+            if (isActive) {
+              try {
+                controller.close();
+              } catch (e) {}
+              isActive = false;
+            }
+            return;
+          }
+        }
+
         // ═══════════════════════════════════════════════════════════════════
         // PHASE 3b: Fetch additional leaderboard pages if still short
+        // (skipped on continuation — player list is already established)
         // ═══════════════════════════════════════════════════════════════════
-        if (enriched.length < limit && budget.canAfford(5)) {
+        if (!isContinuation && enriched.length < limit && budget.canAfford(5)) {
           let extraPage = pagesNeeded + 1;
           while (enriched.length < limit && extraPage <= 50) {
             if (!isActive || !budget.canAfford(5)) break;
@@ -820,7 +886,9 @@ export async function POST(req) {
                     );
                     itemLevel2 = extractItemLevelFromInfo(infoD);
                     cp2 = extractCombatPowerFromInfo(infoD);
-                  } catch {
+                  } catch (infoErr2) {
+                    if (infoErr2 instanceof subrequestBudgetExhausted)
+                      throw infoErr2;
                     const stats = await fetchItemLevelAndCP(p, headers, budget);
                     if (stats) {
                       itemLevel2 = stats.itemLevel;
@@ -869,6 +937,43 @@ export async function POST(req) {
               }
             }
             extraPage++;
+          }
+        }
+
+        // ─── Second continuation check after Phase 3b ───
+        if (enriched.length < limit && !budget.canAfford(3)) {
+          const processedIds = new Set(
+            enriched.map((p) => `${p.characterId}_${p.serverId}`),
+          );
+          const remainingPlayers = allPlayers.filter(
+            (p) => !processedIds.has(`${p.characterId}_${p.serverId}`),
+          );
+
+          if (remainingPlayers.length > 0) {
+            log.info(
+              "system",
+              `Subrequest budget reached — continuing in next batch (${enriched.length}/${limit} done)...`,
+            );
+            sendEvent({
+              type: "continue",
+              players: remainingPlayers.map((p) => ({
+                characterId: p.characterId,
+                characterName: p.characterName,
+                serverId: p.serverId,
+                region: p.region,
+                globalRank: p.globalRank,
+                rank: p.rank,
+                faction: p.faction,
+              })),
+              processedCount: enriched.length,
+            });
+            if (isActive) {
+              try {
+                controller.close();
+              } catch (e) {}
+              isActive = false;
+            }
+            return;
           }
         }
 
@@ -950,18 +1055,43 @@ export async function POST(req) {
           isActive = false;
         }
       } catch (error) {
-        // Budget exhausted — return partial results gracefully
+        // Budget exhausted — try continuation instead of giving up
         if (
           error instanceof subrequestBudgetExhausted ||
           (error.message && error.message.includes("subrequest"))
         ) {
-          log.warn(
-            "system",
-            `Request limit reached. Returning ${enriched.length} players scanned so far.`,
+          // Check if we can continue in a new invocation
+          const processedIds = new Set(
+            enriched.map((p) => `${p.characterId}_${p.serverId}`),
+          );
+          const remainingPlayers = allPlayers.filter(
+            (p) => !processedIds.has(`${p.characterId}_${p.serverId}`),
           );
 
-          // Still try to aggregate what we have
-          if (enriched.length > 0) {
+          if (enriched.length < limit && remainingPlayers.length > 0) {
+            log.info(
+              "system",
+              `Subrequest budget reached — continuing in next batch (${enriched.length}/${limit} done)...`,
+            );
+            sendEvent({
+              type: "continue",
+              players: remainingPlayers.map((p) => ({
+                characterId: p.characterId,
+                characterName: p.characterName,
+                serverId: p.serverId,
+                region: p.region,
+                globalRank: p.globalRank,
+                rank: p.rank,
+                faction: p.faction,
+              })),
+              processedCount: enriched.length,
+            });
+          } else if (enriched.length > 0) {
+            // All players processed or no remaining — aggregate partial results
+            log.warn(
+              "system",
+              `Request limit reached. Returning ${enriched.length} players scanned so far.`,
+            );
             const itemDetailsMap = {};
             const builds = enriched.map((p) =>
               extractBuild(

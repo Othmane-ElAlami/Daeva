@@ -177,87 +177,109 @@ export default function Home() {
     setProgress({ current: 0, total: forma.limit, target: "" });
 
     try {
-      const res = await fetch("/api/scrape", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(forma),
-      });
+      let continuationData = null;
+      let isDone = false;
 
-      if (res.status === 429) {
-        const data = await res.json();
-        throw new Error(
-          data.error || "Rate limit exceeded. Please wait before trying again.",
-        );
-      }
-      if (!res.ok) {
-        throw new Error("Failed to start analysis");
-      }
+      while (!isDone) {
+        const requestBody = continuationData
+          ? { ...forma, continuation: continuationData }
+          : { ...forma };
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let done = false;
-      let buffer = "";
+        const res = await fetch("/api/scrape", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(requestBody),
+        });
 
-      while (!done) {
-        const { value, done: doneReading } = await reader.read();
-        done = doneReading;
-        if (value) {
-          buffer += decoder.decode(value, { stream: true });
-          const parts = buffer.split("\n\n");
-          buffer = parts.pop();
-          for (const part of parts) {
-            if (part.startsWith("data: ")) {
-              try {
-                const event = JSON.parse(part.slice(6));
-                if (event.type === "log") {
-                  setLogs((prev) => [
-                    ...prev,
-                    {
-                      text: event.message,
-                      level: event.level || "INFO",
-                      context: event.context || "",
-                      time: event.timestamp
-                        ? new Date(event.timestamp).toLocaleTimeString(
-                            "en-US",
-                            {
+        if (res.status === 429) {
+          const errData = await res.json();
+          throw new Error(
+            errData.error ||
+              "Rate limit exceeded. Please wait before trying again.",
+          );
+        }
+        if (!res.ok) {
+          throw new Error("Failed to start analysis");
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let readerDone = false;
+        let buffer = "";
+        continuationData = null;
+
+        while (!readerDone) {
+          const { value, done: doneReading } = await reader.read();
+          readerDone = doneReading;
+          if (value) {
+            buffer += decoder.decode(value, { stream: true });
+            const parts = buffer.split("\n\n");
+            buffer = parts.pop();
+            for (const part of parts) {
+              if (part.startsWith("data: ")) {
+                try {
+                  const event = JSON.parse(part.slice(6));
+                  if (event.type === "log") {
+                    setLogs((prev) => [
+                      ...prev,
+                      {
+                        text: event.message,
+                        level: event.level || "INFO",
+                        context: event.context || "",
+                        time: event.timestamp
+                          ? new Date(event.timestamp).toLocaleTimeString(
+                              "en-US",
+                              {
+                                hour12: false,
+                                hour: "2-digit",
+                                minute: "2-digit",
+                                second: "2-digit",
+                                fractionalSecondDigits: 3,
+                              },
+                            )
+                          : new Date().toLocaleTimeString("en-US", {
                               hour12: false,
                               hour: "2-digit",
                               minute: "2-digit",
                               second: "2-digit",
                               fractionalSecondDigits: 3,
-                            },
-                          )
-                        : new Date().toLocaleTimeString("en-US", {
-                            hour12: false,
-                            hour: "2-digit",
-                            minute: "2-digit",
-                            second: "2-digit",
-                            fractionalSecondDigits: 3,
-                          }),
-                    },
-                  ]);
-                } else if (event.type === "progress") {
-                  setProgress(event);
-                } else if (event.type === "done") {
-                  setData({
-                    stats: event.stats,
-                    count: event.count,
-                    cls: forma.cls,
-                    lb: forma.lbType,
-                  });
-                } else if (event.type === "error") {
-                  throw new Error(event.message);
-                }
-              } catch (e) {
-                if (
-                  e.message &&
-                  !e.message.includes("Unexpected end of JSON")
-                ) {
-                  throw e;
+                            }),
+                      },
+                    ]);
+                  } else if (event.type === "progress") {
+                    setProgress(event);
+                  } else if (event.type === "done") {
+                    setData({
+                      stats: event.stats,
+                      count: event.count,
+                      cls: forma.cls,
+                      lb: forma.lbType,
+                    });
+                    isDone = true;
+                  } else if (event.type === "continue") {
+                    continuationData = {
+                      players: event.players,
+                      processedCount: event.processedCount,
+                    };
+                  } else if (event.type === "error") {
+                    throw new Error(event.message);
+                  }
+                } catch (e) {
+                  if (
+                    e.message &&
+                    !e.message.includes("Unexpected end of JSON")
+                  ) {
+                    throw e;
+                  }
                 }
               }
             }
           }
+        }
+
+        // Stream ended — if no continuation and not done, something went wrong
+        if (!continuationData && !isDone) {
+          throw new Error("Analysis was interrupted. Please try again.");
         }
       }
     } catch (err) {

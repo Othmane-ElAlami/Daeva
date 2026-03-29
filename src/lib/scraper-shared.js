@@ -134,21 +134,31 @@ export class subrequestBudgetExhausted extends Error {
 
 export function createBudget() {
   let used = 0;
+  let forceExhausted = false;
   return {
     get used() {
       return used;
     },
     get remaining() {
-      return subrequestHardLimit - subrequestSafetyMargin - used;
+      return forceExhausted
+        ? 0
+        : subrequestHardLimit - subrequestSafetyMargin - used;
     },
     consume(n = 1) {
+      if (forceExhausted) throw new subrequestBudgetExhausted(used);
       used += n;
       if (used >= subrequestHardLimit - subrequestSafetyMargin) {
         throw new subrequestBudgetExhausted(used);
       }
     },
     canAfford(n = 1) {
-      return used + n < subrequestHardLimit - subrequestSafetyMargin;
+      return (
+        !forceExhausted &&
+        used + n < subrequestHardLimit - subrequestSafetyMargin
+      );
+    },
+    exhaust() {
+      forceExhausted = true;
     },
   };
 }
@@ -198,6 +208,11 @@ export async function fetchJSON(
     clearTimeout(timer);
     if (err.name === "AbortError") {
       throw new Error(`Request timed out after ${timeoutMs}ms`);
+    }
+    // Detect Cloudflare Workers subrequest limit — stop immediately
+    if (err.message && /too many subrequests/i.test(err.message)) {
+      if (budget) budget.exhaust();
+      throw new subrequestBudgetExhausted(budget ? budget.used : 0);
     }
     throw err;
   }
