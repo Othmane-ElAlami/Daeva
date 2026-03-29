@@ -284,7 +284,7 @@ export async function POST(req) {
               const url = `${baseUrl}/api/leaderboard?contentType=${lbInfo.contentType}&rankingType=${rankingType}&page=${pg}&limit=100`;
               try {
                 const data = await fetchWithRetry(
-                  () => fetchJSON(url, headers, "GET", null, budget, log),
+                  () => fetchJSON(url, headers, "GET", null, budget),
                   maxRetries,
                   retryBaseMs,
                   budget,
@@ -375,7 +375,7 @@ export async function POST(req) {
             const cachedGs = r._itemLevel;
             log.success(
               "scan",
-              `${r.characterName}${cachedGs ? `  ·  GS ${cachedGs}` : ""}  (${alreadyProcessed + enriched.length}/${originalLimit})`,
+              `${r.characterName}  ·  GS ${cachedGs ?? "—"}  (${alreadyProcessed + enriched.length}/${originalLimit})`,
             );
           }
         }
@@ -624,21 +624,16 @@ export async function POST(req) {
             const playerNum = alreadyProcessed + ++doneCount;
             const warningStr =
               warnings.length > 0 ? ` [${warnings.join(", ")}]` : "";
-            const statsStr = [
-              itemLevel ? `GS: ${itemLevel}` : "",
-              cp ? `CP: ${cp}` : "",
-            ]
-              .filter(Boolean)
-              .join(" | ");
+            const statsStr = `GS ${itemLevel ?? "—"}  ·  CP ${cp != null ? cp.toLocaleString() : "—"}`;
             if (warnings.length > 0) {
               log.warn(
                 "scan",
-                `${p.characterName}${statsStr ? `  ·  ${statsStr.replace(" | ", "  ·  ")}` : ""}  (${playerNum}/${originalLimit})${warningStr}`,
+                `${p.characterName}  ·  ${statsStr}  (${playerNum}/${originalLimit})${warningStr}`,
               );
             } else {
               log.success(
                 "scan",
-                `${p.characterName}${statsStr ? `  ·  ${statsStr.replace(" | ", "  ·  ")}` : ""}  (${playerNum}/${originalLimit})`,
+                `${p.characterName}  ·  ${statsStr}  (${playerNum}/${originalLimit})`,
               );
             }
 
@@ -708,15 +703,11 @@ export async function POST(req) {
           let extraPage = pagesNeeded + 1;
           while (enriched.length < limit && extraPage <= 50) {
             if (!isActive || !budget.canAfford(5)) break;
-            log.info(
-              "leaderboard",
-              `Searching for more players (page ${extraPage})...`,
-            );
             const url = `${baseUrl}/api/leaderboard?contentType=${lbInfo.contentType}&rankingType=${rankingType}&page=${extraPage}&limit=100`;
             let moreRankings;
             try {
               const data = await fetchWithRetry(
-                () => fetchJSON(url, headers, "GET", null, budget, log),
+                () => fetchJSON(url, headers, "GET", null, budget),
                 maxRetries,
                 retryBaseMs,
                 budget,
@@ -780,7 +771,7 @@ export async function POST(req) {
                   }
                   log.success(
                     "scan",
-                    `${p.characterName}${cached.itemLevel ? `  ·  GS ${cached.itemLevel}` : ""}  (${enriched.length}/${limit})`,
+                    `${p.characterName}  ·  GS ${cached.itemLevel ?? "—"}  (${enriched.length}/${limit})`,
                   );
                 } else {
                   moreUncached.push(p);
@@ -952,17 +943,10 @@ export async function POST(req) {
                     itemLevel2,
                   );
                   mc++;
-                  const gs2 = itemLevel2;
-                  const cp2Log = cp2;
-                  const statsStr2 = [
-                    gs2 ? `GS: ${gs2}` : "",
-                    cp2Log ? `CP: ${cp2Log}` : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" | ");
+                  const statsStr2 = `GS ${itemLevel2 ?? "—"}  ·  CP ${cp2 != null ? cp2.toLocaleString() : "—"}`;
                   log.success(
                     "scan",
-                    `${p.characterName}${statsStr2 ? `  ·  ${statsStr2.replace(" | ", "  ·  ")}` : ""}  (${mc}/${limit})`,
+                    `${p.characterName}  ·  ${statsStr2}  (${mc}/${limit})`,
                   );
                   return result;
                 });
