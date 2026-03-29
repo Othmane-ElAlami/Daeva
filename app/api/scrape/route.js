@@ -342,7 +342,8 @@ export async function POST(req) {
             const detailCount = Array.isArray(cached.equipDetails)
               ? cached.equipDetails.length
               : 0;
-            const isComplete = hasEquip && detailCount > 0;
+            const isComplete =
+              hasEquip && detailCount > 0 && cached.itemLevel != null;
 
             if (isComplete) {
               const result = {
@@ -751,7 +752,8 @@ export async function POST(req) {
                 const detailCount2 = Array.isArray(cached.equipDetails)
                   ? cached.equipDetails.length
                   : 0;
-                const isComplete2 = hasEquip2 && detailCount2 > 0;
+                const isComplete2 =
+                  hasEquip2 && detailCount2 > 0 && cached.itemLevel != null;
 
                 if (isComplete2) {
                   if (enriched.length >= limit) break;
