@@ -6,6 +6,7 @@ import {
   leaderboardTypes,
   classRankingIds,
   classWeapons,
+  serverNames,
   makeHeaders,
   makeDirectHeaders,
   proxyUrl,
@@ -374,9 +375,10 @@ export async function POST(req) {
           enriched.push(r);
           if (!isContinuation) {
             const cachedGs = r._itemLevel;
+            const cachedCp = r._combatPower;
             log.success(
               "scan",
-              `${r.characterName}  ·  GS ${cachedGs ?? "—"}  (${alreadyProcessed + enriched.length}/${originalLimit})`,
+              `${r.characterName}  ·  GS ${cachedGs ?? "—"}  ·  CP ${cachedCp != null ? cachedCp.toLocaleString() : "—"}  ·  ${r.region} · ${serverNames[r.serverId] ?? r.serverId}  (${alreadyProcessed + enriched.length}/${originalLimit})`,
             );
           }
         }
@@ -547,12 +549,16 @@ export async function POST(req) {
                 if (validLabels.includes("Staff")) validLabels.push("法杖"); // TW localized
 
                 let hasValidWeapon = false;
+                let foundWeaponName = null;
                 const eqList = result._equip.equipment?.equipmentList || [];
                 for (const item of eqList) {
                   if (!item) continue;
                   if (item.slotPos === 1 || item.slotPos === 2) {
                     const itemName = item.name || "";
                     const cat = item.categoryName || "";
+                    if (!foundWeaponName && (itemName || cat)) {
+                      foundWeaponName = itemName || cat || null;
+                    }
                     if (
                       validLabels.some(
                         (label) =>
@@ -566,7 +572,9 @@ export async function POST(req) {
                 }
 
                 if (!hasValidWeapon) {
-                  warnings.push("Mismatched Weapon");
+                  warnings.push(
+                    `Wrong weapon${foundWeaponName ? `: ${foundWeaponName}` : ""}`,
+                  );
                   result._equip = null;
                   result._equipDetails = [];
                   equipDetails = [];
@@ -625,7 +633,7 @@ export async function POST(req) {
             const playerNum = alreadyProcessed + ++doneCount;
             const warningStr =
               warnings.length > 0 ? ` [${warnings.join(", ")}]` : "";
-            const statsStr = `GS ${itemLevel ?? "—"}  ·  CP ${cp != null ? cp.toLocaleString() : "—"}`;
+            const statsStr = `GS ${itemLevel ?? "—"}  ·  CP ${cp != null ? cp.toLocaleString() : "—"}  ·  ${p.region} · ${serverNames[p.serverId] ?? p.serverId}`;
             if (warnings.length > 0) {
               log.warn(
                 "scan",
@@ -773,7 +781,7 @@ export async function POST(req) {
                   }
                   log.success(
                     "scan",
-                    `${p.characterName}  ·  GS ${cached.itemLevel ?? "—"}  (${enriched.length}/${limit})`,
+                    `${p.characterName}  ·  GS ${cached.itemLevel ?? "—"}  ·  CP ${cached.equipData?.profile?.combatPower != null ? cached.equipData.profile.combatPower.toLocaleString() : "—"}  ·  ${p.region} · ${serverNames[p.serverId] ?? p.serverId}  (${enriched.length}/${limit})`,
                   );
                 } else {
                   moreUncached.push(p);
@@ -945,7 +953,7 @@ export async function POST(req) {
                     itemLevel2,
                   );
                   mc++;
-                  const statsStr2 = `GS ${itemLevel2 ?? "—"}  ·  CP ${cp2 != null ? cp2.toLocaleString() : "—"}`;
+                  const statsStr2 = `GS ${itemLevel2 ?? "—"}  ·  CP ${cp2 != null ? cp2.toLocaleString() : "—"}  ·  ${p.region} · ${serverNames[p.serverId] ?? p.serverId}`;
                   log.success(
                     "scan",
                     `${p.characterName}  ·  ${statsStr2}  (${mc}/${limit})`,
