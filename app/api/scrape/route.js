@@ -123,7 +123,7 @@ export async function POST(req) {
     continuation.players.length > 0
   );
 
-  // --- Rate limiting: 1 analysis per minute per IP ---
+  // --- Rate limiting: 1 analysis per 30 seconds per IP ---
   // Skip for continuation requests (same analysis, not a new one).
   if (!isContinuation) {
     const ip = req.headers.get("cf-connecting-ip") || "unknown";
@@ -184,7 +184,16 @@ export async function POST(req) {
     });
   }
 
-  const limit = Math.max(1, Math.min(parseInt(body.limit) || 10, MAX_LIMIT));
+  const originalLimit = Math.max(
+    1,
+    Math.min(parseInt(body.limit) || 10, MAX_LIMIT),
+  );
+  // On continuation, reduce the effective limit by players already processed
+  const alreadyProcessed =
+    isContinuation && continuation.processedCount > 0
+      ? continuation.processedCount
+      : 0;
+  const limit = originalLimit - alreadyProcessed;
 
   const lbInfo = leaderboardTypes[lbType];
   const rankingType = classRankingIds[cls];
@@ -213,6 +222,7 @@ export async function POST(req) {
 
       const log = createWebLogger(sendEvent);
       const enriched = [];
+      const priorEnriched = []; // Players from prior continuation batches
       const allArcanaIds = [];
 
       try {
@@ -228,8 +238,34 @@ export async function POST(req) {
           allPlayers = continuation.players;
           log.info(
             "system",
-            `Resuming analysis (${continuation.processedCount || 0} already processed)...`,
+            `Resuming analysis (${alreadyProcessed} already processed)...`,
           );
+
+          // Reload previously-processed players from cache for final aggregation
+          const priorPlayers = continuation.processedPlayers || [];
+          for (const pp of priorPlayers) {
+            const cached = await getCachedPlayer(
+              db,
+              pp.characterId,
+              pp.serverId,
+            );
+            if (cached && cached.equipData) {
+              const result = {
+                characterId: pp.characterId,
+                serverId: pp.serverId,
+                _equip: cached.equipData,
+                _equipDetails: cached.equipDetails || [],
+                _itemLevel: cached.itemLevel ?? null,
+                _combatPower: cached.equipData?.profile?.combatPower ?? null,
+              };
+              priorEnriched.push(result);
+              for (const item of result._equip?.equipment?.equipmentList ||
+                []) {
+                if ((item.slotPosName || "").startsWith("Arcana"))
+                  allArcanaIds.push(item.id);
+              }
+            }
+          }
         } else {
           log.info("leaderboard", `Searching ${lbInfo.label} rankings...`);
 
@@ -339,7 +375,7 @@ export async function POST(req) {
             const cachedGs = r._itemLevel;
             log.success(
               "scan",
-              `${r.characterName}${cachedGs ? `  ·  GS ${cachedGs}` : ""}  (${enriched.length}/${limit})`,
+              `${r.characterName}${cachedGs ? `  ·  GS ${cachedGs}` : ""}  (${alreadyProcessed + enriched.length}/${originalLimit})`,
             );
           }
         }
@@ -348,8 +384,8 @@ export async function POST(req) {
           // All from cache — skip network phase entirely
           sendEvent({
             type: "progress",
-            current: enriched.length,
-            total: limit,
+            current: alreadyProcessed + enriched.length,
+            total: originalLimit,
             target: "",
           });
         }
@@ -392,8 +428,8 @@ export async function POST(req) {
 
             sendEvent({
               type: "progress",
-              current: reservedCount,
-              total: limit,
+              current: alreadyProcessed + reservedCount,
+              total: originalLimit,
               target: p.characterName,
             });
 
@@ -585,7 +621,7 @@ export async function POST(req) {
               itemLevel,
             );
 
-            const playerNum = ++doneCount;
+            const playerNum = alreadyProcessed + ++doneCount;
             const warningStr =
               warnings.length > 0 ? ` [${warnings.join(", ")}]` : "";
             const statsStr = [
@@ -597,12 +633,12 @@ export async function POST(req) {
             if (warnings.length > 0) {
               log.warn(
                 "scan",
-                `${p.characterName}${statsStr ? `  ·  ${statsStr.replace(" | ", "  ·  ")}` : ""}  (${playerNum}/${limit})${warningStr}`,
+                `${p.characterName}${statsStr ? `  ·  ${statsStr.replace(" | ", "  ·  ")}` : ""}  (${playerNum}/${originalLimit})${warningStr}`,
               );
             } else {
               log.success(
                 "scan",
-                `${p.characterName}${statsStr ? `  ·  ${statsStr.replace(" | ", "  ·  ")}` : ""}  (${playerNum}/${limit})`,
+                `${p.characterName}${statsStr ? `  ·  ${statsStr.replace(" | ", "  ·  ")}` : ""}  (${playerNum}/${originalLimit})`,
               );
             }
 
@@ -635,7 +671,7 @@ export async function POST(req) {
           if (remainingPlayers.length > 0) {
             log.info(
               "system",
-              `Subrequest budget reached — continuing in next batch (${enriched.length}/${limit} done)...`,
+              `Subrequest budget reached — continuing in next batch (${alreadyProcessed + enriched.length}/${originalLimit} done)...`,
             );
             sendEvent({
               type: "continue",
@@ -648,7 +684,11 @@ export async function POST(req) {
                 rank: p.rank,
                 faction: p.faction,
               })),
-              processedCount: enriched.length,
+              processedCount: priorEnriched.length + enriched.length,
+              processedPlayers: [...priorEnriched, ...enriched].map((p) => ({
+                characterId: p.characterId,
+                serverId: p.serverId,
+              })),
             });
             if (isActive) {
               try {
@@ -952,7 +992,7 @@ export async function POST(req) {
           if (remainingPlayers.length > 0) {
             log.info(
               "system",
-              `Subrequest budget reached — continuing in next batch (${enriched.length}/${limit} done)...`,
+              `Subrequest budget reached — continuing in next batch (${alreadyProcessed + enriched.length}/${originalLimit} done)...`,
             );
             sendEvent({
               type: "continue",
@@ -965,7 +1005,11 @@ export async function POST(req) {
                 rank: p.rank,
                 faction: p.faction,
               })),
-              processedCount: enriched.length,
+              processedCount: priorEnriched.length + enriched.length,
+              processedPlayers: [...priorEnriched, ...enriched].map((p) => ({
+                characterId: p.characterId,
+                serverId: p.serverId,
+              })),
             });
             if (isActive) {
               try {
@@ -977,10 +1021,14 @@ export async function POST(req) {
           }
         }
 
-        sendEvent({ type: "progress", current: limit, total: limit });
+        sendEvent({
+          type: "progress",
+          current: originalLimit,
+          total: originalLimit,
+        });
         log.success(
           "aggregate",
-          `Finished scanning ${enriched.length} players. Loading arcana data...`,
+          `Finished scanning ${alreadyProcessed + enriched.length} players. Loading arcana data...`,
         );
 
         // ═══════════════════════════════════════════════════════════════════
@@ -1025,7 +1073,10 @@ export async function POST(req) {
 
         log.info("aggregate", `Building analysis results...`);
 
-        const builds = enriched.map((p) =>
+        // Merge prior continuation batches with current batch for full aggregation
+        const allEnriched = [...priorEnriched, ...enriched];
+
+        const builds = allEnriched.map((p) =>
           extractBuild(
             p,
             itemDetailsMap,
@@ -1047,7 +1098,7 @@ export async function POST(req) {
           );
         }
 
-        sendEvent({ type: "done", stats, count: enriched.length });
+        sendEvent({ type: "done", stats, count: allEnriched.length });
         if (isActive) {
           try {
             controller.close();
@@ -1071,7 +1122,7 @@ export async function POST(req) {
           if (enriched.length < limit && remainingPlayers.length > 0) {
             log.info(
               "system",
-              `Subrequest budget reached — continuing in next batch (${enriched.length}/${limit} done)...`,
+              `Subrequest budget reached — continuing in next batch (${alreadyProcessed + enriched.length}/${originalLimit} done)...`,
             );
             sendEvent({
               type: "continue",
@@ -1084,7 +1135,11 @@ export async function POST(req) {
                 rank: p.rank,
                 faction: p.faction,
               })),
-              processedCount: enriched.length,
+              processedCount: priorEnriched.length + enriched.length,
+              processedPlayers: [...priorEnriched, ...enriched].map((p) => ({
+                characterId: p.characterId,
+                serverId: p.serverId,
+              })),
             });
           } else if (enriched.length > 0) {
             // All players processed or no remaining — aggregate partial results

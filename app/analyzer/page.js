@@ -179,6 +179,8 @@ export default function Home() {
     try {
       let continuationData = null;
       let isDone = false;
+      let cumulativeProcessed = 0;
+      let allProcessedPlayers = [];
 
       while (!isDone) {
         const requestBody = continuationData
@@ -257,9 +259,14 @@ export default function Home() {
                     });
                     isDone = true;
                   } else if (event.type === "continue") {
+                    cumulativeProcessed += event.processedCount;
+                    allProcessedPlayers = allProcessedPlayers.concat(
+                      event.processedPlayers || [],
+                    );
                     continuationData = {
                       players: event.players,
-                      processedCount: event.processedCount,
+                      processedCount: cumulativeProcessed,
+                      processedPlayers: allProcessedPlayers,
                     };
                   } else if (event.type === "error") {
                     throw new Error(event.message);
