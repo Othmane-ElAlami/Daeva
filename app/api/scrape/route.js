@@ -306,10 +306,6 @@ export async function POST(req) {
               }
             } else {
               // Incomplete cache — schedule for re-fetch
-              log.warn(
-                p.characterName,
-                `Cached data incomplete, re-fetching...`,
-              );
               uncachedPlayers.push(p);
             }
           } else {
@@ -321,14 +317,10 @@ export async function POST(req) {
         for (const r of cachedResults) {
           if (enriched.length >= limit) break;
           enriched.push(r);
-          const equipCount = r._equip?.equipment?.equipmentList?.length || 0;
-          const detailCount = Array.isArray(r._equipDetails)
-            ? r._equipDetails.length
-            : 0;
           const cachedGs = r._itemLevel;
           log.success(
-            r.characterName,
-            `Loaded from cache${cachedGs ? ` (GS: ${cachedGs})` : ""} (${enriched.length}/${limit})`,
+            "scan",
+            `${r.characterName}${cachedGs ? `  ·  GS ${cachedGs}` : ""}  (${enriched.length}/${limit})`,
           );
         }
 
@@ -400,7 +392,6 @@ export async function POST(req) {
                         "GET",
                         null,
                         budget,
-                        log,
                       ),
                     maxRetries,
                     retryBaseMs,
@@ -411,10 +402,6 @@ export async function POST(req) {
                     throw directErr;
                   // Fallback: Try proxy only if we have budget
                   if (budget.canAfford()) {
-                    log.warn(
-                      p.characterName,
-                      `Retrying with alternate method...`,
-                    );
                     equipData = await fetchWithRetry(
                       () =>
                         fetchJSON(
@@ -423,7 +410,6 @@ export async function POST(req) {
                           "GET",
                           null,
                           budget,
-                          log,
                         ),
                       maxRetries,
                       retryBaseMs,
@@ -469,7 +455,6 @@ export async function POST(req) {
                           region: p.region || "KR",
                         },
                         budget,
-                        log,
                       ),
                     maxRetries,
                     retryBaseMs,
@@ -542,12 +527,11 @@ export async function POST(req) {
                 "GET",
                 null,
                 budget,
-                log,
               );
               itemLevel = extractItemLevelFromInfo(infoData);
               cp = extractCombatPowerFromInfo(infoData);
             } catch {
-              const stats = await fetchItemLevelAndCP(p, headers, budget, log);
+              const stats = await fetchItemLevelAndCP(p, headers, budget);
               if (stats) {
                 itemLevel = stats.itemLevel;
                 cp = stats.combatPower;
@@ -584,13 +568,13 @@ export async function POST(req) {
               .join(" | ");
             if (warnings.length > 0) {
               log.warn(
-                p.characterName,
-                `Scanned${statsStr ? ` (${statsStr})` : ""} (${playerNum}/${limit})${warningStr}`,
+                "scan",
+                `${p.characterName}${statsStr ? `  ·  ${statsStr.replace(" | ", "  ·  ")}` : ""}  (${playerNum}/${limit})${warningStr}`,
               );
             } else {
               log.success(
-                p.characterName,
-                `Scanned${statsStr ? ` (${statsStr})` : ""} (${playerNum}/${limit})`,
+                "scan",
+                `${p.characterName}${statsStr ? `  ·  ${statsStr.replace(" | ", "  ·  ")}` : ""}  (${playerNum}/${limit})`,
               );
             }
 
@@ -689,14 +673,10 @@ export async function POST(req) {
                       allArcanaIds.push(item.id);
                   }
                   log.success(
-                    p.characterName,
-                    `Loaded from cache${cached.itemLevel ? ` (GS: ${cached.itemLevel})` : ""} (${enriched.length}/${limit})`,
+                    "scan",
+                    `${p.characterName}${cached.itemLevel ? `  ·  GS ${cached.itemLevel}` : ""}  (${enriched.length}/${limit})`,
                   );
                 } else {
-                  log.warn(
-                    p.characterName,
-                    `Cached data incomplete, re-fetching...`,
-                  );
                   moreUncached.push(p);
                 }
               } else {
@@ -727,7 +707,6 @@ export async function POST(req) {
                             "GET",
                             null,
                             budget,
-                            log,
                           );
                         } catch {
                           equipData = await fetchJSON(
@@ -738,7 +717,6 @@ export async function POST(req) {
                             "GET",
                             null,
                             budget,
-                            log,
                           );
                         }
                         if (!equipData?.equipment?.equipmentList?.length)
@@ -777,7 +755,6 @@ export async function POST(req) {
                             region: p.region,
                           },
                           budget,
-                          log,
                         );
                         const arr = Array.isArray(data?.items || data)
                           ? data?.items || data
@@ -840,17 +817,11 @@ export async function POST(req) {
                       "GET",
                       null,
                       budget,
-                      log,
                     );
                     itemLevel2 = extractItemLevelFromInfo(infoD);
                     cp2 = extractCombatPowerFromInfo(infoD);
                   } catch {
-                    const stats = await fetchItemLevelAndCP(
-                      p,
-                      headers,
-                      budget,
-                      log,
-                    );
+                    const stats = await fetchItemLevelAndCP(p, headers, budget);
                     if (stats) {
                       itemLevel2 = stats.itemLevel;
                       cp2 = stats.combatPower;
@@ -882,8 +853,8 @@ export async function POST(req) {
                     .filter(Boolean)
                     .join(" | ");
                   log.success(
-                    p.characterName,
-                    `Scanned${statsStr2 ? ` (${statsStr2})` : ""} (${mc}/${limit})`,
+                    "scan",
+                    `${p.characterName}${statsStr2 ? `  ·  ${statsStr2.replace(" | ", "  ·  ")}` : ""}  (${mc}/${limit})`,
                   );
                   return result;
                 });
