@@ -893,7 +893,7 @@ describe("extractBuild", () => {
     const equipDetails = [
       {
         categoryName: "Top",
-        slotPos: 1,
+        slotPos: 3,
         subStats: [
           { name: "Attack", value: "+100" },
           { name: "HP", value: "+500" },

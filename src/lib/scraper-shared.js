@@ -457,9 +457,13 @@ export function extractBuild(
   // Equipment substats (from batch-equipment)
   for (const eqItem of equipDetailsList) {
     if (!eqItem) continue;
-    // fallback to our mapped category if batch-equipment categoryName is missing or API failed
+    // Always use our mapped category for weapon slots so new weapon types from the API
+    // are normalised to "Main Hand" / "Guard" regardless of what categoryName says.
+    const mapped = slotPosToCategory[eqItem.slotPos];
     const cat =
-      eqItem.categoryName || slotPosToCategory[eqItem.slotPos] || "Unknown";
+      mapped === "Main Hand" || mapped === "Guard"
+        ? mapped
+        : eqItem.categoryName || mapped || "Unknown";
     const subs = (eqItem.subStats || []).map((s) => ({
       name: s.name,
       value: s.value,
