@@ -5,7 +5,6 @@ import {
   baseUrl,
   leaderboardTypes,
   classRankingIds,
-  classWeapons,
   serverNames,
   makeHeaders,
   makeDirectHeaders,
@@ -51,7 +50,7 @@ function sanitizeErrorMessage(msg) {
 }
 
 const MAX_LIMIT = 100;
-const RATE_LIMIT_WINDOW_MS = 30_000; // 30 seconds
+const RATE_LIMIT_WINDOW_MS = 1000; // 1 second
 
 // Extract top skills by usage count for the landing page meta snapshot widget.
 function topSkills(skillMap, total, limit = 6) {
@@ -118,13 +117,29 @@ export async function POST(req) {
   }
 
   const { lbType, cls, region, serverId, continuation } = body;
+  const race = body.race || "all";
+  const runeFilter = body.runeFilter || "all";
+  const runeFilterActive = runeFilter !== "all";
+
+  // Rune filter helper — checks equipment after fetch
+  function checkRuneFilter(player) {
+    if (!runeFilterActive) return true;
+    const eqList = player._equip?.equipment?.equipmentList || [];
+    const rune = eqList.find((e) => (e.slotPosName || "").startsWith("Rune"));
+    if (!rune) return false;
+    const name = (rune.name || "").toLowerCase();
+    if (runeFilter === "pve") return name.includes("clash");
+    if (runeFilter === "pvp") return name.includes("devotion");
+    return true;
+  }
+
   const isContinuation = !!(
     continuation &&
     Array.isArray(continuation.players) &&
     continuation.players.length > 0
   );
 
-  // --- Rate limiting: 1 analysis per 30 seconds per IP ---
+  // --- Rate limiting analysis per IP ---
   // Skip for continuation requests (same analysis, not a new one).
   if (!isContinuation) {
     const ip = req.headers.get("cf-connecting-ip") || "unknown";
@@ -328,13 +343,29 @@ export async function POST(req) {
             (p) => String(p.serverId) === String(serverId),
           );
         }
+        if (race && race !== "all") {
+          candidates = candidates.filter((p) => {
+            const sid = Number(p.serverId);
+            return race === "elyos"
+              ? sid >= 1001 && sid <= 1021
+              : sid >= 2001 && sid <= 2021;
+          });
+        }
 
         // Batch cache lookup: separate cached from uncached up-front
+        // When rune filter is active, check ALL candidates for cache (cheap D1 reads)
+        // so previously-fetched matching players are always found regardless of rank position.
+        // Only cap the uncached list (expensive network fetches).
         const cachedResults = [];
         const uncachedPlayers = [];
-
+        const uncachedCap = runeFilterActive ? limit * 4 : limit * 2;
         for (const p of candidates) {
-          if (cachedResults.length + uncachedPlayers.length >= limit * 2) break;
+          // Normal mode: stop early once we have enough candidates
+          if (
+            !runeFilterActive &&
+            cachedResults.length + uncachedPlayers.length >= limit * 2
+          )
+            break;
           const cached = await getCachedPlayer(db, p.characterId, p.serverId);
           if (cached) {
             const hasEquip = !!cached.equipData;
@@ -361,17 +392,18 @@ export async function POST(req) {
                   allArcanaIds.push(item.id);
               }
             } else {
-              // Incomplete cache — schedule for re-fetch
-              uncachedPlayers.push(p);
+              // Incomplete cache — schedule for re-fetch (capped)
+              if (uncachedPlayers.length < uncachedCap) uncachedPlayers.push(p);
             }
           } else {
-            uncachedPlayers.push(p);
+            if (uncachedPlayers.length < uncachedCap) uncachedPlayers.push(p);
           }
         }
 
         // Report valid cached hits
         for (const r of cachedResults) {
           if (enriched.length >= limit) break;
+          if (!checkRuneFilter(r)) continue;
           enriched.push(r);
           if (!isContinuation) {
             const cachedGs = r._itemLevel;
@@ -395,24 +427,39 @@ export async function POST(req) {
 
         const stillNeeded = limit - enriched.length;
         if (!isContinuation) {
-          log.info(
-            "cache",
-            `${cachedResults.length} players loaded from cache, ${Math.min(uncachedPlayers.length, stillNeeded)} remaining.`,
-          );
+          if (runeFilterActive) {
+            log.info(
+              "cache",
+              `${enriched.length} cached players match filter (${cachedResults.length} checked), ${stillNeeded} more needed.`,
+            );
+          } else {
+            log.info(
+              "cache",
+              `${cachedResults.length} players loaded from cache, ${stillNeeded} remaining.`,
+            );
+          }
         } else {
-          log.info(
-            "cache",
-            `${cachedResults.length} cached,  ${Math.min(uncachedPlayers.length, stillNeeded)} remaining to fetch.`,
-          );
+          if (runeFilterActive) {
+            log.info(
+              "cache",
+              `${enriched.length} cached players match filter (${cachedResults.length} checked), ${stillNeeded} more needed.`,
+            );
+          } else {
+            log.info(
+              "cache",
+              `${cachedResults.length} cached,  ${stillNeeded} remaining to fetch.`,
+            );
+          }
         }
 
         // ═══════════════════════════════════════════════════════════════════
         // PHASE 3: Fetch uncached players concurrently in batches
         // ═══════════════════════════════════════════════════════════════════
         const remaining = limit - enriched.length;
+        const fetchPadding = runeFilterActive ? 4 : 0.3;
         const toFetch = uncachedPlayers.slice(
           0,
-          remaining + Math.ceil(remaining * 0.3),
+          remaining + Math.ceil(remaining * fetchPadding),
         );
 
         if (toFetch.length > 0 && remaining > 0) {
@@ -420,10 +467,15 @@ export async function POST(req) {
           // doneCount: incremented at task completion for sequential display numbers
           let reservedCount = enriched.length;
           let doneCount = enriched.length;
+          let matchedCount = enriched.length;
 
           // Build task list: each task fetches equip + details for one player
           const playerTasks = toFetch.map((p) => async () => {
-            if (!isActive || reservedCount >= limit || !budget.canAfford(3))
+            if (!isActive || !budget.canAfford(3)) return null;
+            // Gate: use matchedCount when rune filter active (allows over-fetch to find matches)
+            if (
+              runeFilterActive ? matchedCount >= limit : reservedCount >= limit
+            )
               return null;
 
             // Reserve the slot synchronously (before any await)
@@ -431,7 +483,7 @@ export async function POST(req) {
 
             sendEvent({
               type: "progress",
-              current: alreadyProcessed + reservedCount,
+              current: alreadyProcessed + Math.min(reservedCount, limit),
               total: originalLimit,
               target: p.characterName,
             });
@@ -536,50 +588,6 @@ export async function POST(req) {
               }
 
               result._equipDetails = equipDetails;
-
-              // ... 3. Class validation — use item names from direct API,
-              // NOT categoryName from batch-equipment (which returns null items).
-              const clsLower = (cls || "").toLowerCase();
-              const primaryWeapon = classWeapons[clsLower];
-
-              if (primaryWeapon && result._equip) {
-                const validLabels = Array.isArray(primaryWeapon)
-                  ? [...primaryWeapon]
-                  : [primaryWeapon];
-                if (validLabels.includes("Staff")) validLabels.push("法杖"); // TW localized
-
-                let hasValidWeapon = false;
-                let foundWeaponName = null;
-                const eqList = result._equip.equipment?.equipmentList || [];
-                for (const item of eqList) {
-                  if (!item) continue;
-                  if (item.slotPos === 1 || item.slotPos === 2) {
-                    const itemName = item.name || "";
-                    const cat = item.categoryName || "";
-                    if (!foundWeaponName && (itemName || cat)) {
-                      foundWeaponName = itemName || cat || null;
-                    }
-                    if (
-                      validLabels.some(
-                        (label) =>
-                          itemName.includes(label) || cat.startsWith(label),
-                      )
-                    ) {
-                      hasValidWeapon = true;
-                      break;
-                    }
-                  }
-                }
-
-                if (!hasValidWeapon) {
-                  warnings.push(
-                    `Wrong weapon${foundWeaponName ? `: ${foundWeaponName}` : ""}`,
-                  );
-                  result._equip = null;
-                  result._equipDetails = [];
-                  equipDetails = [];
-                }
-              }
             } catch (err) {
               if (err instanceof subrequestBudgetExhausted) throw err;
               warnings.push(`Error: ${err.message}`);
@@ -630,6 +638,20 @@ export async function POST(req) {
               itemLevel,
             );
 
+            // 6. Check rune filter — skip non-matching players
+            if (!checkRuneFilter(result)) {
+              log.info(
+                "scan",
+                `${p.characterName}  ·  skipped (rune mismatch)`,
+              );
+              return { ...result, _runeSkipped: true };
+            }
+            // Atomic-ish match claim — if we're already at limit, treat as excess
+            if (matchedCount >= limit) {
+              return { ...result, _runeSkipped: true };
+            }
+            matchedCount++;
+
             const playerNum = alreadyProcessed + ++doneCount;
             const warningStr =
               warnings.length > 0 ? ` [${warnings.join(", ")}]` : "";
@@ -652,9 +674,9 @@ export async function POST(req) {
           // Run all player tasks with concurrency pool
           const results = await runPool(playerTasks, concurrency, budget);
 
-          // Collect successful results
+          // Collect successful results (skip rune-filtered players)
           for (const r of results) {
-            if (!r || enriched.length >= limit) continue;
+            if (!r || r._runeSkipped || enriched.length >= limit) continue;
             enriched.push(r);
             for (const item of r._equip?.equipment?.equipmentList || []) {
               if ((item.slotPosName || "").startsWith("Arcana"))
@@ -745,6 +767,13 @@ export async function POST(req) {
               moreCandidates = moreCandidates.filter(
                 (p) => String(p.serverId) === String(serverId),
               );
+            if (race && race !== "all")
+              moreCandidates = moreCandidates.filter((p) => {
+                const sid = Number(p.serverId);
+                return race === "elyos"
+                  ? sid >= 1001 && sid <= 1021
+                  : sid >= 2001 && sid <= 2021;
+              });
 
             const moreUncached = [];
             for (const p of moreCandidates) {
@@ -773,6 +802,7 @@ export async function POST(req) {
                     _combatPower:
                       cached.equipData?.profile?.combatPower ?? null,
                   };
+                  if (!checkRuneFilter(result)) continue;
                   enriched.push(result);
                   for (const item of result._equip?.equipment?.equipmentList ||
                     []) {
@@ -793,11 +823,16 @@ export async function POST(req) {
 
             if (enriched.length < limit && moreUncached.length > 0) {
               let mc = enriched.length;
+              let reservedMc = enriched.length;
+              const moreNeeded = limit - enriched.length;
+              const morePadding = runeFilterActive ? moreNeeded * 4 : 5;
               const moreTasks = moreUncached
-                .slice(0, limit - enriched.length + 5)
+                .slice(0, moreNeeded + morePadding)
                 .map((p) => async () => {
-                  if (!isActive || mc >= limit || !budget.canAfford(3))
+                  if (!isActive || !budget.canAfford(3)) return null;
+                  if (runeFilterActive ? mc >= limit : reservedMc >= limit)
                     return null;
+                  reservedMc++;
                   let result;
                   try {
                     result = await fetchWithRetry(
@@ -879,37 +914,6 @@ export async function POST(req) {
                   }
 
                   result._equipDetails = equipDetails;
-                  // Validate weapon from direct API item names
-                  const primaryWeapon = classWeapons[cls];
-                  if (primaryWeapon && result._equip) {
-                    const validLabels = Array.isArray(primaryWeapon)
-                      ? [...primaryWeapon]
-                      : [primaryWeapon];
-                    if (validLabels.includes("Staff")) validLabels.push("法杖");
-                    let valid = false;
-                    const eqList2 =
-                      result._equip.equipment?.equipmentList || [];
-                    for (const item of eqList2) {
-                      if (!item) continue;
-                      if (item.slotPos === 1 || item.slotPos === 2) {
-                        const itemName = item.name || "";
-                        const cat = item.categoryName || "";
-                        if (
-                          validLabels.some(
-                            (label) =>
-                              itemName.includes(label) || cat.startsWith(label),
-                          )
-                        ) {
-                          valid = true;
-                          break;
-                        }
-                      }
-                    }
-                    if (!valid) {
-                      result._equip = null;
-                      result._equipDetails = [];
-                    }
-                  }
                   // Fetch the game's own ItemLevel and CP stat — direct first
                   let itemLevel2 = null;
                   let cp2 = null;
@@ -952,6 +956,16 @@ export async function POST(req) {
                     equipDetails,
                     itemLevel2,
                   );
+                  if (!checkRuneFilter(result)) {
+                    log.info(
+                      "scan",
+                      `${p.characterName}  ·  skipped (rune mismatch)`,
+                    );
+                    return { ...result, _runeSkipped: true };
+                  }
+                  if (mc >= limit) {
+                    return { ...result, _runeSkipped: true };
+                  }
                   mc++;
                   const statsStr2 = `GS ${itemLevel2 ?? "—"}  ·  CP ${cp2 != null ? cp2.toLocaleString() : "—"}  ·  ${p.region} · ${serverNames[p.serverId] ?? p.serverId}`;
                   log.success(
@@ -962,7 +976,7 @@ export async function POST(req) {
                 });
               const moreResults = await runPool(moreTasks, concurrency, budget);
               for (const r of moreResults) {
-                if (!r || enriched.length >= limit) continue;
+                if (!r || r._runeSkipped || enriched.length >= limit) continue;
                 enriched.push(r);
                 for (const item of r._equip?.equipment?.equipmentList || []) {
                   if ((item.slotPosName || "").startsWith("Arcana"))
@@ -1092,7 +1106,7 @@ export async function POST(req) {
           );
         }
 
-        sendEvent({ type: "done", stats, count: allEnriched.length });
+        sendEvent({ type: "done", stats, count: allEnriched.length, builds });
         if (isActive) {
           try {
             controller.close();
@@ -1155,7 +1169,7 @@ export async function POST(req) {
             try {
               await saveMetaSnapshot(db, cls, lbType, stats);
             } catch (_) {}
-            sendEvent({ type: "done", stats, count: enriched.length });
+            sendEvent({ type: "done", stats, count: enriched.length, builds });
           } else {
             sendEvent({
               type: "error",
