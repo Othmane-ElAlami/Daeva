@@ -38,9 +38,7 @@ export default function AdminPage() {
     }
     setLoadingTable(tableName);
     try {
-      const res = await fetch(
-        `/api/admin/table-data?table=${encodeURIComponent(tableName)}`,
-      );
+      const res = await fetch(`/api/admin/table-data?table=${encodeURIComponent(tableName)}`);
       if (!res.ok) throw new Error("Failed to fetch data");
       const data = await res.json();
       setTableData((prev) => ({ ...prev, [tableName]: data.rows }));
@@ -87,11 +85,7 @@ export default function AdminPage() {
           <p style={styles.subtitle}>Database Inspector & Management</p>
         </div>
         <div style={styles.headerActions}>
-          <button
-            onClick={fetchTables}
-            style={styles.refreshBtn}
-            disabled={loading}
-          >
+          <button onClick={fetchTables} style={styles.refreshBtn} disabled={loading}>
             {loading ? "Loading…" : "↻ Refresh"}
           </button>
           <button
@@ -106,10 +100,7 @@ export default function AdminPage() {
                 : "Reset Database"}
           </button>
           {confirmReset && (
-            <button
-              onClick={() => setConfirmReset(false)}
-              style={styles.cancelBtn}
-            >
+            <button onClick={() => setConfirmReset(false)} style={styles.cancelBtn}>
               Cancel
             </button>
           )}
@@ -141,8 +132,8 @@ export default function AdminPage() {
                 <div style={styles.tableInfo}>
                   <span style={styles.tableName}>{table.name}</span>
                   <span style={styles.tableMeta}>
-                    {table.rowCount} row{table.rowCount !== 1 ? "s" : ""} ·{" "}
-                    {table.columns.length} column
+                    {table.rowCount} row{table.rowCount !== 1 ? "s" : ""} · {table.columns.length}{" "}
+                    column
                     {table.columns.length !== 1 ? "s" : ""}
                   </span>
                 </div>
@@ -161,11 +152,7 @@ export default function AdminPage() {
                   ))}
                 </div>
                 <span style={styles.chevron}>
-                  {loadingTable === table.name
-                    ? "⏳"
-                    : expandedTable === table.name
-                      ? "▲"
-                      : "▼"}
+                  {loadingTable === table.name ? "⏳" : expandedTable === table.name ? "▲" : "▼"}
                 </span>
               </button>
 
@@ -178,21 +165,16 @@ export default function AdminPage() {
                       <table style={styles.dataTable}>
                         <thead>
                           <tr>
-                            {Object.keys(tableData[table.name][0]).map(
-                              (col) => (
-                                <th key={col} style={styles.th}>
-                                  {col}
-                                </th>
-                              ),
-                            )}
+                            {Object.keys(tableData[table.name][0]).map((col) => (
+                              <th key={col} style={styles.th}>
+                                {col}
+                              </th>
+                            ))}
                           </tr>
                         </thead>
                         <tbody>
                           {tableData[table.name].map((row, i) => (
-                            <tr
-                              key={i}
-                              style={i % 2 === 0 ? styles.trEven : styles.trOdd}
-                            >
+                            <tr key={i} style={i % 2 === 0 ? styles.trEven : styles.trOdd}>
                               {Object.values(row).map((val, j) => (
                                 <td key={j} style={styles.td}>
                                   {truncateValue(val)}
@@ -203,9 +185,7 @@ export default function AdminPage() {
                         </tbody>
                       </table>
                       {tableData[table.name].length >= 500 && (
-                        <div style={styles.limitNote}>
-                          Showing first 500 rows
-                        </div>
+                        <div style={styles.limitNote}>Showing first 500 rows</div>
                       )}
                     </div>
                   )}

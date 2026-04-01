@@ -27,11 +27,7 @@ export const metadata = {
 
 export default function RootLayout({ children }) {
   return (
-    <html
-      lang="en"
-      className={`${inter.className} ${cinzel.variable}`}
-      suppressHydrationWarning
-    >
+    <html lang="en" className={`${inter.className} ${cinzel.variable}`} suppressHydrationWarning>
       <head>
         <meta name="darkreader-lock" />
         <meta name="color-scheme" content="dark" />

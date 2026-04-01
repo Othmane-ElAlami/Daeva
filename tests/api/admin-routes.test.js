@@ -133,9 +133,7 @@ describe("Admin API Routes", () => {
       getRequestContext.mockReturnValue({ env: { DB: mockDb } });
 
       const { GET } = await import("../../app/api/admin/table-data/route.js");
-      const req = new Request(
-        "http://localhost/api/admin/table-data?table=nonexistent",
-      );
+      const req = new Request("http://localhost/api/admin/table-data?table=nonexistent");
       const res = await GET(req);
       expect(res.status).toBe(404);
     });
@@ -170,9 +168,7 @@ describe("Admin API Routes", () => {
       getRequestContext.mockReturnValue({ env: { DB: mockDb } });
 
       const { GET } = await import("../../app/api/admin/table-data/route.js");
-      const req = new Request(
-        "http://localhost/api/admin/table-data?table=player_cache",
-      );
+      const req = new Request("http://localhost/api/admin/table-data?table=player_cache");
       const res = await GET(req);
       expect(res.status).toBe(200);
       const body = await res.json();
@@ -193,7 +189,7 @@ describe("Admin API Routes", () => {
 
       const { GET } = await import("../../app/api/admin/table-data/route.js");
       const req = new Request(
-        `http://localhost/api/admin/table-data?table=${encodeURIComponent("'; DROP TABLE --")}`,
+        `http://localhost/api/admin/table-data?table=${encodeURIComponent("'; DROP TABLE --")}`
       );
       const res = await GET(req);
       // Should return 404 since malicious table name won't match sqlite_master

@@ -29,17 +29,15 @@ export async function GET(request) {
   }
 
   try {
-    const { results: rows } = await db
-      .prepare(`SELECT * FROM "${table}" LIMIT 500`)
-      .all();
+    const { results: rows } = await db.prepare(`SELECT * FROM "${table}" LIMIT 500`).all();
 
     return new Response(JSON.stringify({ rows: rows || [] }), {
       headers: { "Content-Type": "application/json" },
     });
   } catch (err) {
-    return new Response(
-      JSON.stringify({ error: "Failed to fetch table data" }),
-      { status: 500, headers: { "Content-Type": "application/json" } },
-    );
+    return new Response(JSON.stringify({ error: "Failed to fetch table data" }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 }

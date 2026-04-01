@@ -4,11 +4,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import {
-  LEVELS,
-  createCliLogger,
-  createWebLogger,
-} from "../../src/lib/logger.js";
+import { LEVELS, createCliLogger, createWebLogger } from "../../src/lib/logger.js";
 
 describe("LEVELS", () => {
   it("has all four levels", () => {

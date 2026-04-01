@@ -153,7 +153,7 @@ describe("proxyUrl", () => {
   it("wraps an API path through the proxy endpoint", () => {
     const result = proxyUrl("https://aion2.plaync.com/api/character/info");
     expect(result).toBe(
-      `${baseUrl}/api/proxy?url=${encodeURIComponent("https://aion2.plaync.com/api/character/info")}`,
+      `${baseUrl}/api/proxy?url=${encodeURIComponent("https://aion2.plaync.com/api/character/info")}`
     );
   });
 
@@ -274,7 +274,7 @@ describe("fetchJSON", () => {
     const result = await fetchJSON(
       "https://example.com/api",
       { Accept: "application/json" },
-      "GET",
+      "GET"
     );
     expect(result).toEqual(mockData);
     expect(fetch).toHaveBeenCalledOnce();
@@ -287,12 +287,7 @@ describe("fetchJSON", () => {
     });
 
     const body = { itemIds: [1, 2, 3] };
-    await fetchJSON(
-      "https://example.com/api",
-      { Accept: "application/json" },
-      "POST",
-      body,
-    );
+    await fetchJSON("https://example.com/api", { Accept: "application/json" }, "POST", body);
 
     const [, callOpts] = fetch.mock.calls[0];
     expect(callOpts.method).toBe("POST");
@@ -302,9 +297,7 @@ describe("fetchJSON", () => {
 
   it("throws on non-ok response", async () => {
     fetch.mockResolvedValue({ ok: false, status: 404 });
-    await expect(fetchJSON("https://example.com/api", {})).rejects.toThrow(
-      "HTTP 404",
-    );
+    await expect(fetchJSON("https://example.com/api", {})).rejects.toThrow("HTTP 404");
   });
 
   it("consumes budget when budget is provided", async () => {
@@ -323,7 +316,7 @@ describe("fetchJSON", () => {
     const logger = { error: vi.fn(), success: vi.fn() };
 
     await expect(
-      fetchJSON("https://example.com/api", {}, "GET", null, null, logger),
+      fetchJSON("https://example.com/api", {}, "GET", null, null, logger)
     ).rejects.toThrow("HTTP 500");
 
     expect(logger.error).toHaveBeenCalled();
@@ -345,9 +338,9 @@ describe("fetchJSON", () => {
     const budget = createBudget();
     fetch.mockRejectedValue(new Error("Too many subrequests"));
 
-    await expect(
-      fetchJSON("https://example.com/api", {}, "GET", null, budget),
-    ).rejects.toThrow(subrequestBudgetExhausted);
+    await expect(fetchJSON("https://example.com/api", {}, "GET", null, budget)).rejects.toThrow(
+      subrequestBudgetExhausted
+    );
   });
 });
 
@@ -364,10 +357,7 @@ describe("fetchWithRetry", () => {
   });
 
   it("retries on failure and succeeds on second attempt", async () => {
-    const fn = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("fail"))
-      .mockResolvedValueOnce({ ok: true });
+    const fn = vi.fn().mockRejectedValueOnce(new Error("fail")).mockResolvedValueOnce({ ok: true });
 
     const result = await fetchWithRetry(fn, 3, 10);
     expect(result).toEqual({ ok: true });
@@ -377,18 +367,14 @@ describe("fetchWithRetry", () => {
   it("throws after all retries exhausted", async () => {
     const fn = vi.fn().mockRejectedValue(new Error("persistent failure"));
 
-    await expect(fetchWithRetry(fn, 2, 10)).rejects.toThrow(
-      "persistent failure",
-    );
+    await expect(fetchWithRetry(fn, 2, 10)).rejects.toThrow("persistent failure");
     expect(fn).toHaveBeenCalledTimes(2);
   });
 
   it("never retries subrequestBudgetExhausted", async () => {
     const fn = vi.fn().mockRejectedValue(new subrequestBudgetExhausted(500));
 
-    await expect(fetchWithRetry(fn, 5, 10)).rejects.toThrow(
-      subrequestBudgetExhausted,
-    );
+    await expect(fetchWithRetry(fn, 5, 10)).rejects.toThrow(subrequestBudgetExhausted);
     expect(fn).toHaveBeenCalledOnce();
   });
 
@@ -397,9 +383,7 @@ describe("fetchWithRetry", () => {
     budget.exhaust();
     const fn = vi.fn();
 
-    await expect(fetchWithRetry(fn, 3, 10, budget)).rejects.toThrow(
-      subrequestBudgetExhausted,
-    );
+    await expect(fetchWithRetry(fn, 3, 10, budget)).rejects.toThrow(subrequestBudgetExhausted);
     expect(fn).not.toHaveBeenCalled();
   });
 });
@@ -541,13 +525,13 @@ describe("extractItemLevelFromInfo", () => {
     expect(
       extractItemLevelFromInfo({
         stat: { statList: [{ type: "GearScore", value: 300 }] },
-      }),
+      })
     ).toBe(300);
 
     expect(
       extractItemLevelFromInfo({
         stat: { statList: [{ type: "ilvl", value: 350 }] },
-      }),
+      })
     ).toBe(350);
   });
 
@@ -563,12 +547,12 @@ describe("extractItemLevelFromInfo", () => {
     expect(
       extractItemLevelFromInfo({
         stat: { statList: [{ type: "ItemLevel", value: 0 }] },
-      }),
+      })
     ).toBeNull();
     expect(
       extractItemLevelFromInfo({
         stat: { statList: [{ type: "ItemLevel", value: -5 }] },
-      }),
+      })
     ).toBeNull();
   });
 
@@ -576,7 +560,7 @@ describe("extractItemLevelFromInfo", () => {
     expect(
       extractItemLevelFromInfo({
         stat: { statList: [{ type: "ItemLevel", value: "abc" }] },
-      }),
+      })
     ).toBeNull();
   });
 
@@ -584,21 +568,19 @@ describe("extractItemLevelFromInfo", () => {
     expect(
       extractItemLevelFromInfo({
         stat: { statList: [{ type: "ITEMLEVEL", value: 450 }] },
-      }),
+      })
     ).toBe(450);
     expect(
       extractItemLevelFromInfo({
         stat: { statList: [{ type: "itemLevel", value: 450 }] },
-      }),
+      })
     ).toBe(450);
   });
 });
 
 describe("extractCombatPowerFromInfo", () => {
   it("extracts combatPower from profile", () => {
-    expect(
-      extractCombatPowerFromInfo({ profile: { combatPower: 12345 } }),
-    ).toBe(12345);
+    expect(extractCombatPowerFromInfo({ profile: { combatPower: 12345 } })).toBe(12345);
   });
 
   it("returns null when profile is missing", () => {
@@ -701,15 +683,9 @@ describe("extractBuild", () => {
   });
 
   it("determines race from serverId range", () => {
-    expect(extractBuild(makePlayer({ serverId: 1001 }), {}, []).race).toBe(
-      "Elyos",
-    );
-    expect(extractBuild(makePlayer({ serverId: 2001 }), {}, []).race).toBe(
-      "Asmo",
-    );
-    expect(extractBuild(makePlayer({ serverId: 500 }), {}, []).race).toBe(
-      "Unknown",
-    );
+    expect(extractBuild(makePlayer({ serverId: 1001 }), {}, []).race).toBe("Elyos");
+    expect(extractBuild(makePlayer({ serverId: 2001 }), {}, []).race).toBe("Asmo");
+    expect(extractBuild(makePlayer({ serverId: 500 }), {}, []).race).toBe("Unknown");
   });
 
   it("extracts active skills (equipped or leveled)", () => {
@@ -741,16 +717,12 @@ describe("extractBuild", () => {
       equip: false,
     });
     const build = extractBuild(player, {}, []);
-    expect(
-      build.activeSkills.find((s) => s.name === "Unused Skill"),
-    ).toBeUndefined();
+    expect(build.activeSkills.find((s) => s.name === "Unused Skill")).toBeUndefined();
   });
 
   it("maps equipment slots correctly", () => {
     const build = extractBuild(makePlayer(), {}, []);
-    const mainHand = build.equipItems.find(
-      (e) => e.categoryName === "Main Hand",
-    );
+    const mainHand = build.equipItems.find((e) => e.categoryName === "Main Hand");
     const guard = build.equipItems.find((e) => e.categoryName === "Guard");
     expect(mainHand).toBeDefined();
     expect(mainHand.itemName).toBe("Sword of Light");
@@ -938,9 +910,7 @@ describe("extractBuild", () => {
 
   it("uses player.faction, falls back to equip.profile fields", () => {
     // With explicit faction
-    expect(
-      extractBuild(makePlayer({ faction: "MyFaction" }), {}, []).faction,
-    ).toBe("MyFaction");
+    expect(extractBuild(makePlayer({ faction: "MyFaction" }), {}, []).faction).toBe("MyFaction");
 
     // Fallback to profile.factionName
     const p2 = makePlayer({ faction: undefined });
@@ -1142,10 +1112,7 @@ describe("aggregate", () => {
     ];
     const stats = aggregate(builds);
     expect(stats.subStatsBySlot["Top"]["Attack"].count).toBe(2);
-    expect(stats.subStatsBySlot["Top"]["Attack"].values).toEqual([
-      "+100",
-      "+150",
-    ]);
+    expect(stats.subStatsBySlot["Top"]["Attack"].values).toEqual(["+100", "+150"]);
     expect(stats.subStatsBySlot["Top"]["HP"].count).toBe(1);
   });
 

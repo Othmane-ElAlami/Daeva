@@ -10,7 +10,7 @@ export async function GET() {
     // Get all table names
     const { results: tableRows } = await db
       .prepare(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name",
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name"
       )
       .all();
 
@@ -20,14 +20,10 @@ export async function GET() {
       const tableName = row.name;
 
       // Get row count
-      const countRow = await db
-        .prepare(`SELECT COUNT(*) as count FROM "${tableName}"`)
-        .first();
+      const countRow = await db.prepare(`SELECT COUNT(*) as count FROM "${tableName}"`).first();
 
       // Get column info
-      const { results: columns } = await db
-        .prepare(`PRAGMA table_info("${tableName}")`)
-        .all();
+      const { results: columns } = await db.prepare(`PRAGMA table_info("${tableName}")`).all();
 
       tables.push({
         name: tableName,

@@ -266,13 +266,7 @@ const equipDetailsList = [
 describe("Full pipeline: extractBuild → aggregate", () => {
   it("correctly processes a realistic player through the full pipeline", () => {
     const player = makeFullPlayer("TopChanter", 1001, { rank: 1 });
-    const build = extractBuild(
-      player,
-      itemDetailsMap,
-      equipDetailsList,
-      420,
-      15000,
-    );
+    const build = extractBuild(player, itemDetailsMap, equipDetailsList, 420, 15000);
 
     // Verify build extraction
     expect(build.name).toBe("TopChanter");
@@ -288,9 +282,7 @@ describe("Full pipeline: extractBuild → aggregate", () => {
 
     // Equipment
     expect(build.equipItems.length).toBeGreaterThan(0);
-    const mainHand = build.equipItems.find(
-      (e) => e.categoryName === "Main Hand",
-    );
+    const mainHand = build.equipItems.find((e) => e.categoryName === "Main Hand");
     expect(mainHand).toBeDefined();
     expect(mainHand.itemName).toBe("Archon's Mace");
 
@@ -300,9 +292,7 @@ describe("Full pipeline: extractBuild → aggregate", () => {
 
     // Substats
     expect(build.equipSubStats.length).toBeGreaterThan(0);
-    const mainHandStats = build.equipSubStats.find(
-      (e) => e.categoryName === "Main Hand",
-    );
+    const mainHandStats = build.equipSubStats.find((e) => e.categoryName === "Main Hand");
     expect(mainHandStats).toBeDefined();
     expect(mainHandStats.subStats).toHaveLength(3); // 2 substats + 1 skill
 
@@ -326,7 +316,7 @@ describe("Full pipeline: extractBuild → aggregate", () => {
     ];
 
     const builds = players.map((p) =>
-      extractBuild(p, itemDetailsMap, equipDetailsList, 400, 12000),
+      extractBuild(p, itemDetailsMap, equipDetailsList, 400, 12000)
     );
 
     const stats = aggregate(builds);
@@ -388,22 +378,10 @@ describe("Full pipeline: extractBuild → aggregate", () => {
     // Simulate processing the same player data twice to catch mutation bugs
     const player = makeFullPlayer("TestPlayer", 1001);
 
-    const build1 = extractBuild(
-      player,
-      itemDetailsMap,
-      equipDetailsList,
-      400,
-      10000,
-    );
+    const build1 = extractBuild(player, itemDetailsMap, equipDetailsList, 400, 10000);
     const stat1 = aggregate([build1]);
 
-    const build2 = extractBuild(
-      player,
-      itemDetailsMap,
-      equipDetailsList,
-      400,
-      10000,
-    );
+    const build2 = extractBuild(player, itemDetailsMap, equipDetailsList, 400, 10000);
     const stat2 = aggregate([build2]);
 
     // Results should be identical
@@ -489,9 +467,7 @@ describe("Race and Rune filtering in build pipeline", () => {
       makeFullPlayer("Asmo1", 2001, { rank: 3, runeName: "Devotion Rune" }),
       makeFullPlayer("Asmo2", 2010, { rank: 4, runeName: "Devotion Rune" }),
     ];
-    const builds = players.map((p) =>
-      extractBuild(p, itemDetailsMap, [], 400, 10000),
-    );
+    const builds = players.map((p) => extractBuild(p, itemDetailsMap, [], 400, 10000));
     const stats = aggregate(builds);
     expect(stats.total).toBe(4);
 
@@ -507,9 +483,7 @@ describe("Race and Rune filtering in build pipeline", () => {
       makeFullPlayer("PvP1", 1002, { rank: 2, runeName: "Devotion Rune" }),
       makeFullPlayer("PvE2", 1003, { rank: 3, runeName: "Ancient Clash Rune" }),
     ];
-    const builds = players.map((p) =>
-      extractBuild(p, itemDetailsMap, [], 400, 10000),
-    );
+    const builds = players.map((p) => extractBuild(p, itemDetailsMap, [], 400, 10000));
 
     // Filter PvE builds (Clash)
     const pveBuilds = builds.filter((b) => {

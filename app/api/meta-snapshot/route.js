@@ -9,7 +9,7 @@ export async function GET() {
   try {
     const { results } = await db
       .prepare(
-        "SELECT class, leaderboard, total_players, stigma_skills, active_skills, passive_skills, arcana_set_combos, updated_at FROM meta_snapshots ORDER BY class, leaderboard",
+        "SELECT class, leaderboard, total_players, stigma_skills, active_skills, passive_skills, arcana_set_combos, updated_at FROM meta_snapshots ORDER BY class, leaderboard"
       )
       .all();
 
@@ -36,9 +36,9 @@ export async function GET() {
         headers: { "Content-Type": "application/json" },
       });
     }
-    return new Response(
-      JSON.stringify({ error: "Failed to fetch meta snapshots." }),
-      { status: 500, headers: { "Content-Type": "application/json" } },
-    );
+    return new Response(JSON.stringify({ error: "Failed to fetch meta snapshots." }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 }

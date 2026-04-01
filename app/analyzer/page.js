@@ -153,8 +153,7 @@ function clientAggregate(builds) {
       .sort();
     if (topStigmas.length > 0) {
       const combo = topStigmas.join(" + ");
-      stats.equippedStigmaCombos[combo] =
-        (stats.equippedStigmaCombos[combo] || 0) + 1;
+      stats.equippedStigmaCombos[combo] = (stats.equippedStigmaCombos[combo] || 0) + 1;
     }
     for (const s of b.passiveSkills) {
       const e = (stats.passiveSkills[s.name] ||= {
@@ -169,17 +168,14 @@ function clientAggregate(builds) {
     for (const a of b.arcanas) {
       stats.arcanaUsage[a.name] = (stats.arcanaUsage[a.name] || 0) + 1;
       if (a.mainStat)
-        stats.arcanaMainStats[a.mainStat] =
-          (stats.arcanaMainStats[a.mainStat] || 0) + 1;
+        stats.arcanaMainStats[a.mainStat] = (stats.arcanaMainStats[a.mainStat] || 0) + 1;
     }
     for (const s of b.arcanaSets) {
-      if (!stats.arcanaSets[s.name])
-        stats.arcanaSets[s.name] = { count: 0, bonuses: s.bonuses };
+      if (!stats.arcanaSets[s.name]) stats.arcanaSets[s.name] = { count: 0, bonuses: s.bonuses };
       stats.arcanaSets[s.name].count++;
     }
     if (b.arcanaSetCombo) {
-      stats.arcanaSetCombos[b.arcanaSetCombo] =
-        (stats.arcanaSetCombos[b.arcanaSetCombo] || 0) + 1;
+      stats.arcanaSetCombos[b.arcanaSetCombo] = (stats.arcanaSetCombos[b.arcanaSetCombo] || 0) + 1;
     }
     for (const eq of b.equipSubStats) {
       const slotStats = (stats.subStatsBySlot[eq.categoryName] ||= {});
@@ -210,11 +206,7 @@ function clientAggregate(builds) {
       combatPower: b.combatPower,
     });
   }
-  for (const map of [
-    stats.activeSkills,
-    stats.stigmaSkills,
-    stats.passiveSkills,
-  ]) {
+  for (const map of [stats.activeSkills, stats.stigmaSkills, stats.passiveSkills]) {
     for (const d of Object.values(map)) {
       d.avgLv = +(d.totalLv / d.count).toFixed(1);
     }
@@ -291,11 +283,7 @@ export default function Home() {
   const handleRaceChange = (newRace) => {
     const currentServerRace = raceFromServer(forma.serverId);
     let newServerId = forma.serverId;
-    if (
-      newRace !== "all" &&
-      currentServerRace &&
-      currentServerRace !== newRace
-    ) {
+    if (newRace !== "all" && currentServerRace && currentServerRace !== newRace) {
       newServerId = "all";
     }
     setFormData({ ...forma, race: newRace, serverId: newServerId });
@@ -318,22 +306,19 @@ export default function Home() {
   // Compute filtered/displayed data based on race and rune filters
   const displayData = useMemo(() => {
     if (!data) return null;
-    if (!rawBuilds || (raceFilter === "all" && runeFilter === "all"))
-      return data;
+    if (!rawBuilds || (raceFilter === "all" && runeFilter === "all")) return data;
 
     let filtered = rawBuilds;
 
     if (raceFilter !== "all") {
       filtered = filtered.filter((b) =>
-        raceFilter === "elyos" ? b.race === "Elyos" : b.race === "Asmo",
+        raceFilter === "elyos" ? b.race === "Elyos" : b.race === "Asmo"
       );
     }
 
     if (runeFilter !== "all") {
       filtered = filtered.filter((b) => {
-        const rune = (b.equipItems || []).find(
-          (e) => e.categoryName === "Rune",
-        );
+        const rune = (b.equipItems || []).find((e) => e.categoryName === "Rune");
         if (!rune) return false;
         const name = (rune.itemName || "").toLowerCase();
         if (runeFilter === "pve") return name.includes("clash");
@@ -365,8 +350,7 @@ export default function Home() {
 
   useEffect(() => {
     if (resultsLogContainerRef.current) {
-      resultsLogContainerRef.current.scrollTop =
-        resultsLogContainerRef.current.scrollHeight;
+      resultsLogContainerRef.current.scrollTop = resultsLogContainerRef.current.scrollHeight;
     }
   }, [logs, data]);
 
@@ -402,10 +386,7 @@ export default function Home() {
 
         if (res.status === 429) {
           const errData = await res.json();
-          throw new Error(
-            errData.error ||
-              "Rate limit exceeded. Please wait before trying again.",
-          );
+          throw new Error(errData.error || "Rate limit exceeded. Please wait before trying again.");
         }
         if (!res.ok) {
           throw new Error("Failed to start analysis");
@@ -436,16 +417,13 @@ export default function Home() {
                         level: event.level || "INFO",
                         context: event.context || "",
                         time: event.timestamp
-                          ? new Date(event.timestamp).toLocaleTimeString(
-                              "en-US",
-                              {
-                                hour12: false,
-                                hour: "2-digit",
-                                minute: "2-digit",
-                                second: "2-digit",
-                                fractionalSecondDigits: 3,
-                              },
-                            )
+                          ? new Date(event.timestamp).toLocaleTimeString("en-US", {
+                              hour12: false,
+                              hour: "2-digit",
+                              minute: "2-digit",
+                              second: "2-digit",
+                              fractionalSecondDigits: 3,
+                            })
                           : new Date().toLocaleTimeString("en-US", {
                               hour12: false,
                               hour: "2-digit",
@@ -478,10 +456,7 @@ export default function Home() {
                     throw new Error(event.message);
                   }
                 } catch (e) {
-                  if (
-                    e.message &&
-                    !e.message.includes("Unexpected end of JSON")
-                  ) {
+                  if (e.message && !e.message.includes("Unexpected end of JSON")) {
                     throw e;
                   }
                 }
@@ -498,28 +473,23 @@ export default function Home() {
     } catch (err) {
       // Never show raw infrastructure errors to the user
       const msg = err.message || "";
-      const isInternal =
-        /subrequest|worker invocation|cloudflare|wrangler|d1_error|sqlite/i.test(
-          msg,
-        );
+      const isInternal = /subrequest|worker invocation|cloudflare|wrangler|d1_error|sqlite/i.test(
+        msg
+      );
       setError(
         isInternal
           ? "The server is temporarily busy. Please try again with a smaller limit or wait a moment."
-          : msg || "An unexpected error occurred. Please try again.",
+          : msg || "An unexpected error occurred. Please try again."
       );
     } finally {
       setLoading(false);
     }
   };
 
-  const percent = (count, total) =>
-    total === 0 ? "0.0" : ((count / total) * 100).toFixed(1);
+  const percent = (count, total) => (total === 0 ? "0.0" : ((count / total) * 100).toFixed(1));
 
   return (
-    <main
-      className="container"
-      style={{ paddingTop: "48px", paddingBottom: "64px" }}
-    >
+    <main className="container" style={{ paddingTop: "48px", paddingBottom: "64px" }}>
       {/* ── Header ── */}
       <motion.div
         initial={{ opacity: 0, y: -24 }}
@@ -561,8 +531,7 @@ export default function Home() {
                 width: "36px",
                 height: "36px",
                 borderRadius: "10px",
-                background:
-                  "linear-gradient(135deg, rgba(124,58,237,0.15), rgba(124,58,237,0.05))",
+                background: "linear-gradient(135deg, rgba(124,58,237,0.15), rgba(124,58,237,0.05))",
                 border: "1px solid rgba(124,58,237,0.2)",
               }}
             >
@@ -588,9 +557,7 @@ export default function Home() {
               <div className="relative">
                 <select
                   value={forma.cls}
-                  onChange={(e) =>
-                    setFormData({ ...forma, cls: e.target.value })
-                  }
+                  onChange={(e) => setFormData({ ...forma, cls: e.target.value })}
                   className="appearance-none"
                 >
                   {CLASSES.map((c) => (
@@ -616,9 +583,7 @@ export default function Home() {
               <div className="relative">
                 <select
                   value={forma.lbType}
-                  onChange={(e) =>
-                    setFormData({ ...forma, lbType: e.target.value })
-                  }
+                  onChange={(e) => setFormData({ ...forma, lbType: e.target.value })}
                   className="appearance-none"
                 >
                   {LEADERBOARDS.map((lb) => (
@@ -781,16 +746,8 @@ export default function Home() {
               />
             </div>
 
-            <button
-              type="submit"
-              disabled={loading}
-              className="btn-primary mt-4"
-            >
-              {loading ? (
-                <Loader2 className="animate-spin" size={18} />
-              ) : (
-                <Search size={18} />
-              )}
+            <button type="submit" disabled={loading} className="btn-primary mt-4">
+              {loading ? <Loader2 className="animate-spin" size={18} /> : <Search size={18} />}
               {loading ? "Scanning..." : "Analyze Builds"}
             </button>
             <p
@@ -853,12 +810,8 @@ export default function Home() {
                 <h3 style={{ color: "var(--text-secondary)", fontWeight: 600 }}>
                   Ready to Analyze
                 </h3>
-                <p
-                  className="text-muted mt-2"
-                  style={{ fontSize: "0.85rem", maxWidth: "300px" }}
-                >
-                  Configure your class and leaderboard, then hit analyze to
-                  extract top builds.
+                <p className="text-muted mt-2" style={{ fontSize: "0.85rem", maxWidth: "300px" }}>
+                  Configure your class and leaderboard, then hit analyze to extract top builds.
                 </p>
               </motion.div>
             )}
@@ -1032,8 +985,7 @@ export default function Home() {
                       padding: "12px 16px",
                       height: "180px",
                       overflowY: "auto",
-                      fontFamily:
-                        "ui-monospace, SFMono-Regular, Menlo, monospace",
+                      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
                       fontSize: "0.7rem",
                     }}
                   >
@@ -1056,9 +1008,7 @@ export default function Home() {
                           >
                             <span className="log-icon">{levelIcon}</span>
                             <span className="log-time">{log.time}</span>
-                            {log.context && (
-                              <span className="log-context">{log.context}</span>
-                            )}
+                            {log.context && <span className="log-context">{log.context}</span>}
                             <span className="log-message">{log.text}</span>
                           </motion.div>
                         );
@@ -1087,8 +1037,7 @@ export default function Home() {
                     borderRadius: "var(--radius-lg)",
                     padding: "0",
                     overflow: "hidden",
-                    boxShadow:
-                      "0 0 0 1px rgba(255,255,255,0.03), 0 8px 32px rgba(0,0,0,0.4)",
+                    boxShadow: "0 0 0 1px rgba(255,255,255,0.03), 0 8px 32px rgba(0,0,0,0.4)",
                     isolation: "isolate",
                     position: "relative",
                   }}
@@ -1199,10 +1148,7 @@ export default function Home() {
                         gap: "6px",
                       }}
                     >
-                      <Zap
-                        size={13}
-                        style={{ color: "#a78bfa", opacity: 0.8 }}
-                      />
+                      <Zap size={13} style={{ color: "#a78bfa", opacity: 0.8 }} />
                       <span
                         style={{
                           fontSize: "0.72rem",
@@ -1229,10 +1175,7 @@ export default function Home() {
                         borderBottom: "1px solid rgba(255,255,255,0.05)",
                       }}
                     >
-                      <Filter
-                        size={13}
-                        style={{ color: "var(--text-tertiary)" }}
-                      />
+                      <Filter size={13} style={{ color: "var(--text-tertiary)" }} />
                       <span
                         style={{
                           fontSize: "0.65rem",
@@ -1254,8 +1197,7 @@ export default function Home() {
                               raceFilter === "elyos"
                                 ? "rgba(6,182,212,0.1)"
                                 : "rgba(244,63,94,0.1)",
-                            color:
-                              raceFilter === "elyos" ? "#67e8f9" : "#fda4af",
+                            color: raceFilter === "elyos" ? "#67e8f9" : "#fda4af",
                             border: `1px solid ${raceFilter === "elyos" ? "rgba(6,182,212,0.2)" : "rgba(244,63,94,0.2)"}`,
                             fontWeight: 600,
                           }}
@@ -1275,9 +1217,7 @@ export default function Home() {
                             fontWeight: 600,
                           }}
                         >
-                          {runeFilter === "pve"
-                            ? "⚔️ PvE (Clash)"
-                            : "🛡️ PvP (Devotion)"}
+                          {runeFilter === "pve" ? "⚔️ PvE (Clash)" : "🛡️ PvP (Devotion)"}
                         </span>
                       )}
                       <div
@@ -1321,20 +1261,18 @@ export default function Home() {
                   )}
 
                   {/* No results after filtering */}
-                  {displayData.count === 0 &&
-                    (raceFilter !== "all" || runeFilter !== "all") && (
-                      <div
-                        style={{
-                          padding: "32px 24px",
-                          textAlign: "center",
-                          color: "var(--text-secondary)",
-                          fontSize: "0.85rem",
-                        }}
-                      >
-                        No players match the current filters. Try adjusting Race
-                        or Rune filters.
-                      </div>
-                    )}
+                  {displayData.count === 0 && (raceFilter !== "all" || runeFilter !== "all") && (
+                    <div
+                      style={{
+                        padding: "32px 24px",
+                        textAlign: "center",
+                        color: "var(--text-secondary)",
+                        fontSize: "0.85rem",
+                      }}
+                    >
+                      No players match the current filters. Try adjusting Race or Rune filters.
+                    </div>
+                  )}
 
                   {/* Skill columns */}
                   <div className="grid-cols-3" style={{ gap: "0" }}>
@@ -1371,9 +1309,7 @@ export default function Home() {
                         tagBg: "rgba(192,132,252,0.07)",
                         tagBorder: "rgba(192,132,252,0.18)",
                         entries: Object.entries(displayData.stats.stigmaSkills)
-                          .filter(
-                            ([, d]) => d.equippedCount > displayData.count / 2,
-                          )
+                          .filter(([, d]) => d.equippedCount > displayData.count / 2)
                           .sort((a, b) => b[1].avgLv - a[1].avgLv)
                           .slice(0, 5),
                       },
@@ -1382,10 +1318,7 @@ export default function Home() {
                         key={ci}
                         style={{
                           padding: "20px 22px",
-                          borderRight:
-                            ci < 2
-                              ? "1px solid rgba(255,255,255,0.04)"
-                              : "none",
+                          borderRight: ci < 2 ? "1px solid rgba(255,255,255,0.04)" : "none",
                         }}
                       >
                         <div
@@ -1525,8 +1458,7 @@ export default function Home() {
                           padding: "10px 22px",
                           height: "180px",
                           overflowY: "auto",
-                          fontFamily:
-                            "ui-monospace, SFMono-Regular, Menlo, monospace",
+                          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
                           fontSize: "0.68rem",
                           background: "rgba(0,0,0,0.15)",
                         }}
@@ -1542,17 +1474,10 @@ export default function Home() {
                               }[log.level] || "ℹ️";
                             const levelClass = `log-${(log.level || "INFO").toLowerCase()}`;
                             return (
-                              <div
-                                key={i}
-                                className={`log-entry ${levelClass}`}
-                              >
+                              <div key={i} className={`log-entry ${levelClass}`}>
                                 <span className="log-icon">{levelIcon}</span>
                                 <span className="log-time">{log.time}</span>
-                                {log.context && (
-                                  <span className="log-context">
-                                    {log.context}
-                                  </span>
-                                )}
+                                {log.context && <span className="log-context">{log.context}</span>}
                                 <span className="log-message">{log.text}</span>
                               </div>
                             );
@@ -1589,15 +1514,8 @@ export default function Home() {
                       {Object.entries(displayData.stats.activeSkills)
                         .sort((a, b) => b[1].avgLv - a[1].avgLv)
                         .map(([name, stat], i) => (
-                          <div
-                            key={name}
-                            className="flex-col"
-                            style={{ gap: "4px" }}
-                          >
-                            <div
-                              className="flex justify-between"
-                              style={{ fontSize: "0.8rem" }}
-                            >
+                          <div key={name} className="flex-col" style={{ gap: "4px" }}>
+                            <div className="flex justify-between" style={{ fontSize: "0.8rem" }}>
                               <span
                                 className="font-medium"
                                 style={{ color: "var(--text-primary)" }}
@@ -1628,8 +1546,7 @@ export default function Home() {
                                 className="progress-bar"
                                 style={{
                                   width: `${Math.min((stat.avgLv / 20) * 100, 100)}%`,
-                                  background:
-                                    "linear-gradient(90deg, #3b82f6, #60a5fa)",
+                                  background: "linear-gradient(90deg, #3b82f6, #60a5fa)",
                                   boxShadow: "0 0 8px rgba(59,130,246,0.3)",
                                 }}
                               />
@@ -1663,15 +1580,8 @@ export default function Home() {
                       {Object.entries(displayData.stats.passiveSkills)
                         .sort((a, b) => b[1].avgLv - a[1].avgLv)
                         .map(([name, stat], i) => (
-                          <div
-                            key={name}
-                            className="flex-col"
-                            style={{ gap: "4px" }}
-                          >
-                            <div
-                              className="flex justify-between"
-                              style={{ fontSize: "0.8rem" }}
-                            >
+                          <div key={name} className="flex-col" style={{ gap: "4px" }}>
+                            <div className="flex justify-between" style={{ fontSize: "0.8rem" }}>
                               <span
                                 className="font-medium"
                                 style={{ color: "var(--text-primary)" }}
@@ -1702,8 +1612,7 @@ export default function Home() {
                                 className="progress-bar"
                                 style={{
                                   width: `${Math.min((stat.avgLv / 20) * 100, 100)}%`,
-                                  background:
-                                    "linear-gradient(90deg, #10b981, #34d399)",
+                                  background: "linear-gradient(90deg, #10b981, #34d399)",
                                   boxShadow: "0 0 8px rgba(16,185,129,0.3)",
                                 }}
                               />
@@ -1741,10 +1650,7 @@ export default function Home() {
                       {Object.entries(displayData.stats.stigmaSkills)
                         .sort((a, b) => b[1].equippedCount - a[1].equippedCount)
                         .map(([name, stat], i) => {
-                          const equipPct = percent(
-                            stat.equippedCount,
-                            displayData.count,
-                          );
+                          const equipPct = percent(stat.equippedCount, displayData.count);
                           return (
                             <div
                               key={name}
@@ -1806,8 +1712,7 @@ export default function Home() {
                     </div>
                   </motion.div>
 
-                  {Object.keys(displayData.stats.equippedStigmaCombos).length >
-                    0 && (
+                  {Object.keys(displayData.stats.equippedStigmaCombos).length > 0 && (
                     <motion.div variants={fadeUp} className="glass-panel">
                       <h3 className="mb-4 flex items-center gap-2">
                         <Sparkles size={16} style={{ color: "#38bdf8" }} />
@@ -1865,10 +1770,7 @@ export default function Home() {
                                     </span>
                                   </span>
                                 </div>
-                                <div
-                                  className="flex flex-wrap"
-                                  style={{ gap: "4px" }}
-                                >
+                                <div className="flex flex-wrap" style={{ gap: "4px" }}>
                                   {combo.split(" + ").map((skill, idx) => (
                                     <span
                                       key={idx}
@@ -1878,8 +1780,7 @@ export default function Home() {
                                         borderRadius: "5px",
                                         background: "rgba(56,189,248,0.08)",
                                         color: "#7dd3fc",
-                                        border:
-                                          "1px solid rgba(56,189,248,0.12)",
+                                        border: "1px solid rgba(56,189,248,0.12)",
                                       }}
                                     >
                                       {skill}
@@ -1912,19 +1813,15 @@ export default function Home() {
                           const pct = percent(count, displayData.count);
                           const sets = combo.split(" + ").map((s) => {
                             const match = s.match(/(.+)\((\d+)\)/);
-                            if (match)
-                              return { name: match[1], count: match[2] };
+                            if (match) return { name: match[1], count: match[2] };
                             return { name: s, count: null };
                           });
 
                           const getArcanaColor = (name) => {
                             const n = name.toLowerCase();
-                            if (n.includes("pure blood"))
-                              return "arcana-pure-blood";
-                            if (n.includes("primal vigor"))
-                              return "arcana-primal-vigor";
-                            if (n.includes("magic armor"))
-                              return "arcana-magic-armor";
+                            if (n.includes("pure blood")) return "arcana-pure-blood";
+                            if (n.includes("primal vigor")) return "arcana-primal-vigor";
+                            if (n.includes("magic armor")) return "arcana-magic-armor";
                             if (n.includes("frenzy")) return "arcana-frenzy";
                             return "arcana-none";
                           };
@@ -1970,8 +1867,7 @@ export default function Home() {
                                         background: "rgba(0,0,0,0.25)",
                                         borderRadius: "6px",
                                         padding: "3px 8px",
-                                        border:
-                                          "1px solid var(--border-subtle)",
+                                        border: "1px solid var(--border-subtle)",
                                       }}
                                     >
                                       <div
@@ -2028,8 +1924,7 @@ export default function Home() {
 
                 {/* Arcana Stats + Cards */}
                 <div className="grid-cols-2">
-                  {Object.keys(displayData.stats.arcanaMainStats).length >
-                    0 && (
+                  {Object.keys(displayData.stats.arcanaMainStats).length > 0 && (
                     <motion.div variants={fadeUp} className="glass-panel">
                       <h3 className="mb-6 flex items-center gap-2">
                         <span
@@ -2057,15 +1952,11 @@ export default function Home() {
                           .slice(0, 15)
                           .map(([stat, count]) => {
                             const totalSlots = Object.values(
-                              displayData.stats.arcanaMainStats,
+                              displayData.stats.arcanaMainStats
                             ).reduce((sum, v) => sum + v, 0);
                             const activePct = percent(count, totalSlots);
                             return (
-                              <div
-                                key={stat}
-                                className="flex-col"
-                                style={{ gap: "6px" }}
-                              >
+                              <div key={stat} className="flex-col" style={{ gap: "6px" }}>
                                 <div
                                   className="flex justify-between items-center"
                                   style={{ fontSize: "0.75rem" }}
@@ -2095,8 +1986,7 @@ export default function Home() {
                                     style={{
                                       height: "100%",
                                       borderRadius: "2px",
-                                      background:
-                                        "linear-gradient(90deg, #f59e0b, #fbbf24)",
+                                      background: "linear-gradient(90deg, #f59e0b, #fbbf24)",
                                       boxShadow: "0 0 8px rgba(245,158,11,0.3)",
                                     }}
                                   />
@@ -2172,10 +2062,7 @@ export default function Home() {
                                   {card}
                                 </span>
                               </div>
-                              <span
-                                className="badge badge-success"
-                                style={{ fontSize: "0.6rem" }}
-                              >
+                              <span className="badge badge-success" style={{ fontSize: "0.6rem" }}>
                                 {percent(count, displayData.count)}%
                               </span>
                             </div>
@@ -2287,18 +2174,14 @@ export default function Home() {
                         "Arcana",
                       ];
 
-                      const allSlots = Object.entries(
-                        displayData.stats.subStatsBySlot,
-                      ).filter(([, stats]) => Object.keys(stats).length > 0);
+                      const allSlots = Object.entries(displayData.stats.subStatsBySlot).filter(
+                        ([, stats]) => Object.keys(stats).length > 0
+                      );
 
                       const matchesGroup = (slot, slotList) =>
-                        slotList.some(
-                          (s) => slot === s || slot.startsWith(s + "("),
-                        );
+                        slotList.some((s) => slot === s || slot.startsWith(s + "("));
                       const groupSlots = (slotList) =>
-                        allSlots.filter(([slot]) =>
-                          matchesGroup(slot, slotList),
-                        );
+                        allSlots.filter(([slot]) => matchesGroup(slot, slotList));
                       const allKnownSlots = [
                         ...WEAPON_SLOTS,
                         ...ARMOR_SLOTS,
@@ -2306,7 +2189,7 @@ export default function Home() {
                         ...ARCANA_SLOTS,
                       ];
                       const remainingSlots = allSlots.filter(
-                        ([slot]) => !matchesGroup(slot, allKnownSlots),
+                        ([slot]) => !matchesGroup(slot, allKnownSlots)
                       );
 
                       const groups = [
@@ -2328,10 +2211,7 @@ export default function Home() {
                         {
                           label: "Arcanas",
                           icon: "✨",
-                          slots: [
-                            ...groupSlots(ARCANA_SLOTS),
-                            ...remainingSlots,
-                          ],
+                          slots: [...groupSlots(ARCANA_SLOTS), ...remainingSlots],
                         },
                       ].filter((g) => g.slots.length > 0);
 
@@ -2354,15 +2234,13 @@ export default function Home() {
                             {group.slots.map(([slot, stats], slotIdx) => {
                               const totalItems = Math.max(
                                 ...Object.values(stats).map((s) => s.count),
-                                1,
+                                1
                               );
 
                               const classifyStatType = (name, values) => {
-                                const topVal =
-                                  values.length > 0 ? values[0] : "";
+                                const topVal = values.length > 0 ? values[0] : "";
                                 // Skill level upgrades: values are "+N"
-                                if (String(topVal).startsWith("+"))
-                                  return "skill";
+                                if (String(topVal).startsWith("+")) return "skill";
                                 // Deity stats: name contains [brackets]
                                 if (/\[.+\]/.test(name)) return "deity";
 
@@ -2370,23 +2248,19 @@ export default function Home() {
                                 // Offense keywords
                                 if (
                                   /\b(attack|damage|crit|might|precision|penetration|pierce|smite|hit|chance|boost|strike|additional|speed|accuracy|power|strength|intelligence|impact|perfect)\b/.test(
-                                    n,
+                                    n
                                   )
                                 )
                                   return "offense";
                                 // Defense keywords
                                 if (
                                   /\b(def|defense|resist|hp|block|parry|evasion|endurance|willpower|constitution|health|tolerance|heal|regeneration|suppression|vitality|dexterity|agility|back defense|defense increase)\b/.test(
-                                    n,
+                                    n
                                   )
                                 )
                                   return "defense";
                                 // Utility keywords
-                                if (
-                                  /\b(mp|mana|cooldown|cast|move|regen)\b/.test(
-                                    n,
-                                  )
-                                )
+                                if (/\b(mp|mana|cooldown|cast|move|regen)\b/.test(n))
                                   return "utility";
                                 return "base";
                               };
@@ -2407,16 +2281,12 @@ export default function Home() {
                                   for (const v of statData.values) {
                                     valCounts[v] = (valCounts[v] || 0) + 1;
                                   }
-                                  const sortedVals = Object.entries(
-                                    valCounts,
-                                  ).sort((a, b) => b[1] - a[1]);
-                                  const topVal = sortedVals[0];
-                                  const pct =
-                                    (statData.count / totalItems) * 100;
-                                  const type = classifyStatType(
-                                    statName,
-                                    statData.values,
+                                  const sortedVals = Object.entries(valCounts).sort(
+                                    (a, b) => b[1] - a[1]
                                   );
+                                  const topVal = sortedVals[0];
+                                  const pct = (statData.count / totalItems) * 100;
+                                  const type = classifyStatType(statName, statData.values);
                                   return {
                                     statName,
                                     statData,
@@ -2430,8 +2300,7 @@ export default function Home() {
                               // Count types for the header summary
                               const typeCounts = {};
                               for (const c of classified) {
-                                typeCounts[c.type] =
-                                  (typeCounts[c.type] || 0) + 1;
+                                typeCounts[c.type] = (typeCounts[c.type] || 0) + 1;
                               }
 
                               return (
@@ -2454,24 +2323,20 @@ export default function Home() {
                                     >
                                       {slot}
                                     </span>
-                                    <div
-                                      style={{ display: "flex", gap: "3px" }}
-                                    >
-                                      {Object.entries(typeCounts).map(
-                                        ([type, count]) => (
-                                          <span
-                                            key={type}
-                                            style={{
-                                              width: "6px",
-                                              height: "6px",
-                                              borderRadius: "50%",
-                                              background: `var(--stat-${type})`,
-                                              opacity: 0.7,
-                                            }}
-                                            title={`${count} ${TYPE_META[type]?.label || type}`}
-                                          />
-                                        ),
-                                      )}
+                                    <div style={{ display: "flex", gap: "3px" }}>
+                                      {Object.entries(typeCounts).map(([type, count]) => (
+                                        <span
+                                          key={type}
+                                          style={{
+                                            width: "6px",
+                                            height: "6px",
+                                            borderRadius: "50%",
+                                            background: `var(--stat-${type})`,
+                                            opacity: 0.7,
+                                          }}
+                                          title={`${count} ${TYPE_META[type]?.label || type}`}
+                                        />
+                                      ))}
                                     </div>
                                   </div>
                                   <div
@@ -2481,58 +2346,56 @@ export default function Home() {
                                       overflowY: "auto",
                                     }}
                                   >
-                                    {classified.map(
-                                      ({ statName, topVal, pct, type }) => (
-                                        <div key={statName}>
-                                          <div className="substat-row">
+                                    {classified.map(({ statName, topVal, pct, type }) => (
+                                      <div key={statName}>
+                                        <div className="substat-row">
+                                          <span
+                                            className="substat-type-dot"
+                                            style={{
+                                              background: `var(--stat-${type})`,
+                                            }}
+                                          />
+                                          <div className="substat-info">
                                             <span
-                                              className="substat-type-dot"
+                                              className="substat-name"
+                                              title={statName}
                                               style={{
-                                                background: `var(--stat-${type})`,
-                                              }}
-                                            />
-                                            <div className="substat-info">
-                                              <span
-                                                className="substat-name"
-                                                title={statName}
-                                                style={{
-                                                  whiteSpace: "normal",
-                                                  lineHeight: "1.3",
-                                                }}
-                                              >
-                                                {statName}
-                                              </span>
-                                              <span
-                                                className="substat-peak"
-                                                title="Most common value"
-                                              >
-                                                {topVal ? topVal[0] : "—"}
-                                              </span>
-                                            </div>
-                                            <span
-                                              className="substat-pct"
-                                              style={{
-                                                color: `var(--stat-${type})`,
+                                                whiteSpace: "normal",
+                                                lineHeight: "1.3",
                                               }}
                                             >
-                                              {pct.toFixed(0)}%
+                                              {statName}
                                             </span>
-                                            <div className="substat-bar-bg">
-                                              <motion.div
-                                                initial={{ width: 0 }}
-                                                animate={{ width: `${pct}%` }}
-                                                transition={{
-                                                  duration: 0.8,
-                                                  ease: "easeOut",
-                                                  delay: 0.15 + slotIdx * 0.03,
-                                                }}
-                                                className={`substat-bar bg-${type}`}
-                                              />
-                                            </div>
+                                            <span
+                                              className="substat-peak"
+                                              title="Most common value"
+                                            >
+                                              {topVal ? topVal[0] : "—"}
+                                            </span>
+                                          </div>
+                                          <span
+                                            className="substat-pct"
+                                            style={{
+                                              color: `var(--stat-${type})`,
+                                            }}
+                                          >
+                                            {pct.toFixed(0)}%
+                                          </span>
+                                          <div className="substat-bar-bg">
+                                            <motion.div
+                                              initial={{ width: 0 }}
+                                              animate={{ width: `${pct}%` }}
+                                              transition={{
+                                                duration: 0.8,
+                                                ease: "easeOut",
+                                                delay: 0.15 + slotIdx * 0.03,
+                                              }}
+                                              className={`substat-bar bg-${type}`}
+                                            />
                                           </div>
                                         </div>
-                                      ),
-                                    )}
+                                      </div>
+                                    ))}
                                   </div>
                                 </motion.div>
                               );
@@ -2595,18 +2458,14 @@ export default function Home() {
                         "Arcana",
                       ];
 
-                      const allSlots = Object.entries(
-                        displayData.stats.itemsBySlot,
-                      ).filter(([, items]) => Object.keys(items).length > 0);
+                      const allSlots = Object.entries(displayData.stats.itemsBySlot).filter(
+                        ([, items]) => Object.keys(items).length > 0
+                      );
 
                       const matchesGroup = (slot, slotList) =>
-                        slotList.some(
-                          (s) => slot === s || slot.startsWith(s + "("),
-                        );
+                        slotList.some((s) => slot === s || slot.startsWith(s + "("));
                       const groupSlots = (slotList) =>
-                        allSlots.filter(([slot]) =>
-                          matchesGroup(slot, slotList),
-                        );
+                        allSlots.filter(([slot]) => matchesGroup(slot, slotList));
 
                       const groups = [
                         {
@@ -2649,7 +2508,7 @@ export default function Home() {
                           <div className="grid-cols-3">
                             {group.slots.map(([slot, items], slotIdx) => {
                               const sorted = Object.entries(items).sort(
-                                (a, b) => b[1].count - a[1].count,
+                                (a, b) => b[1].count - a[1].count
                               );
                               return (
                                 <motion.div
@@ -2679,77 +2538,67 @@ export default function Home() {
                                       overflowY: "auto",
                                     }}
                                   >
-                                    {sorted.map(
-                                      ([itemName, { count, grade }], i) => {
-                                        const pct = (
-                                          (count / displayData.count) *
-                                          100
-                                        ).toFixed(0);
-                                        const color = gradeColor(grade);
-                                        return (
-                                          <div key={itemName}>
-                                            <div className="substat-row">
+                                    {sorted.map(([itemName, { count, grade }], i) => {
+                                      const pct = ((count / displayData.count) * 100).toFixed(0);
+                                      const color = gradeColor(grade);
+                                      return (
+                                        <div key={itemName}>
+                                          <div className="substat-row">
+                                            <span
+                                              className="substat-type-dot"
+                                              style={{
+                                                background: color,
+                                                boxShadow: `0 0 6px ${color}66`,
+                                              }}
+                                            />
+                                            <div className="substat-info">
                                               <span
-                                                className="substat-type-dot"
+                                                className="substat-name"
+                                                title={itemName}
                                                 style={{
-                                                  background: color,
-                                                  boxShadow: `0 0 6px ${color}66`,
+                                                  color,
+                                                  whiteSpace: "normal",
+                                                  lineHeight: "1.3",
+                                                  fontSize: "0.78rem",
                                                 }}
-                                              />
-                                              <div className="substat-info">
+                                              >
                                                 <span
-                                                  className="substat-name"
-                                                  title={itemName}
                                                   style={{
-                                                    color,
-                                                    whiteSpace: "normal",
-                                                    lineHeight: "1.3",
-                                                    fontSize: "0.78rem",
+                                                    color: "var(--text-tertiary)",
+                                                    marginRight: "6px",
+                                                    fontSize: "0.65rem",
                                                   }}
                                                 >
-                                                  <span
-                                                    style={{
-                                                      color:
-                                                        "var(--text-tertiary)",
-                                                      marginRight: "6px",
-                                                      fontSize: "0.65rem",
-                                                    }}
-                                                  >
-                                                    {i + 1}.
-                                                  </span>
-                                                  {itemName}
+                                                  {i + 1}.
                                                 </span>
-                                              </div>
-                                              <span
-                                                className="substat-pct"
-                                                style={{ color }}
-                                              >
-                                                {pct}%
+                                                {itemName}
                                               </span>
-                                              <div className="substat-bar-bg">
-                                                <motion.div
-                                                  initial={{ width: 0 }}
-                                                  animate={{
-                                                    width: `${pct}%`,
-                                                  }}
-                                                  transition={{
-                                                    duration: 0.8,
-                                                    ease: "easeOut",
-                                                    delay:
-                                                      0.15 + slotIdx * 0.03,
-                                                  }}
-                                                  className="substat-bar"
-                                                  style={{
-                                                    background: color,
-                                                    boxShadow: `0 0 8px ${color}4d`,
-                                                  }}
-                                                />
-                                              </div>
+                                            </div>
+                                            <span className="substat-pct" style={{ color }}>
+                                              {pct}%
+                                            </span>
+                                            <div className="substat-bar-bg">
+                                              <motion.div
+                                                initial={{ width: 0 }}
+                                                animate={{
+                                                  width: `${pct}%`,
+                                                }}
+                                                transition={{
+                                                  duration: 0.8,
+                                                  ease: "easeOut",
+                                                  delay: 0.15 + slotIdx * 0.03,
+                                                }}
+                                                className="substat-bar"
+                                                style={{
+                                                  background: color,
+                                                  boxShadow: `0 0 8px ${color}4d`,
+                                                }}
+                                              />
                                             </div>
                                           </div>
-                                        );
-                                      },
-                                    )}
+                                        </div>
+                                      );
+                                    })}
                                   </div>
                                 </motion.div>
                               );
@@ -2769,17 +2618,13 @@ export default function Home() {
                         <Trophy size={18} style={{ color: "#fbbf24" }} />
                         Player Credits
                       </h3>
-                      <p
-                        className="text-muted mb-4"
-                        style={{ fontSize: "0.8rem" }}
-                      >
+                      <p className="text-muted mb-4" style={{ fontSize: "0.8rem" }}>
                         Built from data of these top-ranked heroes:
                       </p>
                       <div
                         style={{
                           display: "grid",
-                          gridTemplateColumns:
-                            "repeat(auto-fill, minmax(220px, 1fr))",
+                          gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
                           gap: "10px",
                           maxHeight: "340px",
                           overflowY: "auto",
@@ -2824,9 +2669,7 @@ export default function Home() {
                                   }}
                                 >
                                   <span>🌍 {p.region}</span>
-                                  {p.serverName && (
-                                    <span>🖥️ {p.serverName}</span>
-                                  )}
+                                  {p.serverName && <span>🖥️ {p.serverName}</span>}
                                   {p.race && p.race !== "Unknown" && (
                                     <span
                                       style={{
@@ -2839,10 +2682,7 @@ export default function Home() {
                                           p.race === "Elyos"
                                             ? "rgba(6,182,212,0.12)"
                                             : "rgba(244,63,94,0.12)",
-                                        color:
-                                          p.race === "Elyos"
-                                            ? "#67e8f9"
-                                            : "#fda4af",
+                                        color: p.race === "Elyos" ? "#67e8f9" : "#fda4af",
                                         border: `1px solid ${p.race === "Elyos" ? "rgba(6,182,212,0.2)" : "rgba(244,63,94,0.2)"}`,
                                       }}
                                     >
@@ -2861,8 +2701,7 @@ export default function Home() {
                                         fontWeight: 700,
                                         background: "rgba(251,191,36,0.12)",
                                         color: "#fbbf24",
-                                        border:
-                                          "1px solid rgba(251,191,36,0.2)",
+                                        border: "1px solid rgba(251,191,36,0.2)",
                                       }}
                                     >
                                       GS {p.gearScore.toLocaleString()}

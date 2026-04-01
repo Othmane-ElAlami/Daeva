@@ -126,9 +126,7 @@ export function createBudget() {
       return used;
     },
     get remaining() {
-      return forceExhausted
-        ? 0
-        : subrequestHardLimit - subrequestSafetyMargin - used;
+      return forceExhausted ? 0 : subrequestHardLimit - subrequestSafetyMargin - used;
     },
     consume(n = 1) {
       if (forceExhausted) throw new subrequestBudgetExhausted(used);
@@ -138,10 +136,7 @@ export function createBudget() {
       }
     },
     canAfford(n = 1) {
-      return (
-        !forceExhausted &&
-        used + n < subrequestHardLimit - subrequestSafetyMargin
-      );
+      return !forceExhausted && used + n < subrequestHardLimit - subrequestSafetyMargin;
     },
     exhaust() {
       forceExhausted = true;
@@ -176,7 +171,7 @@ export async function fetchJSON(
   body = null,
   budget = null,
   logger = null,
-  timeoutMs = 20000,
+  timeoutMs = 20000
 ) {
   if (budget) budget.consume();
   const controller = new AbortController();
@@ -211,17 +206,11 @@ export async function fetchJSON(
   return res.json();
 }
 
-export async function fetchWithRetry(
-  fn,
-  maxAttempts = 3,
-  baseDelayMs = 500,
-  budget = null,
-) {
+export async function fetchWithRetry(fn, maxAttempts = 3, baseDelayMs = 500, budget = null) {
   let lastErr;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     // Don't retry if budget is exhausted
-    if (budget && !budget.canAfford())
-      throw new subrequestBudgetExhausted(budget.used);
+    if (budget && !budget.canAfford()) throw new subrequestBudgetExhausted(budget.used);
     try {
       return await fn();
     } catch (err) {
@@ -267,10 +256,7 @@ export async function runPool(tasks, concurrency, budget = null) {
     }
   }
 
-  const workers = Array.from(
-    { length: Math.min(concurrency, tasks.length) },
-    () => worker(),
-  );
+  const workers = Array.from({ length: Math.min(concurrency, tasks.length) }, () => worker());
   await Promise.all(workers);
   return results;
 }
@@ -309,27 +295,20 @@ export function extractCombatPowerFromInfo(infoData) {
 
 // Fetches the ItemLevel and CP from the game's character/info endpoint.
 // Returns { itemLevel, combatPower } or null on failure.
-export async function fetchItemLevelAndCP(
-  player,
-  headers,
-  budget = null,
-  logger = null,
-) {
+export async function fetchItemLevelAndCP(player, headers, budget = null, logger = null) {
   try {
     if (budget && !budget.canAfford()) return null;
     const apiBase =
-      player.region === "TW"
-        ? "https://tw.ncsoft.com/aion2/api"
-        : "https://aion2.plaync.com/api";
+      player.region === "TW" ? "https://tw.ncsoft.com/aion2/api" : "https://aion2.plaync.com/api";
     const infoData = await fetchJSON(
       proxyUrl(
-        `${apiBase}/character/info?lang=en&characterId=${player.characterId}&serverId=${player.serverId}`,
+        `${apiBase}/character/info?lang=en&characterId=${player.characterId}&serverId=${player.serverId}`
       ),
       headers,
       "GET",
       null,
       budget,
-      logger,
+      logger
     );
     return {
       itemLevel: extractItemLevelFromInfo(infoData),
@@ -347,12 +326,11 @@ export function extractBuild(
   itemDetailsMap,
   equipDetailsList,
   itemLevel = null,
-  cp = null,
+  cp = null
 ) {
   const equip = player._equip;
   const serverId = player.serverId;
-  const serverName =
-    serverNames[serverId] || (serverId ? `Server ${serverId}` : "Unknown");
+  const serverName = serverNames[serverId] || (serverId ? `Server ${serverId}` : "Unknown");
 
   const build = {
     name: player.characterName || "Unknown",
@@ -360,11 +338,7 @@ export function extractBuild(
     serverName: serverName,
     race: serverId >= 2000 ? "Asmo" : serverId >= 1000 ? "Elyos" : "Unknown",
     region: player.region || "Unknown",
-    faction:
-      player.faction ||
-      equip?.profile?.factionName ||
-      equip?.profile?.raceName ||
-      "Unknown",
+    faction: player.faction || equip?.profile?.factionName || equip?.profile?.raceName || "Unknown",
     globalRank: player.globalRank || player.rank,
     gearScore: null,
     combatPower: null,
@@ -497,8 +471,7 @@ export function extractBuild(
     };
     if (detail) {
       if (detail.mainStats?.[0]) {
-        arcana.mainStat =
-          detail.mainStats[0].name + ": " + detail.mainStats[0].value;
+        arcana.mainStat = detail.mainStats[0].name + ": " + detail.mainStats[0].value;
       }
       if (detail.set) {
         arcana.setName = detail.set.name;
@@ -508,7 +481,7 @@ export function extractBuild(
           build.arcanaSets.push({
             name: detail.set.name,
             bonuses: (detail.set.bonuses || []).map(
-              (b) => `(${b.degree}-piece) ${b.descriptions.join(", ")}`,
+              (b) => `(${b.degree}-piece) ${b.descriptions.join(", ")}`
             ),
           });
         }
@@ -577,8 +550,7 @@ export function aggregate(builds) {
       .sort();
     if (topStigmas.length > 0) {
       const combo = topStigmas.join(" + ");
-      stats.equippedStigmaCombos[combo] =
-        (stats.equippedStigmaCombos[combo] || 0) + 1;
+      stats.equippedStigmaCombos[combo] = (stats.equippedStigmaCombos[combo] || 0) + 1;
     }
     for (const s of b.passiveSkills) {
       const e = (stats.passiveSkills[s.name] ||= {
@@ -593,17 +565,14 @@ export function aggregate(builds) {
     for (const a of b.arcanas) {
       stats.arcanaUsage[a.name] = (stats.arcanaUsage[a.name] || 0) + 1;
       if (a.mainStat)
-        stats.arcanaMainStats[a.mainStat] =
-          (stats.arcanaMainStats[a.mainStat] || 0) + 1;
+        stats.arcanaMainStats[a.mainStat] = (stats.arcanaMainStats[a.mainStat] || 0) + 1;
     }
     for (const s of b.arcanaSets) {
-      if (!stats.arcanaSets[s.name])
-        stats.arcanaSets[s.name] = { count: 0, bonuses: s.bonuses };
+      if (!stats.arcanaSets[s.name]) stats.arcanaSets[s.name] = { count: 0, bonuses: s.bonuses };
       stats.arcanaSets[s.name].count++;
     }
     if (b.arcanaSetCombo) {
-      stats.arcanaSetCombos[b.arcanaSetCombo] =
-        (stats.arcanaSetCombos[b.arcanaSetCombo] || 0) + 1;
+      stats.arcanaSetCombos[b.arcanaSetCombo] = (stats.arcanaSetCombos[b.arcanaSetCombo] || 0) + 1;
     }
     for (const eq of b.equipSubStats) {
       const slotStats = (stats.subStatsBySlot[eq.categoryName] ||= {});
@@ -635,11 +604,7 @@ export function aggregate(builds) {
     });
   }
 
-  for (const map of [
-    stats.activeSkills,
-    stats.stigmaSkills,
-    stats.passiveSkills,
-  ]) {
+  for (const map of [stats.activeSkills, stats.stigmaSkills, stats.passiveSkills]) {
     for (const d of Object.values(map)) {
       d.avgLv = +(d.totalLv / d.count).toFixed(1);
     }

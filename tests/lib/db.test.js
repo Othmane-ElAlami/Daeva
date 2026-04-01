@@ -72,15 +72,7 @@ describe("getCachedPlayer", () => {
     const equipDetails = [{ slotPos: 1, subStats: [] }];
 
     // Store the player first
-    await setCachedPlayer(
-      db,
-      "char1",
-      "1001",
-      "KR",
-      equipData,
-      equipDetails,
-      385,
-    );
+    await setCachedPlayer(db, "char1", "1001", "KR", equipData, equipDetails, 385);
 
     const result = await getCachedPlayer(db, "char1", "1001");
     expect(result).not.toBeNull();
@@ -188,19 +180,9 @@ describe("setCachedPlayer", () => {
   it("stores player data correctly", async () => {
     const db = createMockDb();
     const equipData = { equipment: { equipmentList: [] } };
-    const equipDetails = [
-      { slotPos: 1, subStats: [{ name: "ATK", value: 10 }] },
-    ];
+    const equipDetails = [{ slotPos: 1, subStats: [{ name: "ATK", value: 10 }] }];
 
-    await setCachedPlayer(
-      db,
-      "char1",
-      "1001",
-      "KR",
-      equipData,
-      equipDetails,
-      385,
-    );
+    await setCachedPlayer(db, "char1", "1001", "KR", equipData, equipDetails, 385);
 
     expect(db.prepare).toHaveBeenCalled();
   });

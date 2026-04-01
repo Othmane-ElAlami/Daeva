@@ -52,97 +52,91 @@ describe("sanitizeErrorMessage patterns", () => {
   it("sanitizes subrequest errors", () => {
     const result = sanitizeErrorMessage("Too many subrequests");
     expect(result).toBe(
-      "The server is temporarily busy. Please try again with a smaller limit or wait a moment.",
+      "The server is temporarily busy. Please try again with a smaller limit or wait a moment."
     );
   });
 
   it("sanitizes worker invocation errors", () => {
     expect(sanitizeErrorMessage("Worker invocation error")).toBe(
-      "The server is temporarily busy. Please try again with a smaller limit or wait a moment.",
+      "The server is temporarily busy. Please try again with a smaller limit or wait a moment."
     );
   });
 
   it("sanitizes Cloudflare errors", () => {
     expect(sanitizeErrorMessage("Cloudflare error 1000")).toBe(
-      "The server is temporarily busy. Please try again with a smaller limit or wait a moment.",
+      "The server is temporarily busy. Please try again with a smaller limit or wait a moment."
     );
   });
 
   it("sanitizes wrangler errors", () => {
     expect(sanitizeErrorMessage("Wrangler dev failed")).toBe(
-      "The server is temporarily busy. Please try again with a smaller limit or wait a moment.",
+      "The server is temporarily busy. Please try again with a smaller limit or wait a moment."
     );
   });
 
   it("sanitizes D1_ERROR", () => {
     expect(sanitizeErrorMessage("D1_ERROR: table not found")).toBe(
-      "The server is temporarily busy. Please try again with a smaller limit or wait a moment.",
+      "The server is temporarily busy. Please try again with a smaller limit or wait a moment."
     );
   });
 
   it("sanitizes SQLITE errors", () => {
     expect(sanitizeErrorMessage("SQLITE_BUSY: database locked")).toBe(
-      "The server is temporarily busy. Please try again with a smaller limit or wait a moment.",
+      "The server is temporarily busy. Please try again with a smaller limit or wait a moment."
     );
   });
 
   it("sanitizes 'too many' errors", () => {
     expect(sanitizeErrorMessage("too many requests")).toBe(
-      "The server is temporarily busy. Please try again with a smaller limit or wait a moment.",
+      "The server is temporarily busy. Please try again with a smaller limit or wait a moment."
     );
   });
 
   it("sanitizes developers.cloudflare references", () => {
     expect(sanitizeErrorMessage("See developers.cloudflare.com for help")).toBe(
-      "The server is temporarily busy. Please try again with a smaller limit or wait a moment.",
+      "The server is temporarily busy. Please try again with a smaller limit or wait a moment."
     );
   });
 
   it("sanitizes binding errors", () => {
     expect(sanitizeErrorMessage("Binding DB not found")).toBe(
-      "The server is temporarily busy. Please try again with a smaller limit or wait a moment.",
+      "The server is temporarily busy. Please try again with a smaller limit or wait a moment."
     );
   });
 
   it("sanitizes UnsafeEval errors", () => {
     expect(sanitizeErrorMessage("UnsafeEval not allowed")).toBe(
-      "The server is temporarily busy. Please try again with a smaller limit or wait a moment.",
+      "The server is temporarily busy. Please try again with a smaller limit or wait a moment."
     );
   });
 
   it("sanitizes HTTP errors", () => {
     expect(sanitizeErrorMessage("HTTP 500")).toBe(
-      "A network error occurred while fetching data. Please try again.",
+      "A network error occurred while fetching data. Please try again."
     );
     expect(sanitizeErrorMessage("HTTP 404")).toBe(
-      "A network error occurred while fetching data. Please try again.",
+      "A network error occurred while fetching data. Please try again."
     );
   });
 
   it("returns generic message for unknown errors", () => {
     expect(sanitizeErrorMessage("some random error")).toBe(
-      "An unexpected error occurred. Please try again.",
+      "An unexpected error occurred. Please try again."
     );
   });
 
   it("handles null/undefined/empty input", () => {
-    expect(sanitizeErrorMessage(null)).toBe(
-      "An unexpected error occurred. Please try again.",
-    );
-    expect(sanitizeErrorMessage(undefined)).toBe(
-      "An unexpected error occurred. Please try again.",
-    );
-    expect(sanitizeErrorMessage("")).toBe(
-      "An unexpected error occurred. Please try again.",
-    );
+    expect(sanitizeErrorMessage(null)).toBe("An unexpected error occurred. Please try again.");
+    expect(sanitizeErrorMessage(undefined)).toBe("An unexpected error occurred. Please try again.");
+    expect(sanitizeErrorMessage("")).toBe("An unexpected error occurred. Please try again.");
   });
 
   it("is case-insensitive for internal patterns", () => {
     expect(sanitizeErrorMessage("SUBREQUEST limit exceeded")).toBe(
-      "The server is temporarily busy. Please try again with a smaller limit or wait a moment.",
+      "The server is temporarily busy. Please try again with a smaller limit or wait a moment."
     );
     expect(sanitizeErrorMessage("cloudFLARE Worker")).toBe(
-      "The server is temporarily busy. Please try again with a smaller limit or wait a moment.",
+      "The server is temporarily busy. Please try again with a smaller limit or wait a moment."
     );
   });
 
@@ -198,9 +192,7 @@ describe("checkRuneFilter logic", () => {
         equipment: {
           equipmentList: [
             { name: "Archon's Mace", slotPos: 1, slotPosName: "MainHand1" },
-            ...(runeName
-              ? [{ name: runeName, slotPos: 20, slotPosName: "Rune1" }]
-              : []),
+            ...(runeName ? [{ name: runeName, slotPos: 20, slotPosName: "Rune1" }] : []),
           ],
         },
       },
@@ -214,20 +206,14 @@ describe("checkRuneFilter logic", () => {
   });
 
   it("matches PvE (clash) rune correctly", () => {
-    expect(checkRuneFilter(makePlayer("Clash Rune of Valor"), "pve")).toBe(
-      true,
-    );
+    expect(checkRuneFilter(makePlayer("Clash Rune of Valor"), "pve")).toBe(true);
     expect(checkRuneFilter(makePlayer("Ancient Clash Rune"), "pve")).toBe(true);
     expect(checkRuneFilter(makePlayer("Devotion Rune"), "pve")).toBe(false);
   });
 
   it("matches PvP (devotion) rune correctly", () => {
-    expect(checkRuneFilter(makePlayer("Devotion Rune of Valor"), "pvp")).toBe(
-      true,
-    );
-    expect(checkRuneFilter(makePlayer("Ancient Devotion Rune"), "pvp")).toBe(
-      true,
-    );
+    expect(checkRuneFilter(makePlayer("Devotion Rune of Valor"), "pvp")).toBe(true);
+    expect(checkRuneFilter(makePlayer("Ancient Devotion Rune"), "pvp")).toBe(true);
     expect(checkRuneFilter(makePlayer("Clash Rune"), "pvp")).toBe(false);
   });
 

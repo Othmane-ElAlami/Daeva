@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
@@ -22,6 +24,15 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
+  "lint-staged": {
+    "*.{js,mjs,ts,tsx,jsx}": [
+      "prettier --write",
+      "eslint --fix"
+    ],
+    "*.{json,css,md,yml,yaml}": [
+      "prettier --write"
+    ]
+  },
   "devDependencies": {
     "@cloudflare/next-on-pages": "^1",
     "@eslint/eslintrc": "^3.3.5",
@@ -29,7 +40,10 @@
     "@vitest/coverage-v8": "^4.1.2",
     "eslint": "^9",
     "eslint-config-next": "15.5.2",
+    "eslint-config-prettier": "^10.1.8",
     "husky": "^9.1.7",
+    "lint-staged": "^16.4.0",
+    "prettier": "^3.8.1",
     "tailwindcss": "^4",
     "typescript": "^6.0.2",
     "vitest": "^4.1.2",

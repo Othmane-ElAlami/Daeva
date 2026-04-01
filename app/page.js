@@ -69,15 +69,9 @@ function snapshotToDisplay(snap) {
     mode: leaderboardLabels[snap.leaderboard] || snap.leaderboard,
     usage: `${snap.stigmaSkills[0]?.pct ?? 0}%`,
     totalPlayers: snap.totalPlayers,
-    stigmas: snap.stigmaSkills
-      .slice(0, 6)
-      .map((s) => ({ name: s.name, icon: "St" })),
-    skills: snap.activeSkills
-      .slice(0, 6)
-      .map((s) => ({ name: s.name, icon: "Sk" })),
-    passives: snap.passiveSkills
-      .slice(0, 6)
-      .map((s) => ({ name: s.name, icon: "Ps" })),
+    stigmas: snap.stigmaSkills.slice(0, 6).map((s) => ({ name: s.name, icon: "St" })),
+    skills: snap.activeSkills.slice(0, 6).map((s) => ({ name: s.name, icon: "Sk" })),
+    passives: snap.passiveSkills.slice(0, 6).map((s) => ({ name: s.name, icon: "Ps" })),
     arcana,
     arcanaUsage: topCombo ? `${topCombo.pct}%` : "—",
     updatedAt: snap.updatedAt,
@@ -129,10 +123,7 @@ function CinematicHeadline({ text, startDelay = 1200, className = "" }) {
 
         const interval = setInterval(() => {
           if (frame < scrambleFrames) {
-            el.textContent =
-              SCRAMBLE_GLYPHS[
-                Math.floor(Math.random() * SCRAMBLE_GLYPHS.length)
-              ];
+            el.textContent = SCRAMBLE_GLYPHS[Math.floor(Math.random() * SCRAMBLE_GLYPHS.length)];
             el.classList.add("cin-hero-char--scramble");
             frame++;
           } else {
@@ -190,8 +181,7 @@ function ScrambleText({ text, as: Tag = "span", className = "" }) {
         if (frame >= maxFrames - length + i) {
           output += text[i];
         } else {
-          output +=
-            SCRAMBLE_GLYPHS[Math.floor(Math.random() * SCRAMBLE_GLYPHS.length)];
+          output += SCRAMBLE_GLYPHS[Math.floor(Math.random() * SCRAMBLE_GLYPHS.length)];
         }
       }
       el.textContent = output;
@@ -286,15 +276,9 @@ function MetaWidget({ active }) {
           className="cin-widget-body cin-widget-body--meta"
           style={{ textAlign: "center", padding: "40px 20px" }}
         >
-          <div
-            className="cin-meta-label"
-            style={{ color: "var(--text-secondary)" }}
-          >
+          <div className="cin-meta-label" style={{ color: "var(--text-secondary)" }}>
             No snapshot data yet — run an analysis in the{" "}
-            <Link
-              href="/analyzer"
-              style={{ color: "var(--accent)", textDecoration: "underline" }}
-            >
+            <Link href="/analyzer" style={{ color: "var(--accent)", textDecoration: "underline" }}>
               Analyzer
             </Link>{" "}
             to populate live data.
@@ -316,9 +300,7 @@ function MetaWidget({ active }) {
   if (loading || metaData.length === 0) return null;
 
   const currentData = metaData[classIndex % metaData.length];
-  const timeAgo = currentData.updatedAt
-    ? formatTimeAgo(currentData.updatedAt)
-    : null;
+  const timeAgo = currentData.updatedAt ? formatTimeAgo(currentData.updatedAt) : null;
 
   return (
     <div
@@ -380,18 +362,13 @@ function MetaWidget({ active }) {
         <div
           className={`cin-meta-section ${sectionsVisible.includes(1) ? "cin-meta-section--visible" : ""}`}
         >
-          <div
-            className="cin-meta-label"
-            style={{ color: "var(--text-secondary)" }}
-          >
+          <div className="cin-meta-label" style={{ color: "var(--text-secondary)" }}>
             Skills
           </div>
           <div className="cin-meta-skills">
             {currentData.skills.map((skill, i) => (
               <div key={i} className="cin-meta-skill">
-                <span className="cin-meta-skill-icon cin-meta-skill-icon--skill">
-                  {skill.icon}
-                </span>
+                <span className="cin-meta-skill-icon cin-meta-skill-icon--skill">{skill.icon}</span>
                 <span className="cin-meta-skill-name">{skill.name}</span>
               </div>
             ))}
@@ -401,10 +378,7 @@ function MetaWidget({ active }) {
         <div
           className={`cin-meta-section ${sectionsVisible.includes(2) ? "cin-meta-section--visible" : ""}`}
         >
-          <div
-            className="cin-meta-label"
-            style={{ color: "var(--text-secondary)" }}
-          >
+          <div className="cin-meta-label" style={{ color: "var(--text-secondary)" }}>
             Passives
           </div>
           <div className="cin-meta-skills">
@@ -513,11 +487,7 @@ export default function HomePage() {
         aria-label="Main navigation"
       >
         <div className="cin-nav-inner">
-          <Link
-            href="/"
-            className="cin-nav-logo"
-            aria-label="Daeva Analyzer home"
-          >
+          <Link href="/" className="cin-nav-logo" aria-label="Daeva Analyzer home">
             <span className="cin-nav-logo-mark">◈</span>
             <span className="cin-nav-logo-text">DAEVA</span>
           </Link>
@@ -557,9 +527,7 @@ export default function HomePage() {
         <div className="cin-hero-grid">
           {/* ── Left column ── */}
           <div className="cin-hero-left">
-            <div
-              className={`cin-hero-badge ${introPhase >= 5 ? "cin-hero-badge--visible" : ""}`}
-            >
+            <div className={`cin-hero-badge ${introPhase >= 5 ? "cin-hero-badge--visible" : ""}`}>
               <div className="cin-sonar">
                 <div className="cin-sonar-dot" />
                 <div className="cin-sonar-ring" />
@@ -578,11 +546,9 @@ export default function HomePage() {
               </span>
             </h1>
 
-            <p
-              className={`cin-hero-tagline ${introPhase >= 6 ? "cin-hero-tagline--visible" : ""}`}
-            >
-              Decode the meta from top-ranked players across Atreia. Real-time
-              leaderboard analysis and competitive intelligence for every class.
+            <p className={`cin-hero-tagline ${introPhase >= 6 ? "cin-hero-tagline--visible" : ""}`}>
+              Decode the meta from top-ranked players across Atreia. Real-time leaderboard analysis
+              and competitive intelligence for every class.
             </p>
 
             <div
@@ -594,9 +560,7 @@ export default function HomePage() {
               </Link>
             </div>
 
-            <div
-              className={`cin-hero-trust ${introPhase >= 9 ? "cin-hero-trust--visible" : ""}`}
-            >
+            <div className={`cin-hero-trust ${introPhase >= 9 ? "cin-hero-trust--visible" : ""}`}>
               {STATS.map((s) => (
                 <div key={s.label} className="cin-trust-item">
                   <span className="cin-trust-value">{s.value}</span>
@@ -627,8 +591,8 @@ export default function HomePage() {
             &middot; Data from Official API
           </p>
           <p className="cin-footer-tagline">
-            Forged in the shadows of the abyss with love, hate, the spilled
-            blood of Balaurs, and the torn skin of my enemies.
+            Forged in the shadows of the abyss with love, hate, the spilled blood of Balaurs, and
+            the torn skin of my enemies.
           </p>
         </div>
       </footer>

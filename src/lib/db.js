@@ -3,7 +3,7 @@ const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 export async function getCachedPlayer(db, characterId, serverId) {
   const row = await db
     .prepare(
-      "SELECT equip_data, equip_details, item_level, fetched_at FROM player_cache WHERE character_id = ? AND server_id = ?",
+      "SELECT equip_data, equip_details, item_level, fetched_at FROM player_cache WHERE character_id = ? AND server_id = ?"
     )
     .bind(String(characterId), String(serverId))
     .first();
@@ -28,13 +28,13 @@ export async function setCachedPlayer(
   region,
   equipData,
   equipDetails,
-  itemLevel = null,
+  itemLevel = null
 ) {
   await db
     .prepare(
       `INSERT OR REPLACE INTO player_cache
        (character_id, server_id, region, equip_data, equip_details, item_level, fetched_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       String(characterId),
@@ -43,7 +43,7 @@ export async function setCachedPlayer(
       JSON.stringify(equipData),
       JSON.stringify(equipDetails),
       itemLevel != null ? itemLevel : null,
-      Date.now(),
+      Date.now()
     )
     .run();
 }

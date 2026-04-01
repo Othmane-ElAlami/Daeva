@@ -53,14 +53,10 @@ describe("GET /api/meta-snapshot", () => {
     expect(body.snapshots[0].className).toBe("chanter");
     expect(body.snapshots[0].leaderboard).toBe("nightmare");
     expect(body.snapshots[0].totalPlayers).toBe(50);
-    expect(body.snapshots[0].stigmaSkills).toEqual([
-      { name: "Skill A", count: 10 },
-    ]);
+    expect(body.snapshots[0].stigmaSkills).toEqual([{ name: "Skill A", count: 10 }]);
     expect(body.snapshots[0].activeSkills).toEqual([{ name: "Active A" }]);
     expect(body.snapshots[0].passiveSkills).toEqual([{ name: "Passive A" }]);
-    expect(body.snapshots[0].arcanaSetCombos).toEqual([
-      { combo: "Pure Blood(4)" },
-    ]);
+    expect(body.snapshots[0].arcanaSetCombos).toEqual([{ combo: "Pure Blood(4)" }]);
     expect(body.snapshots[0].updatedAt).toBe(1711872000000);
   });
 

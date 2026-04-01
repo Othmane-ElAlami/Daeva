@@ -43,7 +43,7 @@ function ask(question) {
     rl.question(question, (ans) => {
       rl.close();
       resolve(ans.trim());
-    }),
+    })
   );
 }
 
@@ -56,7 +56,7 @@ async function resolveConfig() {
   if (!lbType) {
     console.log("\n  Available leaderboard types:");
     Object.entries(leaderboardTypes).forEach(([key, v], i) =>
-      console.log(`    ${i + 1}. ${v.label} (${key})`),
+      console.log(`    ${i + 1}. ${v.label} (${key})`)
     );
     const ans = await ask("\n  Choose leaderboard type (name or number): ");
     const keys = Object.keys(leaderboardTypes);
@@ -74,7 +74,7 @@ async function resolveConfig() {
   if (!cls) {
     console.log("\n  Available classes:");
     classes.forEach((c, i) =>
-      console.log(`    ${i + 1}. ${c.charAt(0).toUpperCase() + c.slice(1)}`),
+      console.log(`    ${i + 1}. ${c.charAt(0).toUpperCase() + c.slice(1)}`)
     );
     const ans = await ask("\n  Choose class (name or number): ");
     const num = parseInt(ans, 10);
@@ -89,9 +89,7 @@ async function resolveConfig() {
   }
 
   if (!limit) {
-    const ans = await ask(
-      "\n  How many top players to analyze? (default: 100): ",
-    );
+    const ans = await ask("\n  How many top players to analyze? (default: 100): ");
     limit = parseInt(ans, 10) || 100;
   } else {
     limit = parseInt(limit, 10);
@@ -160,10 +158,7 @@ async function fetchLeaderboard(config, headers) {
 async function fetchCharacterBuild(player, headers, config) {
   const { characterId: charId, serverId } = player;
   if (!charId || !serverId) {
-    log.warn(
-      player.characterName || "Unknown",
-      "Missing characterId or serverId — skipped",
-    );
+    log.warn(player.characterName || "Unknown", "Missing characterId or serverId — skipped");
     return null;
   }
 
@@ -180,14 +175,11 @@ async function fetchCharacterBuild(player, headers, config) {
     // CLI scraper: try direct API first (more reliable, no proxy overhead).
     // Direct calls MUST NOT include Origin / Referer headers (CORS rejection).
     try {
-      equipData = await fetchJSON(
-        `${apiBase}${targetPath}`,
-        makeDirectHeaders(),
-      );
+      equipData = await fetchJSON(`${apiBase}${targetPath}`, makeDirectHeaders());
     } catch (directErr) {
       log.warn(
         player.characterName,
-        `Direct API failed (${directErr.message}), trying proxy fallback…`,
+        `Direct API failed (${directErr.message}), trying proxy fallback…`
       );
       equipData = await fetchJSON(proxyUrl(`${apiBase}${targetPath}`), headers);
     }
@@ -200,10 +192,7 @@ async function fetchCharacterBuild(player, headers, config) {
 
     return { ...player, _equip: equipData };
   } catch (err) {
-    log.warn(
-      player.characterName || "Unknown",
-      `Build fetch failed: ${err.message}`,
-    );
+    log.warn(player.characterName || "Unknown", `Build fetch failed: ${err.message}`);
     return null;
   }
 }
@@ -216,12 +205,9 @@ async function fetchItemDetails(itemIds, headers) {
   for (let i = 0; i < unique.length; i += 50) {
     const chunk = unique.slice(i, i + 50);
     try {
-      const data = await fetchJSON(
-        `${baseUrl}/api/items/batch-details`,
-        headers,
-        "POST",
-        { itemIds: chunk },
-      );
+      const data = await fetchJSON(`${baseUrl}/api/items/batch-details`, headers, "POST", {
+        itemIds: chunk,
+      });
       const items = data?.items || data || [];
       for (const item of Array.isArray(items) ? items : []) {
         map[item.id] = item;
@@ -247,17 +233,12 @@ async function fetchEquipmentDetails(player, headers) {
       slotPos: e.slotPos,
     }));
 
-  const data = await fetchJSON(
-    `${baseUrl}/api/items/batch-equipment`,
-    headers,
-    "POST",
-    {
-      items,
-      characterId: player.characterId,
-      serverId: player.serverId,
-      region: player.region,
-    },
-  );
+  const data = await fetchJSON(`${baseUrl}/api/items/batch-equipment`, headers, "POST", {
+    items,
+    characterId: player.characterId,
+    serverId: player.serverId,
+    region: player.region,
+  });
   const result = data?.items || data || [];
   const arr = Array.isArray(result) ? result : [];
   // Treat an empty response as a retriable failure — the player has gear, so
@@ -281,11 +262,7 @@ function formatReport(stats, config) {
 
   ln();
   ln("╔══════════════════════════════════════════════════════════════╗");
-  ln(
-    `║  🎮  AION 2 — TOP ${t} ${config.cls.toUpperCase()} BUILD ANALYSIS`.padEnd(
-      63,
-    ) + "║",
-  );
+  ln(`║  🎮  AION 2 — TOP ${t} ${config.cls.toUpperCase()} BUILD ANALYSIS`.padEnd(63) + "║");
   ln(`║  📊  ${config.lbInfo.label} Leaderboard — shugo.gg`.padEnd(63) + "║");
   ln(`║  📅  ${new Date().toISOString().split("T")[0]}`.padEnd(63) + "║");
   ln("╚══════════════════════════════════════════════════════════════╝");
@@ -293,14 +270,12 @@ function formatReport(stats, config) {
   // ─── Active Skills ─────────────────────────────────────────────
   hdr("⚔️  ACTIVE SKILLS (ranked by avg level)");
   ln();
-  const active = Object.entries(stats.activeSkills).sort(
-    (a, b) => b[1].avgLv - a[1].avgLv,
-  );
+  const active = Object.entries(stats.activeSkills).sort((a, b) => b[1].avgLv - a[1].avgLv);
   if (active.length > 0) {
     const mLen = Math.max(...active.map(([n]) => n.length));
     for (const [name, d] of active) {
       ln(
-        `  ${name.padEnd(mLen)}  Avg: ${String(d.avgLv).padStart(5)}  Max: ${String(d.maxLv).padStart(2)}`,
+        `  ${name.padEnd(mLen)}  Avg: ${String(d.avgLv).padStart(5)}  Max: ${String(d.maxLv).padStart(2)}`
       );
     }
   }
@@ -308,14 +283,12 @@ function formatReport(stats, config) {
   // ─── Passive Skills ───────────────────────────────────────────
   hdr("🛡️  PASSIVE SKILLS (ranked by avg level)");
   ln();
-  const passive = Object.entries(stats.passiveSkills).sort(
-    (a, b) => b[1].avgLv - a[1].avgLv,
-  );
+  const passive = Object.entries(stats.passiveSkills).sort((a, b) => b[1].avgLv - a[1].avgLv);
   if (passive.length > 0) {
     const mLen = Math.max(...passive.map(([n]) => n.length));
     for (const [name, d] of passive) {
       ln(
-        `  ${name.padEnd(mLen)}  Avg: ${String(d.avgLv).padStart(5)}  Max: ${String(d.maxLv).padStart(2)}`,
+        `  ${name.padEnd(mLen)}  Avg: ${String(d.avgLv).padStart(5)}  Max: ${String(d.maxLv).padStart(2)}`
       );
     }
   }
@@ -323,15 +296,13 @@ function formatReport(stats, config) {
   // ─── Stigma Skills ─────────────────────────────────────────────
   hdr("⚡ STIGMA SKILLS (ranked by avg level)");
   ln();
-  const stigma = Object.entries(stats.stigmaSkills).sort(
-    (a, b) => b[1].avgLv - a[1].avgLv,
-  );
+  const stigma = Object.entries(stats.stigmaSkills).sort((a, b) => b[1].avgLv - a[1].avgLv);
   if (stigma.length > 0) {
     const mLen = Math.max(...stigma.map(([n]) => n.length));
     for (const [name, d] of stigma) {
       const eqPct = percent(d.equippedCount, t);
       ln(
-        `  ${name.padEnd(mLen)}  Avg: ${String(d.avgLv).padStart(5)}  Max: ${String(d.maxLv).padStart(2)}  Equipped: ${eqPct.padStart(5)}%  (${d.count} players)`,
+        `  ${name.padEnd(mLen)}  Avg: ${String(d.avgLv).padStart(5)}  Max: ${String(d.maxLv).padStart(2)}  Equipped: ${eqPct.padStart(5)}%  (${d.count} players)`
       );
     }
   }
@@ -357,17 +328,13 @@ function formatReport(stats, config) {
   if (combos.length > 0) {
     for (let i = 0; i < combos.length; i++) {
       const [combo, count] = combos[i];
-      ln(
-        `\n  #${i + 1}  ${combo}  — ${count}/${t} players (${percent(count, t)}%)`,
-      );
+      ln(`\n  #${i + 1}  ${combo}  — ${count}/${t} players (${percent(count, t)}%)`);
     }
     ln();
   }
 
   // ─── Arcana Set Bonuses Reference ─────────────────────────────
-  const sets = Object.entries(stats.arcanaSets).sort(
-    (a, b) => b[1].count - a[1].count,
-  );
+  const sets = Object.entries(stats.arcanaSets).sort((a, b) => b[1].count - a[1].count);
   if (sets.length > 0) {
     hdr("📖 ARCANA SET BONUSES REFERENCE");
     ln();
@@ -383,19 +350,14 @@ function formatReport(stats, config) {
   // ─── Arcana Base Stats ────────────────────────────────────────
   hdr("📊 ARCANA BASE STATS DISTRIBUTION");
   ln();
-  const mStats = Object.entries(stats.arcanaMainStats).sort(
-    (a, b) => b[1] - a[1],
-  );
+  const mStats = Object.entries(stats.arcanaMainStats).sort((a, b) => b[1] - a[1]);
   if (mStats.length > 0) {
     const mLen = Math.max(...mStats.map(([n]) => n.length));
     // Total arcana slots across all players
-    const totalSlots = Object.values(stats.arcanaMainStats).reduce(
-      (a, b) => a + b,
-      0,
-    );
+    const totalSlots = Object.values(stats.arcanaMainStats).reduce((a, b) => a + b, 0);
     for (const [name, count] of mStats) {
       ln(
-        `  ${name.padEnd(mLen)}  ${bar(count, totalSlots)} ${String(count).padStart(3)}/${totalSlots} slots (${percent(count, totalSlots)}%)`,
+        `  ${name.padEnd(mLen)}  ${bar(count, totalSlots)} ${String(count).padStart(3)}/${totalSlots} slots (${percent(count, totalSlots)}%)`
       );
     }
   }
@@ -408,7 +370,7 @@ function formatReport(stats, config) {
     const mLen = Math.max(...cards.map(([n]) => n.length));
     for (const [name, count] of cards) {
       ln(
-        `  ${name.padEnd(mLen)}  ${bar(count, t)} ${String(count).padStart(3)}/${t} (${percent(count, t)}%)`,
+        `  ${name.padEnd(mLen)}  ${bar(count, t)} ${String(count).padStart(3)}/${t} (${percent(count, t)}%)`
       );
     }
   }
@@ -416,23 +378,16 @@ function formatReport(stats, config) {
   // ─── Equipment Items By Slot Type ────────────────────────────
   if (Object.keys(stats.itemsBySlot).length > 0) {
     hdr("🛡️  EQUIPMENT ITEMS BY SLOT TYPE");
-    const slotTypeOrder = [
-      "Main Hand",
-      "Guard",
-      "Top",
+    const slotTypeOrder = ["Main Hand", "Guard", "Top"];
+    const orderedTypes = [...slotTypeOrder];
     for (const s of Object.keys(stats.itemsBySlot)) {
       if (!orderedTypes.includes(s)) orderedTypes.push(s);
     }
 
     for (const slotType of orderedTypes) {
       const slotItems = stats.itemsBySlot[slotType];
-      const totalItems = Object.values(slotItems).reduce(
-        (acc, curr) => acc + curr.count,
-        0,
-      );
-      const sorted = Object.entries(slotItems).sort(
-        (a, b) => b[1].count - a[1].count,
-      );
+      const totalItems = Object.values(slotItems).reduce((acc, curr) => acc + curr.count, 0);
+      const sorted = Object.entries(slotItems).sort((a, b) => b[1].count - a[1].count);
 
       ln();
       ln(`  ── ${slotType} (${totalItems} items equipped) ──`);
@@ -441,7 +396,7 @@ function formatReport(stats, config) {
       for (const [itemName, data] of sorted) {
         const pct = percent(data.count, totalItems);
         ln(
-          `    ${bar(data.count, totalItems, 10)}  ${itemName.padEnd(mLen)}  ${data.count}/${totalItems} (${pct.padStart(5)}%)  [${data.grade || "Unknown"}]`,
+          `    ${bar(data.count, totalItems, 10)}  ${itemName.padEnd(mLen)}  ${data.count}/${totalItems} (${pct.padStart(5)}%)  [${data.grade || "Unknown"}]`
         );
       }
     }
@@ -451,10 +406,8 @@ function formatReport(stats, config) {
   if (Object.keys(stats.subStatsBySlot).length > 0) {
     hdr("⚙️  EQUIPMENT SUBSTATS BY SLOT TYPE");
     // Group by slot type in a logical order
-    const slotTypeOrder = [
-      "Main Hand",
-      "Guard",
-      "Top",
+    const slotTypeOrder = ["Main Hand", "Guard", "Top"];
+    const orderedTypes = [...slotTypeOrder];
     for (const s of Object.keys(stats.subStatsBySlot)) {
       if (!orderedTypes.includes(s)) orderedTypes.push(s);
     }
@@ -462,13 +415,8 @@ function formatReport(stats, config) {
     for (const slotType of orderedTypes) {
       const slotStats = stats.subStatsBySlot[slotType];
       // Total items of this type across all players
-      const totalItems = Math.max(
-        ...Object.values(slotStats).map((d) => d.count),
-        1,
-      );
-      const sorted = Object.entries(slotStats).sort(
-        (a, b) => b[1].count - a[1].count,
-      );
+      const totalItems = Math.max(...Object.values(slotStats).map((d) => d.count), 1);
+      const sorted = Object.entries(slotStats).sort((a, b) => b[1].count - a[1].count);
       ln();
       ln(`  ── ${slotType} (${totalItems} items across players) ──`);
 
@@ -482,7 +430,7 @@ function formatReport(stats, config) {
         const topVal = Object.entries(valCounts).sort((a, b) => b[1] - a[1])[0];
         const pct = percent(data.count, totalItems);
         ln(
-          `    ${bar(data.count, totalItems, 10)}  ${statName.padEnd(mLen)}  ${data.count}/${totalItems} (${pct.padStart(5)}%)  most common: ${topVal[0]}`,
+          `    ${bar(data.count, totalItems, 10)}  ${statName.padEnd(mLen)}  ${data.count}/${totalItems} (${pct.padStart(5)}%)  most common: ${topVal[0]}`
         );
       }
     }
@@ -506,7 +454,7 @@ function formatReport(stats, config) {
   ln("  Top Stigma Skills to level:");
   for (const [name, d] of stigma.filter(([, d]) => d.avgLv > 0).slice(0, 5)) {
     ln(
-      `    ${d.equippedCount > t / 2 ? "★" : "•"} ${name} (avg ${d.avgLv}, ${percent(d.equippedCount, t)}% equip rate)`,
+      `    ${d.equippedCount > t / 2 ? "★" : "•"} ${name} (avg ${d.avgLv}, ${percent(d.equippedCount, t)}% equip rate)`
     );
   }
 
@@ -532,20 +480,12 @@ function formatReport(stats, config) {
 // ── Main ─────────────────────────────────────────────────────────────────────
 async function main() {
   console.log();
-  console.log(
-    "╔══════════════════════════════════════════════════════════════╗",
-  );
-  console.log(
-    "║  Shugo.gg Leaderboard Scraper & Build Analyzer               ║",
-  );
-  console.log(
-    "╚══════════════════════════════════════════════════════════════╝",
-  );
+  console.log("╔══════════════════════════════════════════════════════════════╗");
+  console.log("║  Shugo.gg Leaderboard Scraper & Build Analyzer               ║");
+  console.log("╚══════════════════════════════════════════════════════════════╝");
 
   const config = await resolveConfig();
-  const headers = makeHeaders(
-    `${baseUrl}/leaderboard/${config.lbType}?class=${config.cls}`,
-  );
+  const headers = makeHeaders(`${baseUrl}/leaderboard/${config.lbType}?class=${config.cls}`);
 
   log.info("main", `Leaderboard: ${config.lbInfo.label}`);
   log.info("main", `Class: ${config.cls}`);
@@ -554,10 +494,7 @@ async function main() {
   // 1. Leaderboard
   const players = await fetchLeaderboard(config, headers);
   if (players.length === 0) {
-    log.error(
-      "main",
-      "No players found. Try a different leaderboard type or check shugo.gg.",
-    );
+    log.error("main", "No players found. Try a different leaderboard type or check shugo.gg.");
     process.exit(1);
   }
 
@@ -583,11 +520,7 @@ async function main() {
       const rankingType = classRankingIds[cls] || 0;
       const url = `${baseUrl}/api/leaderboard?contentType=${lbInfo.contentType}&rankingType=${rankingType}&page=${lbPage}&limit=100`;
       try {
-        const data = await fetchWithRetry(
-          () => fetchJSON(url, headers),
-          maxRetries,
-          retryBaseMs,
-        );
+        const data = await fetchWithRetry(() => fetchJSON(url, headers), maxRetries, retryBaseMs);
         const rankings = data?.rankings || [];
         if (rankings.length === 0) break; // no more pages
         players.push(...rankings);
@@ -612,7 +545,7 @@ async function main() {
       .join(" | ");
     log.info(
       name,
-      `Scanned: ${scanned} | Found: ${enriched.length + 1}/${config.limit}${statsStr ? ` (${statsStr})` : ""}`,
+      `Scanned: ${scanned} | Found: ${enriched.length + 1}/${config.limit}${statsStr ? ` (${statsStr})` : ""}`
     );
 
     // Fetch build (with retry)
@@ -621,13 +554,10 @@ async function main() {
       result = await fetchWithRetry(
         () => fetchCharacterBuild(p, headers, config),
         maxRetries,
-        retryBaseMs,
+        retryBaseMs
       );
     } catch (err) {
-      log.warn(
-        name,
-        `Skipped: failed after ${maxRetries} attempts (${err.message})`,
-      );
+      log.warn(name, `Skipped: failed after ${maxRetries} attempts (${err.message})`);
       await sleep(delayMs);
       continue;
     }
@@ -643,13 +573,10 @@ async function main() {
       equipDetails = await fetchWithRetry(
         () => fetchEquipmentDetails(result, headers),
         maxRetries,
-        retryBaseMs,
+        retryBaseMs
       );
     } catch (err) {
-      log.warn(
-        name,
-        `Failed equipment substats (skills/gear still usable) — ${err.message}`,
-      );
+      log.warn(name, `Failed equipment substats (skills/gear still usable) — ${err.message}`);
       // DO NOT null-out _equip here — it contains already-fetched skills + equipment
       // that are perfectly valid.  Only the equipment substats are missing.
     }
@@ -661,12 +588,10 @@ async function main() {
     let cp = null;
     try {
       const apiBase2 =
-        result.region === "TW"
-          ? "https://tw.ncsoft.com/aion2/api"
-          : "https://aion2.plaync.com/api";
+        result.region === "TW" ? "https://tw.ncsoft.com/aion2/api" : "https://aion2.plaync.com/api";
       const infoData = await fetchJSON(
         `${apiBase2}/character/info?lang=en&characterId=${result.characterId}&serverId=${result.serverId}`,
-        makeDirectHeaders(),
+        makeDirectHeaders()
       );
       itemLevel = extractItemLevelFromInfo(infoData);
       cp = extractCombatPowerFromInfo(infoData);
@@ -695,16 +620,13 @@ async function main() {
 
   log.success(
     "main",
-    `${enriched.length}/${config.limit} builds fetched (scanned ${scanned} candidates)`,
+    `${enriched.length}/${config.limit} builds fetched (scanned ${scanned} candidates)`
   );
 
   // 3. Fetch arcana item details (for set bonuses)
   log.info("main", "Fetching Arcana set details...");
   const itemDetailsMap = await fetchItemDetails(allArcanaIds, headers);
-  log.success(
-    "main",
-    `${Object.keys(itemDetailsMap).length} unique Arcana items resolved`,
-  );
+  log.success("main", `${Object.keys(itemDetailsMap).length} unique Arcana items resolved`);
 
   // 4. Extract & Aggregate
   const builds = enriched.map((p) =>
@@ -713,8 +635,8 @@ async function main() {
       itemDetailsMap,
       p._equipDetails || [],
       p._itemLevel ?? null,
-      p._combatPower ?? null,
-    ),
+      p._combatPower ?? null
+    )
   );
   const stats = aggregate(builds);
 

@@ -36,14 +36,14 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ## Available Scripts
 
-| Script | Description |
-| --- | --- |
-| `npm run dev` | Start the Next.js development server |
-| `npm run build` | Build the Next.js app |
+| Script                | Description                                      |
+| --------------------- | ------------------------------------------------ |
+| `npm run dev`         | Start the Next.js development server             |
+| `npm run build`       | Build the Next.js app                            |
 | `npm run pages:build` | Build for Cloudflare Pages using `next-on-pages` |
-| `npm run preview` | Build and preview locally with Wrangler |
-| `npm run deploy` | Build and deploy to Cloudflare Pages |
-| `npm run lint` | Run ESLint |
+| `npm run preview`     | Build and preview locally with Wrangler          |
+| `npm run deploy`      | Build and deploy to Cloudflare Pages             |
+| `npm run lint`        | Run ESLint                                       |
 
 ## Deploying to Cloudflare Pages
 
