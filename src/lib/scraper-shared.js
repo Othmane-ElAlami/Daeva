@@ -27,20 +27,6 @@ export const classRankingIds = {
   chanter: 9,
 };
 
-// Primary weapon per class (verified from shugo.gg API).
-// categoryName from batch-equipment. "(Extend)" suffix = stat stick in secondary slot.
-// We use startsWith so both "Staff" and "Staff(Extend)" pass for a Chanter.
-export const classWeapons = {
-  gladiator: ["Greatsword", "Blade"],
-  templar: ["Longsword", "Sword"],
-  ranger: "Bow",
-  assassin: ["Dagger", "Claw"],
-  spiritmaster: "Orb",
-  sorcerer: "Spellbook",
-  cleric: "Mace",
-  chanter: ["Staff", "Rod"],
-};
-
 export const classes = Object.keys(classRankingIds);
 
 export const serverNames = {
@@ -414,35 +400,8 @@ export function extractBuild(
   // Build map of equipment using our own categorization fallback
   const mapSlotToCategory = (slotName, itemName = "") => {
     if (!slotName) return "Unknown";
-    if (slotName.startsWith("MainHand") || slotName.startsWith("SubHand")) {
-      const lower = itemName.toLowerCase();
-      if (lower.includes("greatsword")) return "Greatsword";
-      if (
-        lower.includes("staff") ||
-        lower.includes("rod") ||
-        itemName.includes("法杖")
-      )
-        return "Staff";
-      if (
-        lower.includes("longsword") ||
-        lower.includes("sword") ||
-        itemName.includes("劍")
-      )
-        return "Longsword";
-      if (lower.includes("bow") || itemName.includes("弓")) return "Bow";
-      if (lower.includes("dagger") || itemName.includes("短劍"))
-        return "Dagger";
-      if (lower.includes("orb") || itemName.includes("寶珠")) return "Orb";
-      if (lower.includes("spellbook") || itemName.includes("魔法書"))
-        return "Spellbook";
-      if (lower.includes("mace") || itemName.includes("戰鎚")) return "Mace";
-      if (lower.includes("pistol") || itemName.includes("手槍"))
-        return "Pistol";
-      if (lower.includes("harp") || itemName.includes("弦樂器")) return "Harp";
-      if (lower.includes("guard") || itemName.includes("盾")) return "Guard";
-      if (slotName.startsWith("SubHand")) return "Guard";
-      return slotName; // fallback
-    }
+    if (slotName.startsWith("MainHand")) return "Main Hand";
+    if (slotName.startsWith("SubHand")) return "Guard";
     const map = {
       Torso: "Top",
       Pants: "Legs",

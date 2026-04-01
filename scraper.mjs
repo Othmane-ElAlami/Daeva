@@ -13,7 +13,6 @@ import {
   baseUrl,
   leaderboardTypes,
   classRankingIds,
-  classWeapons,
   classes,
   makeHeaders,
   makeDirectHeaders,
@@ -418,27 +417,32 @@ function formatReport(stats, config) {
   if (Object.keys(stats.itemsBySlot).length > 0) {
     hdr("🛡️  EQUIPMENT ITEMS BY SLOT TYPE");
     const slotTypeOrder = [
-      "Mace", "Spellbook", "Staff", "Greatsword", "Longsword", "Sword", "Dagger", "Bow", "Orb", "Pistol", "Harp", "Guard",
-      "Top", "Legs", "Helm", "Pauldrons", "Gloves", "Shoes", "Cloak", 
-      "Belt", "Necklace", "Earrings", "Ring", "Bracelet", "Rune", "Amulet"
-    ];
-    const orderedTypes = slotTypeOrder.filter((s) => stats.itemsBySlot[s]);
+      "Main Hand",
+      "Guard",
+      "Top",
     for (const s of Object.keys(stats.itemsBySlot)) {
       if (!orderedTypes.includes(s)) orderedTypes.push(s);
     }
 
     for (const slotType of orderedTypes) {
       const slotItems = stats.itemsBySlot[slotType];
-      const totalItems = Object.values(slotItems).reduce((acc, curr) => acc + curr.count, 0);
-      const sorted = Object.entries(slotItems).sort((a, b) => b[1].count - a[1].count);
-      
+      const totalItems = Object.values(slotItems).reduce(
+        (acc, curr) => acc + curr.count,
+        0,
+      );
+      const sorted = Object.entries(slotItems).sort(
+        (a, b) => b[1].count - a[1].count,
+      );
+
       ln();
       ln(`  ── ${slotType} (${totalItems} items equipped) ──`);
       const mLen = Math.max(...sorted.map(([n]) => n.length), 1);
-      
+
       for (const [itemName, data] of sorted) {
         const pct = percent(data.count, totalItems);
-        ln(`    ${bar(data.count, totalItems, 10)}  ${itemName.padEnd(mLen)}  ${data.count}/${totalItems} (${pct.padStart(5)}%)  [${data.grade || "Unknown"}]`);
+        ln(
+          `    ${bar(data.count, totalItems, 10)}  ${itemName.padEnd(mLen)}  ${data.count}/${totalItems} (${pct.padStart(5)}%)  [${data.grade || "Unknown"}]`,
+        );
       }
     }
   }
@@ -448,11 +452,9 @@ function formatReport(stats, config) {
     hdr("⚙️  EQUIPMENT SUBSTATS BY SLOT TYPE");
     // Group by slot type in a logical order
     const slotTypeOrder = [
-      "Mace", "Spellbook", "Staff", "Greatsword", "Longsword", "Sword", "Dagger", "Bow", "Orb", "Pistol", "Harp", "Guard",
-      "Top", "Legs", "Helm", "Pauldrons", "Gloves", "Shoes", "Cloak", 
-      "Belt", "Necklace", "Earrings", "Ring", "Bracelet", "Rune", "Amulet"
-    ];
-    const orderedTypes = slotTypeOrder.filter((s) => stats.subStatsBySlot[s]);
+      "Main Hand",
+      "Guard",
+      "Top",
     for (const s of Object.keys(stats.subStatsBySlot)) {
       if (!orderedTypes.includes(s)) orderedTypes.push(s);
     }
@@ -602,7 +604,12 @@ async function main() {
     const name = p.characterName || "Unknown";
     const pGs = p.gearScore;
     const pCp = p.combatPower;
-    const statsStr = [pGs ? `GS: ${pGs.toLocaleString()}` : "", pCp ? `CP: ${pCp.toLocaleString()}` : ""].filter(Boolean).join(" | ");
+    const statsStr = [
+      pGs ? `GS: ${pGs.toLocaleString()}` : "",
+      pCp ? `CP: ${pCp.toLocaleString()}` : "",
+    ]
+      .filter(Boolean)
+      .join(" | ");
     log.info(
       name,
       `Scanned: ${scanned} | Found: ${enriched.length + 1}/${config.limit}${statsStr ? ` (${statsStr})` : ""}`,
@@ -647,47 +654,6 @@ async function main() {
       // that are perfectly valid.  Only the equipment substats are missing.
     }
     result._equipDetails = equipDetails;
-
-    // Class validation: check MainHand/SubHand against this class's primary weapon.
-    // Uses item names from the direct API (reliable) rather than categoryName from
-    // batch-equipment (which often returns null items).
-    const primaryWeapon = classWeapons[config.cls.toLowerCase()];
-    let hasValidWeapon = !primaryWeapon;
-
-    if (primaryWeapon && result._equip) {
-      const validLabels = Array.isArray(primaryWeapon)
-        ? [...primaryWeapon]
-        : [primaryWeapon];
-
-      const eqList = result._equip.equipment?.equipmentList || [];
-      for (const item of eqList) {
-        if (!item) continue;
-        if (item.slotPos === 1 || item.slotPos === 2) {
-          const itemName = item.name || "";
-          const cat = item.categoryName || "";
-          if (
-            validLabels.some(
-              (label) => itemName.includes(label) || cat.startsWith(label),
-            )
-          ) {
-            hasValidWeapon = true;
-            break;
-          }
-        }
-      }
-
-      if (!hasValidWeapon) {
-        log.warn(
-          name,
-          `Weapons don't match ${config.cls}. Ignoring equipment data.`,
-        );
-        // Clear equipment data so they still count towards the leaderboard limit
-        // but their irrelevant class stats aren't analyzed.
-        result._equip = null;
-        equipDetails = [];
-        result._equipDetails = [];
-      }
-    }
 
     // Fetch the game's own ItemLevel and CP stat from character/info.
     // Try direct API first (faster / more reliable from CLI), then proxy fallback.
@@ -742,7 +708,13 @@ async function main() {
 
   // 4. Extract & Aggregate
   const builds = enriched.map((p) =>
-    extractBuild(p, itemDetailsMap, p._equipDetails || [], p._itemLevel ?? null, p._combatPower ?? null),
+    extractBuild(
+      p,
+      itemDetailsMap,
+      p._equipDetails || [],
+      p._itemLevel ?? null,
+      p._combatPower ?? null,
+    ),
   );
   const stats = aggregate(builds);
 
