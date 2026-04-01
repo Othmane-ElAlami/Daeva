@@ -253,6 +253,11 @@ export async function POST(req) {
               const result = {
                 characterId: pp.characterId,
                 serverId: pp.serverId,
+                characterName: pp.characterName,
+                region: pp.region,
+                faction: pp.faction,
+                globalRank: pp.globalRank,
+                rank: pp.rank,
                 _equip: cached.equipData,
                 _equipDetails: cached.equipDetails || [],
                 _itemLevel: cached.itemLevel ?? null,
@@ -660,6 +665,11 @@ export async function POST(req) {
               processedPlayers: [...priorEnriched, ...enriched].map((p) => ({
                 characterId: p.characterId,
                 serverId: p.serverId,
+                characterName: p.characterName,
+                region: p.region,
+                faction: p.faction,
+                globalRank: p.globalRank,
+                rank: p.rank,
               })),
             });
             if (isActive) {
@@ -936,6 +946,11 @@ export async function POST(req) {
               processedPlayers: [...priorEnriched, ...enriched].map((p) => ({
                 characterId: p.characterId,
                 serverId: p.serverId,
+                characterName: p.characterName,
+                region: p.region,
+                faction: p.faction,
+                globalRank: p.globalRank,
+                rank: p.rank,
               })),
             });
             if (isActive) {
@@ -1058,6 +1073,11 @@ export async function POST(req) {
               processedPlayers: [...priorEnriched, ...enriched].map((p) => ({
                 characterId: p.characterId,
                 serverId: p.serverId,
+                characterName: p.characterName,
+                region: p.region,
+                faction: p.faction,
+                globalRank: p.globalRank,
+                rank: p.rank,
               })),
             });
           } else if (enriched.length > 0) {
