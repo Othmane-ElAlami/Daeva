@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Search,
@@ -8,6 +8,7 @@ import {
   Info,
   ChevronDown,
   CheckCircle2,
+  Filter,
   Layers,
   Sparkles,
   Zap,
@@ -27,6 +28,7 @@ const CLASSES = [
   "templar",
   "gladiator",
 ];
+
 const LEADERBOARDS = [
   { id: "nightmare", label: "Nightmare" },
   { id: "abyss", label: "Abyss" },
@@ -102,22 +104,141 @@ const stagger = {
   animate: { transition: { staggerChildren: 0.06 } },
 };
 
+// Client-side aggregate function for re-filtering builds
+function clientAggregate(builds) {
+  const total = builds.length;
+  const stats = {
+    total,
+    activeSkills: {},
+    stigmaSkills: {},
+    passiveSkills: {},
+    arcanaUsage: {},
+    arcanaSets: {},
+    arcanaSetCombos: {},
+    arcanaMainStats: {},
+    equippedStigmaCombos: {},
+    subStatsBySlot: {},
+    itemsBySlot: {},
+    scannedPlayers: [],
+  };
+  for (const b of builds) {
+    for (const s of b.activeSkills) {
+      const e = (stats.activeSkills[s.name] ||= {
+        totalLv: 0,
+        count: 0,
+        maxLv: 0,
+        equippedCount: 0,
+      });
+      e.totalLv += s.level;
+      e.count++;
+      e.maxLv = Math.max(e.maxLv, s.level);
+      if (s.equipped) e.equippedCount++;
+    }
+    for (const s of b.stigmaSkills) {
+      const e = (stats.stigmaSkills[s.name] ||= {
+        totalLv: 0,
+        count: 0,
+        maxLv: 0,
+        equippedCount: 0,
+      });
+      e.totalLv += s.level;
+      e.count++;
+      e.maxLv = Math.max(e.maxLv, s.level);
+      if (s.equipped) e.equippedCount++;
+    }
+    const topStigmas = [...b.stigmaSkills]
+      .sort((a, b) => b.level - a.level || a.name.localeCompare(b.name))
+      .slice(0, 5)
+      .map((s) => s.name)
+      .sort();
+    if (topStigmas.length > 0) {
+      const combo = topStigmas.join(" + ");
+      stats.equippedStigmaCombos[combo] =
+        (stats.equippedStigmaCombos[combo] || 0) + 1;
+    }
+    for (const s of b.passiveSkills) {
+      const e = (stats.passiveSkills[s.name] ||= {
+        totalLv: 0,
+        count: 0,
+        maxLv: 0,
+      });
+      e.totalLv += s.level;
+      e.count++;
+      e.maxLv = Math.max(e.maxLv, s.level);
+    }
+    for (const a of b.arcanas) {
+      stats.arcanaUsage[a.name] = (stats.arcanaUsage[a.name] || 0) + 1;
+      if (a.mainStat)
+        stats.arcanaMainStats[a.mainStat] =
+          (stats.arcanaMainStats[a.mainStat] || 0) + 1;
+    }
+    for (const s of b.arcanaSets) {
+      if (!stats.arcanaSets[s.name])
+        stats.arcanaSets[s.name] = { count: 0, bonuses: s.bonuses };
+      stats.arcanaSets[s.name].count++;
+    }
+    if (b.arcanaSetCombo) {
+      stats.arcanaSetCombos[b.arcanaSetCombo] =
+        (stats.arcanaSetCombos[b.arcanaSetCombo] || 0) + 1;
+    }
+    for (const eq of b.equipSubStats) {
+      const slotStats = (stats.subStatsBySlot[eq.categoryName] ||= {});
+      for (const s of eq.subStats) {
+        const entry = (slotStats[s.name] ||= { count: 0, values: [] });
+        entry.count++;
+        entry.values.push(s.value);
+      }
+    }
+    for (const eq of b.equipItems || []) {
+      const slotItems = (stats.itemsBySlot[eq.categoryName] ||= {});
+      const existing = slotItems[eq.itemName];
+      if (existing) {
+        existing.count++;
+      } else {
+        slotItems[eq.itemName] = { count: 1, grade: eq.grade };
+      }
+    }
+    stats.scannedPlayers.push({
+      name: b.name,
+      serverId: b.serverId,
+      serverName: b.serverName,
+      race: b.race,
+      region: b.region,
+      faction: b.faction,
+      globalRank: b.globalRank,
+      gearScore: b.gearScore,
+      combatPower: b.combatPower,
+    });
+  }
+  for (const map of [
+    stats.activeSkills,
+    stats.stigmaSkills,
+    stats.passiveSkills,
+  ]) {
+    for (const d of Object.values(map)) {
+      d.avgLv = +(d.totalLv / d.count).toFixed(1);
+    }
+  }
+  return stats;
+}
+
 // Aion 2 item grade → color
-//  API name  →  in-game name  →  color (confirmed ✓)
-//  "Special" →  Special       →  turquoise ✓
-//  "Epic"    →  Heroic        →  dark orange  ✓
-//  "Unique"  →  Unique        →  golden yellow ✓
-//  "Legend"  →  Epic          →  blue  ✓
+//  API name  →  In-game name  →  Color
+//  "Special" →  Special       →  Turquoise
+//  "Epic"    →  Heroic        →  Dark orange
+//  "Unique"  →  Unique        →  Golden yellow
+//  "Legend"  →  Epic          →  Blue
+//  "Rare"    →  Rare          →  Green
+//  "Common"  →  Common        →  Grey
 
 function gradeColor(grade) {
   const map = {
-    special: "#2dd4bf", // turquoise
-    common: "#6b7280", // grey
-    rare: "#22c55e", // green
-    epic: "#c2410c", // dark orange
-    unique: "#eab308", // golden yellow
-    legend: "#3b82f6", // blue
-    heroic: "#a855f7", // purple — placeholder, unconfirmed
+    special: "#2dd4bf", // Turquoise
+    epic: "#c2410c", // Dark orange
+    unique: "#eab308", // Golden yellow
+    legend: "#3b82f6", // Blue
+    rare: "#22c55e", // Green
+    common: "#6b7280", // Grey
   };
   if (grade === null || grade === undefined) return "#e4e4e7";
   const key = typeof grade === "string" ? grade.toLowerCase() : String(grade);
@@ -127,6 +248,9 @@ function gradeColor(grade) {
 export default function Home() {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState(null);
+  const [rawBuilds, setRawBuilds] = useState(null);
+  const [raceFilter, setRaceFilter] = useState("all");
+  const [runeFilter, setRuneFilter] = useState("all");
   const [error, setError] = useState("");
   const [logs, setLogs] = useState([]);
   const [progress, setProgress] = useState({
@@ -140,12 +264,94 @@ export default function Home() {
     limit: 10,
     region: "all",
     serverId: "all",
+    race: "all",
   });
 
   const logContainerRef = useRef(null);
   const resultsLogContainerRef = useRef(null);
 
+  // Derive race from a specific server ID
+  const raceFromServer = (sid) => {
+    if (!sid || sid === "all") return null;
+    const num = parseInt(sid);
+    if (num >= 2000) return "asmodians";
+    if (num >= 1000) return "elyos";
+    return null;
+  };
+
+  // Filtered server list based on selected race
+  const filteredServers =
+    forma.race === "elyos"
+      ? { elyos: ELYOS_SERVERS, asmodian: [] }
+      : forma.race === "asmodians"
+        ? { elyos: [], asmodian: ASMODIAN_SERVERS }
+        : { elyos: ELYOS_SERVERS, asmodian: ASMODIAN_SERVERS };
+
+  // Handle race change — reset server if incompatible
+  const handleRaceChange = (newRace) => {
+    const currentServerRace = raceFromServer(forma.serverId);
+    let newServerId = forma.serverId;
+    if (
+      newRace !== "all" &&
+      currentServerRace &&
+      currentServerRace !== newRace
+    ) {
+      newServerId = "all";
+    }
+    setFormData({ ...forma, race: newRace, serverId: newServerId });
+    setRaceFilter(newRace);
+  };
+
+  // Handle server change — auto-set race if specific server picked
+  const handleServerChange = (newServerId) => {
+    const serverRace = raceFromServer(newServerId);
+    let newRace = forma.race;
+    if (serverRace && forma.race === "all") {
+      newRace = serverRace;
+    }
+    setFormData({ ...forma, serverId: newServerId, race: newRace });
+    if (serverRace) setRaceFilter(serverRace);
+  };
+
   const [mounted, setMounted] = useState(false);
+
+  // Compute filtered/displayed data based on race and rune filters
+  const displayData = useMemo(() => {
+    if (!data) return null;
+    if (!rawBuilds || (raceFilter === "all" && runeFilter === "all"))
+      return data;
+
+    let filtered = rawBuilds;
+
+    if (raceFilter !== "all") {
+      filtered = filtered.filter((b) =>
+        raceFilter === "elyos" ? b.race === "Elyos" : b.race === "Asmo",
+      );
+    }
+
+    if (runeFilter !== "all") {
+      filtered = filtered.filter((b) => {
+        const rune = (b.equipItems || []).find(
+          (e) => e.categoryName === "Rune",
+        );
+        if (!rune) return false;
+        const name = (rune.itemName || "").toLowerCase();
+        if (runeFilter === "pve") return name.includes("clash");
+        if (runeFilter === "pvp") return name.includes("devotion");
+        return true;
+      });
+    }
+
+    if (filtered.length === 0) {
+      return { ...data, stats: clientAggregate([]), count: 0 };
+    }
+
+    return {
+      ...data,
+      stats: clientAggregate(filtered),
+      count: filtered.length,
+    };
+  }, [data, rawBuilds, raceFilter, runeFilter]);
 
   useEffect(() => {
     setMounted(true);
@@ -173,6 +379,7 @@ export default function Home() {
     setLoading(true);
     setError("");
     setData(null);
+    setRawBuilds(null);
     setLogs([]);
     setProgress({ current: 0, total: forma.limit, target: "" });
 
@@ -184,8 +391,8 @@ export default function Home() {
 
       while (!isDone) {
         const requestBody = continuationData
-          ? { ...forma, continuation: continuationData }
-          : { ...forma };
+          ? { ...forma, runeFilter, continuation: continuationData }
+          : { ...forma, runeFilter };
 
         const res = await fetch("/api/scrape", {
           method: "POST",
@@ -257,12 +464,11 @@ export default function Home() {
                       cls: forma.cls,
                       lb: forma.lbType,
                     });
+                    setRawBuilds(event.builds || null);
                     isDone = true;
                   } else if (event.type === "continue") {
-                    cumulativeProcessed += event.processedCount;
-                    allProcessedPlayers = allProcessedPlayers.concat(
-                      event.processedPlayers || [],
-                    );
+                    cumulativeProcessed = event.processedCount;
+                    allProcessedPlayers = event.processedPlayers || [];
                     continuationData = {
                       players: event.players,
                       processedCount: cumulativeProcessed,
@@ -466,30 +672,80 @@ export default function Home() {
             </div>
 
             <div className="input-group">
+              <label>Race</label>
+              <div className="relative">
+                <select
+                  value={forma.race}
+                  onChange={(e) => handleRaceChange(e.target.value)}
+                  className="appearance-none"
+                >
+                  <option value="all">All Races</option>
+                  <option value="elyos">☀️ Elyos</option>
+                  <option value="asmodians">🌙 Asmodians</option>
+                </select>
+                <ChevronDown
+                  className="absolute pointer-events-none"
+                  style={{
+                    right: "14px",
+                    top: "12px",
+                    color: "var(--text-tertiary)",
+                  }}
+                  size={14}
+                />
+              </div>
+            </div>
+
+            <div className="input-group">
               <label>Server</label>
               <div className="relative">
                 <select
                   value={forma.serverId}
-                  onChange={(e) =>
-                    setFormData({ ...forma, serverId: e.target.value })
-                  }
+                  onChange={(e) => handleServerChange(e.target.value)}
                   className="appearance-none"
                 >
                   <option value="all">All Servers</option>
-                  <optgroup label="☀️ Elyos">
-                    {ELYOS_SERVERS.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="🌙 Asmodian">
-                    {ASMODIAN_SERVERS.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </optgroup>
+                  {filteredServers.elyos.length > 0 && (
+                    <optgroup label="☀️ Elyos">
+                      {filteredServers.elyos.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {filteredServers.asmodian.length > 0 && (
+                    <optgroup label="🌙 Asmodian">
+                      {filteredServers.asmodian.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+                <ChevronDown
+                  className="absolute pointer-events-none"
+                  style={{
+                    right: "14px",
+                    top: "12px",
+                    color: "var(--text-tertiary)",
+                  }}
+                  size={14}
+                />
+              </div>
+            </div>
+
+            <div className="input-group">
+              <label>Rune Type</label>
+              <div className="relative">
+                <select
+                  value={runeFilter}
+                  onChange={(e) => setRuneFilter(e.target.value)}
+                  className="appearance-none"
+                >
+                  <option value="all">All Runes</option>
+                  <option value="pve">⚔️ PvE (Clash Rune)</option>
+                  <option value="pvp">🛡️ PvP (Devotion Rune)</option>
                 </select>
                 <ChevronDown
                   className="absolute pointer-events-none"
@@ -572,7 +828,7 @@ export default function Home() {
         <div className="flex-col gap-6" style={{ gridColumn: "span 2" }}>
           <AnimatePresence mode="wait">
             {/* Empty State */}
-            {!data && !loading && (
+            {!displayData && !loading && (
               <motion.div
                 key="empty"
                 {...fadeUp}
@@ -814,7 +1070,7 @@ export default function Home() {
             )}
 
             {/* Results */}
-            {data && !loading && (
+            {displayData && !loading && (
               <motion.div
                 key="results"
                 variants={stagger}
@@ -822,47 +1078,489 @@ export default function Home() {
                 animate="animate"
                 className="flex-col gap-6"
               >
-                {/* Scorecard */}
+                {/* Build Summary + Analysis Complete */}
                 <motion.div
                   variants={fadeUp}
-                  className="glass-panel"
                   style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    background:
-                      "linear-gradient(135deg, var(--bg-elevated), rgba(124,58,237,0.04))",
-                    borderColor: "rgba(124,58,237,0.12)",
+                    background: "var(--bg-elevated)",
+                    border: "1px solid rgba(124,58,237,0.15)",
+                    borderRadius: "var(--radius-lg)",
+                    padding: "0",
+                    overflow: "hidden",
+                    boxShadow:
+                      "0 0 0 1px rgba(255,255,255,0.03), 0 8px 32px rgba(0,0,0,0.4)",
+                    isolation: "isolate",
+                    position: "relative",
                   }}
                 >
-                  <div>
+                  {/* Header strip */}
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      padding: "18px 24px",
+                      background:
+                        "linear-gradient(90deg, rgba(124,58,237,0.08), rgba(52,211,153,0.05))",
+                      borderBottom: "1px solid rgba(255,255,255,0.05)",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "12px",
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: "34px",
+                          height: "34px",
+                          borderRadius: "10px",
+                          background:
+                            "linear-gradient(135deg, rgba(124,58,237,0.3), rgba(52,211,153,0.2))",
+                          border: "1px solid rgba(124,58,237,0.25)",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          flexShrink: 0,
+                        }}
+                      >
+                        <CheckCircle2 size={16} style={{ color: "#34d399" }} />
+                      </div>
+                      <div>
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "8px",
+                          }}
+                        >
+                          <span
+                            style={{
+                              fontSize: "1rem",
+                              fontWeight: 700,
+                              color: "var(--text-primary)",
+                              letterSpacing: "-0.01em",
+                            }}
+                          >
+                            Analysis Complete
+                          </span>
+                          <span
+                            className="badge-success badge"
+                            style={{
+                              fontSize: "0.58rem",
+                              letterSpacing: "0.04em",
+                            }}
+                          >
+                            Done
+                          </span>
+                        </div>
+                        <p
+                          style={{
+                            fontSize: "0.78rem",
+                            color: "var(--text-muted, #6b7280)",
+                            marginTop: "2px",
+                          }}
+                        >
+                          <span
+                            style={{
+                              color: "rgba(255,255,255,0.75)",
+                              fontWeight: 600,
+                            }}
+                          >
+                            {displayData.count}
+                          </span>
+                          {" top "}
+                          <span
+                            style={{
+                              color: "rgba(255,255,255,0.75)",
+                              fontWeight: 600,
+                            }}
+                          >
+                            {displayData.cls}
+                          </span>
+                          {" players · "}
+                          <span
+                            style={{
+                              color: "rgba(255,255,255,0.75)",
+                              fontWeight: 600,
+                            }}
+                          >
+                            {displayData.lb}
+                          </span>
+                        </p>
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "6px",
+                      }}
+                    >
+                      <Zap
+                        size={13}
+                        style={{ color: "#a78bfa", opacity: 0.8 }}
+                      />
+                      <span
+                        style={{
+                          fontSize: "0.72rem",
+                          color: "#a78bfa",
+                          fontWeight: 600,
+                          letterSpacing: "0.05em",
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        Quick Build
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Filter Status Bar */}
+                  {(raceFilter !== "all" || runeFilter !== "all") && (
                     <div
                       style={{
                         display: "flex",
                         alignItems: "center",
                         gap: "10px",
-                        marginBottom: "4px",
+                        padding: "10px 24px",
+                        background: "rgba(0,0,0,0.15)",
+                        borderBottom: "1px solid rgba(255,255,255,0.05)",
                       }}
                     >
-                      <h2 style={{ fontSize: "1.2rem" }}>Analysis Complete</h2>
+                      <Filter
+                        size={13}
+                        style={{ color: "var(--text-tertiary)" }}
+                      />
                       <span
-                        className="badge-success badge"
-                        style={{ fontSize: "0.6rem" }}
+                        style={{
+                          fontSize: "0.65rem",
+                          fontWeight: 600,
+                          color: "var(--text-tertiary)",
+                          textTransform: "uppercase",
+                          letterSpacing: "0.06em",
+                        }}
                       >
-                        Done
+                        Filtered
                       </span>
+                      {raceFilter !== "all" && (
+                        <span
+                          style={{
+                            fontSize: "0.6rem",
+                            padding: "2px 8px",
+                            borderRadius: "4px",
+                            background:
+                              raceFilter === "elyos"
+                                ? "rgba(6,182,212,0.1)"
+                                : "rgba(244,63,94,0.1)",
+                            color:
+                              raceFilter === "elyos" ? "#67e8f9" : "#fda4af",
+                            border: `1px solid ${raceFilter === "elyos" ? "rgba(6,182,212,0.2)" : "rgba(244,63,94,0.2)"}`,
+                            fontWeight: 600,
+                          }}
+                        >
+                          {raceFilter === "elyos" ? "☀️ Elyos" : "🌙 Asmodians"}
+                        </span>
+                      )}
+                      {runeFilter !== "all" && (
+                        <span
+                          style={{
+                            fontSize: "0.6rem",
+                            padding: "2px 8px",
+                            borderRadius: "4px",
+                            background: "rgba(124,58,237,0.1)",
+                            color: "#a78bfa",
+                            border: "1px solid rgba(124,58,237,0.2)",
+                            fontWeight: 600,
+                          }}
+                        >
+                          {runeFilter === "pve"
+                            ? "⚔️ PvE (Clash)"
+                            : "🛡️ PvP (Devotion)"}
+                        </span>
+                      )}
+                      <div
+                        style={{
+                          marginLeft: "auto",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "8px",
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontSize: "0.65rem",
+                            color: "#a78bfa",
+                            fontWeight: 600,
+                          }}
+                        >
+                          {displayData.count} / {data.count} players
+                        </span>
+                        <button
+                          onClick={() => {
+                            setRaceFilter("all");
+                            setRuneFilter("all");
+                            setFormData({ ...forma, race: "all" });
+                          }}
+                          style={{
+                            fontSize: "0.6rem",
+                            padding: "2px 8px",
+                            borderRadius: "4px",
+                            background: "rgba(124,58,237,0.1)",
+                            border: "1px solid rgba(124,58,237,0.2)",
+                            color: "#a78bfa",
+                            cursor: "pointer",
+                            fontWeight: 600,
+                          }}
+                        >
+                          Clear
+                        </button>
+                      </div>
                     </div>
-                    <p className="text-muted" style={{ fontSize: "0.85rem" }}>
-                      <strong style={{ color: "#fff" }}>{data.count}</strong>{" "}
-                      top <strong style={{ color: "#fff" }}>{data.cls}</strong>{" "}
-                      players on{" "}
-                      <strong style={{ color: "#fff" }}>{data.lb}</strong>
-                    </p>
+                  )}
+
+                  {/* No results after filtering */}
+                  {displayData.count === 0 &&
+                    (raceFilter !== "all" || runeFilter !== "all") && (
+                      <div
+                        style={{
+                          padding: "32px 24px",
+                          textAlign: "center",
+                          color: "var(--text-secondary)",
+                          fontSize: "0.85rem",
+                        }}
+                      >
+                        No players match the current filters. Try adjusting Race
+                        or Rune filters.
+                      </div>
+                    )}
+
+                  {/* Skill columns */}
+                  <div className="grid-cols-3" style={{ gap: "0" }}>
+                    {[
+                      {
+                        label: "Core Active",
+                        color: "#60a5fa",
+                        glow: "rgba(96,165,250,0.15)",
+                        border: "rgba(96,165,250,0.12)",
+                        tagBg: "rgba(96,165,250,0.07)",
+                        tagBorder: "rgba(96,165,250,0.18)",
+                        entries: Object.entries(displayData.stats.activeSkills)
+                          .filter(([, d]) => d.avgLv > 0)
+                          .sort((a, b) => b[1].avgLv - a[1].avgLv)
+                          .slice(0, 5),
+                      },
+                      {
+                        label: "Core Passive",
+                        color: "#34d399",
+                        glow: "rgba(52,211,153,0.15)",
+                        border: "rgba(52,211,153,0.12)",
+                        tagBg: "rgba(52,211,153,0.07)",
+                        tagBorder: "rgba(52,211,153,0.18)",
+                        entries: Object.entries(displayData.stats.passiveSkills)
+                          .filter(([, d]) => d.avgLv > 0)
+                          .sort((a, b) => b[1].avgLv - a[1].avgLv)
+                          .slice(0, 5),
+                      },
+                      {
+                        label: "Must-Have Stigmas",
+                        color: "#c084fc",
+                        glow: "rgba(192,132,252,0.15)",
+                        border: "rgba(192,132,252,0.12)",
+                        tagBg: "rgba(192,132,252,0.07)",
+                        tagBorder: "rgba(192,132,252,0.18)",
+                        entries: Object.entries(displayData.stats.stigmaSkills)
+                          .filter(
+                            ([, d]) => d.equippedCount > displayData.count / 2,
+                          )
+                          .sort((a, b) => b[1].avgLv - a[1].avgLv)
+                          .slice(0, 5),
+                      },
+                    ].map((col, ci) => (
+                      <div
+                        key={ci}
+                        style={{
+                          padding: "20px 22px",
+                          borderRight:
+                            ci < 2
+                              ? "1px solid rgba(255,255,255,0.04)"
+                              : "none",
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "7px",
+                            marginBottom: "14px",
+                          }}
+                        >
+                          <span
+                            style={{
+                              width: "6px",
+                              height: "6px",
+                              borderRadius: "50%",
+                              background: col.color,
+                              boxShadow: `0 0 6px ${col.glow}`,
+                              flexShrink: 0,
+                            }}
+                          />
+                          <span
+                            style={{
+                              fontSize: "0.72rem",
+                              fontWeight: 700,
+                              color: col.color,
+                              letterSpacing: "0.06em",
+                              textTransform: "uppercase",
+                            }}
+                          >
+                            {col.label}
+                          </span>
+                        </div>
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: "6px",
+                          }}
+                        >
+                          {col.entries.length > 0 ? (
+                            col.entries.map(([n], i) => (
+                              <div
+                                key={n}
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "8px",
+                                  padding: "5px 10px",
+                                  borderRadius: "6px",
+                                  background: col.tagBg,
+                                  border: `1px solid ${col.tagBorder}`,
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    fontSize: "0.65rem",
+                                    fontWeight: 700,
+                                    color: col.color,
+                                    opacity: 0.6,
+                                    minWidth: "14px",
+                                    fontVariantNumeric: "tabular-nums",
+                                  }}
+                                >
+                                  {i + 1}
+                                </span>
+                                <span
+                                  style={{
+                                    fontSize: "0.78rem",
+                                    color: "var(--text-primary)",
+                                    fontWeight: 500,
+                                    lineHeight: 1.3,
+                                  }}
+                                >
+                                  {n}
+                                </span>
+                              </div>
+                            ))
+                          ) : (
+                            <span
+                              style={{
+                                fontSize: "0.75rem",
+                                color: "var(--text-muted, #6b7280)",
+                              }}
+                            >
+                              —
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                  <CheckCircle2
-                    size={40}
-                    style={{ color: "var(--success)", opacity: 0.7 }}
-                  />
+
+                  {/* Log strip */}
+                  {logs.length > 0 && (
+                    <div
+                      style={{
+                        borderTop: "1px solid rgba(255,255,255,0.05)",
+                      }}
+                    >
+                      <div
+                        style={{
+                          padding: "8px 22px",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          background: "rgba(0,0,0,0.2)",
+                        }}
+                      >
+                        <span
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "6px",
+                            fontSize: "0.62rem",
+                            fontWeight: 600,
+                            color: "var(--text-tertiary)",
+                            textTransform: "uppercase",
+                            letterSpacing: "0.08em",
+                          }}
+                        >
+                          <Terminal size={11} style={{ color: "#a78bfa" }} />
+                          Analysis Logs
+                        </span>
+                        <span
+                          style={{
+                            fontSize: "0.6rem",
+                            color: "var(--text-tertiary)",
+                          }}
+                        >
+                          {logs.length} entries
+                        </span>
+                      </div>
+                      <div
+                        ref={resultsLogContainerRef}
+                        className="custom-scrollbar-slim"
+                        style={{
+                          padding: "10px 22px",
+                          height: "180px",
+                          overflowY: "auto",
+                          fontFamily:
+                            "ui-monospace, SFMono-Regular, Menlo, monospace",
+                          fontSize: "0.68rem",
+                          background: "rgba(0,0,0,0.15)",
+                        }}
+                      >
+                        <div className="flex-col gap-2">
+                          {logs.map((log, i) => {
+                            const levelIcon =
+                              {
+                                SUCCESS: "✅",
+                                INFO: "ℹ️",
+                                WARN: "⚠️",
+                                ERROR: "❌",
+                              }[log.level] || "ℹ️";
+                            const levelClass = `log-${(log.level || "INFO").toLowerCase()}`;
+                            return (
+                              <div
+                                key={i}
+                                className={`log-entry ${levelClass}`}
+                              >
+                                <span className="log-icon">{levelIcon}</span>
+                                <span className="log-time">{log.time}</span>
+                                {log.context && (
+                                  <span className="log-context">
+                                    {log.context}
+                                  </span>
+                                )}
+                                <span className="log-message">{log.text}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </motion.div>
 
                 {/* Active + Passive Skills */}
@@ -888,7 +1586,7 @@ export default function Home() {
                         paddingRight: "8px",
                       }}
                     >
-                      {Object.entries(data.stats.activeSkills)
+                      {Object.entries(displayData.stats.activeSkills)
                         .sort((a, b) => b[1].avgLv - a[1].avgLv)
                         .map(([name, stat], i) => (
                           <div
@@ -962,7 +1660,7 @@ export default function Home() {
                         paddingRight: "8px",
                       }}
                     >
-                      {Object.entries(data.stats.passiveSkills)
+                      {Object.entries(displayData.stats.passiveSkills)
                         .sort((a, b) => b[1].avgLv - a[1].avgLv)
                         .map(([name, stat], i) => (
                           <div
@@ -1040,12 +1738,12 @@ export default function Home() {
                         paddingRight: "8px",
                       }}
                     >
-                      {Object.entries(data.stats.stigmaSkills)
+                      {Object.entries(displayData.stats.stigmaSkills)
                         .sort((a, b) => b[1].equippedCount - a[1].equippedCount)
                         .map(([name, stat], i) => {
                           const equipPct = percent(
                             stat.equippedCount,
-                            data.count,
+                            displayData.count,
                           );
                           return (
                             <div
@@ -1108,7 +1806,8 @@ export default function Home() {
                     </div>
                   </motion.div>
 
-                  {Object.keys(data.stats.equippedStigmaCombos).length > 0 && (
+                  {Object.keys(displayData.stats.equippedStigmaCombos).length >
+                    0 && (
                     <motion.div variants={fadeUp} className="glass-panel">
                       <h3 className="mb-4 flex items-center gap-2">
                         <Sparkles size={16} style={{ color: "#38bdf8" }} />
@@ -1118,11 +1817,11 @@ export default function Home() {
                         className="flex-col gap-3 custom-scrollbar-slim"
                         style={{ maxHeight: "340px", overflowY: "auto" }}
                       >
-                        {Object.entries(data.stats.equippedStigmaCombos)
+                        {Object.entries(displayData.stats.equippedStigmaCombos)
                           .sort((a, b) => b[1] - a[1])
                           .slice(0, 8)
                           .map(([combo, count], i) => {
-                            const pct = percent(count, data.count);
+                            const pct = percent(count, displayData.count);
                             return (
                               <div
                                 key={combo}
@@ -1196,7 +1895,7 @@ export default function Home() {
                 </div>
 
                 {/* Arcana Combos */}
-                {Object.keys(data.stats.arcanaSetCombos).length > 0 && (
+                {Object.keys(displayData.stats.arcanaSetCombos).length > 0 && (
                   <motion.div variants={fadeUp} className="glass-panel">
                     <h3 className="mb-4 flex items-center gap-2">
                       <Layers size={16} style={{ color: "#818cf8" }} />
@@ -1206,11 +1905,11 @@ export default function Home() {
                       className="flex-col gap-2 custom-scrollbar-slim"
                       style={{ maxHeight: "300px", overflowY: "auto" }}
                     >
-                      {Object.entries(data.stats.arcanaSetCombos)
+                      {Object.entries(displayData.stats.arcanaSetCombos)
                         .sort((a, b) => b[1] - a[1])
                         .slice(0, 10)
                         .map(([combo, count], i) => {
-                          const pct = percent(count, data.count);
+                          const pct = percent(count, displayData.count);
                           const sets = combo.split(" + ").map((s) => {
                             const match = s.match(/(.+)\((\d+)\)/);
                             if (match)
@@ -1329,7 +2028,8 @@ export default function Home() {
 
                 {/* Arcana Stats + Cards */}
                 <div className="grid-cols-2">
-                  {Object.keys(data.stats.arcanaMainStats).length > 0 && (
+                  {Object.keys(displayData.stats.arcanaMainStats).length >
+                    0 && (
                     <motion.div variants={fadeUp} className="glass-panel">
                       <h3 className="mb-6 flex items-center gap-2">
                         <span
@@ -1352,12 +2052,12 @@ export default function Home() {
                         className="flex-col gap-4 custom-scrollbar-slim"
                         style={{ maxHeight: "340px", overflowY: "auto" }}
                       >
-                        {Object.entries(data.stats.arcanaMainStats)
+                        {Object.entries(displayData.stats.arcanaMainStats)
                           .sort((a, b) => b[1] - a[1])
                           .slice(0, 15)
                           .map(([stat, count]) => {
                             const totalSlots = Object.values(
-                              data.stats.arcanaMainStats,
+                              displayData.stats.arcanaMainStats,
                             ).reduce((sum, v) => sum + v, 0);
                             const activePct = percent(count, totalSlots);
                             return (
@@ -1408,7 +2108,7 @@ export default function Home() {
                     </motion.div>
                   )}
 
-                  {Object.keys(data.stats.arcanaUsage).length > 0 && (
+                  {Object.keys(displayData.stats.arcanaUsage).length > 0 && (
                     <motion.div variants={fadeUp} className="glass-panel">
                       <h3 className="mb-6 flex items-center gap-2">
                         <span
@@ -1435,7 +2135,7 @@ export default function Home() {
                           overflowY: "auto",
                         }}
                       >
-                        {Object.entries(data.stats.arcanaUsage)
+                        {Object.entries(displayData.stats.arcanaUsage)
                           .sort((a, b) => b[1] - a[1])
                           .slice(0, 15)
                           .map(([card, count], i) => (
@@ -1476,7 +2176,7 @@ export default function Home() {
                                 className="badge badge-success"
                                 style={{ fontSize: "0.6rem" }}
                               >
-                                {percent(count, data.count)}%
+                                {percent(count, displayData.count)}%
                               </span>
                             </div>
                           ))}
@@ -1486,7 +2186,7 @@ export default function Home() {
                 </div>
 
                 {/* Equipment Substats */}
-                {Object.keys(data.stats.subStatsBySlot).length > 0 && (
+                {Object.keys(displayData.stats.subStatsBySlot).length > 0 && (
                   <motion.div variants={fadeUp} className="glass-panel">
                     <h3 className="mb-4 flex items-center gap-2">
                       <span
@@ -1558,19 +2258,7 @@ export default function Home() {
                     </div>
 
                     {(() => {
-                      const WEAPON_SLOTS = [
-                        "Mace", // Cleric
-                        "Spellbook", // Sorcerer
-                        "Staff", // Chanter
-                        "Greatsword", // Gladiator
-                        "Longsword", // Templar
-                        "Dagger", // Assassin
-                        "Bow", // Ranger
-                        "Orb", // Spiritmaster
-                        "Guard", // Everyone
-                        "MainHand",
-                        "SubHand",
-                      ];
+                      const WEAPON_SLOTS = ["Main Hand", "Guard"];
                       const ARMOR_SLOTS = [
                         "Top",
                         "Legs",
@@ -1600,7 +2288,7 @@ export default function Home() {
                       ];
 
                       const allSlots = Object.entries(
-                        data.stats.subStatsBySlot,
+                        displayData.stats.subStatsBySlot,
                       ).filter(([, stats]) => Object.keys(stats).length > 0);
 
                       const matchesGroup = (slot, slotList) =>
@@ -1857,7 +2545,7 @@ export default function Home() {
                 )}
 
                 {/* Most Used Items by Slot */}
-                {Object.keys(data.stats.itemsBySlot).length > 0 && (
+                {Object.keys(displayData.stats.itemsBySlot).length > 0 && (
                   <motion.div variants={fadeUp} className="glass-panel">
                     <h3 className="mb-4 flex items-center gap-2">
                       <span
@@ -1878,19 +2566,7 @@ export default function Home() {
                     </h3>
 
                     {(() => {
-                      const WEAPON_SLOTS = [
-                        "Mace", // Cleric
-                        "Spellbook", // Sorcerer
-                        "Staff", // Chanter
-                        "Greatsword", // Gladiator
-                        "Longsword", // Templar
-                        "Dagger", // Assassin
-                        "Bow", // Ranger
-                        "Orb", // Spiritmaster
-                        "Guard", // Everyone
-                        "MainHand",
-                        "SubHand",
-                      ];
+                      const WEAPON_SLOTS = ["Main Hand", "Guard"];
                       const ARMOR_SLOTS = [
                         "Top",
                         "Legs",
@@ -1920,7 +2596,7 @@ export default function Home() {
                       ];
 
                       const allSlots = Object.entries(
-                        data.stats.itemsBySlot,
+                        displayData.stats.itemsBySlot,
                       ).filter(([, items]) => Object.keys(items).length > 0);
 
                       const matchesGroup = (slot, slotList) =>
@@ -1931,19 +2607,10 @@ export default function Home() {
                         allSlots.filter(([slot]) =>
                           matchesGroup(slot, slotList),
                         );
-                      const allKnownSlots = [
-                        ...WEAPON_SLOTS,
-                        ...ARMOR_SLOTS,
-                        ...ACCESSORY_SLOTS,
-                        ...ARCANA_SLOTS,
-                      ];
-                      const remainingSlots = allSlots.filter(
-                        ([slot]) => !matchesGroup(slot, allKnownSlots),
-                      );
 
                       const groups = [
                         {
-                          label: "Weapons & Guard",
+                          label: "Main Hand & Guard",
                           icon: "⚔️",
                           slots: groupSlots(WEAPON_SLOTS),
                         },
@@ -1960,10 +2627,7 @@ export default function Home() {
                         {
                           label: "Arcanas",
                           icon: "✨",
-                          slots: [
-                            ...groupSlots(ARCANA_SLOTS),
-                            ...remainingSlots,
-                          ],
+                          slots: groupSlots(ARCANA_SLOTS),
                         },
                       ].filter((g) => g.slots.length > 0);
 
@@ -2018,7 +2682,7 @@ export default function Home() {
                                     {sorted.map(
                                       ([itemName, { count, grade }], i) => {
                                         const pct = (
-                                          (count / data.count) *
+                                          (count / displayData.count) *
                                           100
                                         ).toFixed(0);
                                         const color = gradeColor(grade);
@@ -2097,99 +2761,9 @@ export default function Home() {
                   </motion.div>
                 )}
 
-                {/* Build Summary */}
-                <motion.div
-                  variants={fadeUp}
-                  className="glass-panel"
-                  style={{
-                    background:
-                      "linear-gradient(135deg, var(--bg-elevated), rgba(16,185,129,0.03))",
-                    borderColor: "rgba(16,185,129,0.1)",
-                  }}
-                >
-                  <h3 className="mb-4 flex items-center gap-2">
-                    <Zap size={18} style={{ color: "#34d399" }} />
-                    Quick Build Summary
-                  </h3>
-                  <div className="grid-cols-3" style={{ fontSize: "0.85rem" }}>
-                    <div>
-                      <h4
-                        style={{
-                          color: "#34d399",
-                          marginBottom: "8px",
-                          fontWeight: 600,
-                          fontSize: "0.8rem",
-                        }}
-                      >
-                        Core Active
-                      </h4>
-                      <ul
-                        className="list-disc list-inside text-muted"
-                        style={{ fontSize: "0.8rem" }}
-                      >
-                        {Object.entries(data.stats.activeSkills)
-                          .filter(([, d]) => d.avgLv > 0)
-                          .sort((a, b) => b[1].avgLv - a[1].avgLv)
-                          .slice(0, 5)
-                          .map(([n]) => (
-                            <li key={n}>{n}</li>
-                          ))}
-                      </ul>
-                    </div>
-                    <div>
-                      <h4
-                        style={{
-                          color: "#34d399",
-                          marginBottom: "8px",
-                          fontWeight: 600,
-                          fontSize: "0.8rem",
-                        }}
-                      >
-                        Core Passive
-                      </h4>
-                      <ul
-                        className="list-disc list-inside text-muted"
-                        style={{ fontSize: "0.8rem" }}
-                      >
-                        {Object.entries(data.stats.passiveSkills)
-                          .filter(([, d]) => d.avgLv > 0)
-                          .sort((a, b) => b[1].avgLv - a[1].avgLv)
-                          .slice(0, 5)
-                          .map(([n]) => (
-                            <li key={n}>{n}</li>
-                          ))}
-                      </ul>
-                    </div>
-                    <div>
-                      <h4
-                        style={{
-                          color: "#34d399",
-                          marginBottom: "8px",
-                          fontWeight: 600,
-                          fontSize: "0.8rem",
-                        }}
-                      >
-                        Must-Have Stigmas
-                      </h4>
-                      <ul
-                        className="list-disc list-inside text-muted"
-                        style={{ fontSize: "0.8rem" }}
-                      >
-                        {Object.entries(data.stats.stigmaSkills)
-                          .filter(([, d]) => d.equippedCount > data.count / 2)
-                          .sort((a, b) => b[1].avgLv - a[1].avgLv)
-                          .slice(0, 5)
-                          .map(([n]) => (
-                            <li key={n}>{n}</li>
-                          ))}
-                      </ul>
-                    </div>
-                  </div>
-                </motion.div>
-
                 {/* Player Credits */}
-                {data.stats.scannedPlayers &&
-                  data.stats.scannedPlayers.length > 0 && (
+                {displayData.stats.scannedPlayers &&
+                  displayData.stats.scannedPlayers.length > 0 && (
                     <motion.div variants={fadeUp} className="glass-panel">
                       <h3 className="mb-4 flex items-center gap-2">
                         <Trophy size={18} style={{ color: "#fbbf24" }} />
@@ -2213,7 +2787,7 @@ export default function Home() {
                         }}
                         className="custom-scrollbar-slim"
                       >
-                        {[...data.stats.scannedPlayers]
+                        {[...displayData.stats.scannedPlayers]
                           .sort((a, b) => a.globalRank - b.globalRank)
                           .map((p, idx) => (
                             <div
@@ -2325,94 +2899,6 @@ export default function Home() {
                       </div>
                     </motion.div>
                   )}
-
-                {/* Log Viewer (persistent after analysis) */}
-                {logs.length > 0 && (
-                  <motion.div variants={fadeUp} className="glass-panel">
-                    <div
-                      style={{
-                        background: "rgba(0,0,0,0.35)",
-                        borderRadius: "var(--radius-md)",
-                        border: "1px solid rgba(255,255,255,0.04)",
-                        overflow: "hidden",
-                      }}
-                    >
-                      <div
-                        style={{
-                          padding: "10px 16px",
-                          borderBottom: "1px solid rgba(255,255,255,0.04)",
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                        }}
-                      >
-                        <span
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: "8px",
-                            fontSize: "0.65rem",
-                            fontWeight: 600,
-                            color: "var(--text-tertiary)",
-                            textTransform: "uppercase",
-                            letterSpacing: "0.08em",
-                          }}
-                        >
-                          <Terminal size={12} style={{ color: "#a78bfa" }} />
-                          Analysis Logs
-                        </span>
-                        <span
-                          style={{
-                            fontSize: "0.6rem",
-                            color: "var(--text-tertiary)",
-                          }}
-                        >
-                          {logs.length} entries
-                        </span>
-                      </div>
-                      <div
-                        ref={resultsLogContainerRef}
-                        className="custom-scrollbar-slim"
-                        style={{
-                          padding: "12px 16px",
-                          height: "200px",
-                          overflowY: "auto",
-                          fontFamily:
-                            "ui-monospace, SFMono-Regular, Menlo, monospace",
-                          fontSize: "0.7rem",
-                        }}
-                      >
-                        <div className="flex-col gap-2">
-                          {logs.map((log, i) => {
-                            const levelIcon =
-                              {
-                                SUCCESS: "\u2705",
-                                INFO: "\u2139\ufe0f",
-                                WARN: "\u26a0\ufe0f",
-                                ERROR: "\u274c",
-                              }[log.level] || "\u2139\ufe0f";
-                            const levelClass = `log-${(log.level || "INFO").toLowerCase()}`;
-                            return (
-                              <div
-                                key={i}
-                                className={`log-entry ${levelClass}`}
-                              >
-                                <span className="log-icon">{levelIcon}</span>
-                                <span className="log-time">{log.time}</span>
-                                {log.context && (
-                                  <span className="log-context">
-                                    {log.context}
-                                  </span>
-                                )}
-                                <span className="log-message">{log.text}</span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </div>
-                  </motion.div>
-                )}
               </motion.div>
             )}
           </AnimatePresence>
