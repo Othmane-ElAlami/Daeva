@@ -38,21 +38,17 @@
   inset: 0;
   z-index: 0;
   background: linear-gradient(160deg, #05060a 0%, #0a0818 40%, #080612 70%, #050408 100%);
-  background-size: 200% 200%;
-  animation: voidShift 20s ease-in-out infinite alternate;
   opacity: 0;
   transition: opacity 800ms ease;
+  transform: translateZ(0); /* Force GPU layer, prevent repaint cascade on mobile Chromium */
 }
 
 .cin-bg-void--active {
   opacity: 1;
 }
 
-@keyframes voidShift {
-  0% { background-position: 0% 0%; }
-  50% { background-position: 100% 50%; }
-  100% { background-position: 50% 100%; }
-}
+/* voidShift removed — background-position animation forces CPU rasterization on
+   position: fixed layers every frame, causing visible flashing on Chromium Android */
 
 .cin-bg-stars {
   position: fixed;
@@ -129,6 +125,7 @@
   background: radial-gradient(ellipse, rgba(185, 28, 28, 0.04) 0%, transparent 70%);
   filter: blur(60px);
   animation: wispFloat1 12s ease-in-out infinite alternate;
+  will-change: transform; /* Keeps blur layer promoted, prevents teardown during transform animation */
 }
 
 .cin-bg-wisps::after {
@@ -141,6 +138,7 @@
   background: radial-gradient(ellipse, rgba(30, 58, 138, 0.025) 0%, transparent 70%);
   filter: blur(50px);
   animation: wispFloat2 15s ease-in-out infinite alternate;
+  will-change: transform;
 }
 
 @keyframes wispFloat1 {
@@ -254,7 +252,7 @@
   position: absolute;
   border-radius: 50%;
   filter: blur(80px);
-  will-change: opacity;
+  will-change: transform, opacity; /* Match actual animated properties in ambientPulse */
 }
 
 .cin-light--1 {
@@ -360,13 +358,14 @@
 .cin-nav-logo-mark {
   font-size: 1.5rem;
   color: var(--accent-light);
-  filter: drop-shadow(0 0 8px var(--accent-glow));
+  filter: drop-shadow(0 0 10px var(--accent-glow)); /* Static filter — no animation to avoid repaints */
   animation: navLogoPulse 3s ease-in-out infinite;
 }
 
 @keyframes navLogoPulse {
-  0%, 100% { filter: drop-shadow(0 0 8px rgba(185, 28, 28, 0.2)); }
-  50% { filter: drop-shadow(0 0 16px rgba(185, 28, 28, 0.4)); }
+  /* Animate opacity instead of filter: drop-shadow to keep on compositor thread */
+  0%, 100% { opacity: 0.8; }
+  50% { opacity: 1; }
 }
 
 .cin-nav-logo-text {
@@ -650,11 +649,10 @@
   overflow: hidden;
   transition: transform 0.2s var(--spring-ease),
     box-shadow 0.3s var(--smooth-ease),
-    letter-spacing 0.3s ease,
-    background-position 0.4s ease;
+    letter-spacing 0.3s ease;
   box-shadow: 0 4px 24px var(--accent-glow),
     0 0 0 1px rgba(185, 28, 28, 0.3) inset;
-  animation: ctaGlow 3s ease-in-out infinite;
+  /* ctaGlow animation removed — box-shadow animation is non-compositable and causes repaints */
 }
 
 .cin-cta-primary::before {
@@ -683,10 +681,7 @@
   transform: translateY(0) scale(1);
 }
 
-@keyframes ctaGlow {
-  0%, 100% { box-shadow: 0 4px 24px var(--accent-glow), 0 0 0 1px rgba(185, 28, 28, 0.3) inset; }
-  50% { box-shadow: 0 4px 32px rgba(185, 28, 28, 0.35), 0 0 0 1px rgba(185, 28, 28, 0.4) inset; }
-}
+/* ctaGlow removed — animating box-shadow forces CPU repaints, replaced by static box-shadow */
 
 /* Hero Trust Signals */
 .cin-hero-trust {
@@ -1035,6 +1030,20 @@
 }
 
 @media (max-width: 768px) {
+  /* Disable backdrop-filter on mobile: animated fixed backgrounds behind a backdrop-filter
+     element force full recomposites in Chromium Android, causing visible white flashes */
+  .cin-nav {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: rgba(5, 6, 10, 0.93);
+  }
+
+  .cin-widget {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: rgba(14, 16, 24, 0.97);
+  }
+
   .cin-nav-cta {
     display: none;
   }
