@@ -210,8 +210,8 @@ export async function POST(req) {
 
   // Tuning: max concurrent API requests for player data
   const concurrency = 5;
-  const maxRetries = 2;
-  const retryBaseMs = 400;
+  const maxRetries = 5;
+  const retryBaseMs = 600;
   const budget = createBudget();
 
   const encoder = new TextEncoder();

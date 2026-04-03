@@ -206,11 +206,18 @@ export async function fetchJSON(
   return res.json();
 }
 
+// Shared cooldown state for coordinating rate-limit backoff across concurrent workers.
+// When any request hits 429, all workers wait before retrying.
+let _rateLimitCooldownUntil = 0;
+
 export async function fetchWithRetry(fn, maxAttempts = 3, baseDelayMs = 500, budget = null) {
   let lastErr;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     // Don't retry if budget is exhausted
     if (budget && !budget.canAfford()) throw new subrequestBudgetExhausted(budget.used);
+    // Honor shared cooldown from other workers that hit 429
+    const cooldownRemaining = _rateLimitCooldownUntil - Date.now();
+    if (cooldownRemaining > 0) await sleep(cooldownRemaining);
     try {
       return await fn();
     } catch (err) {
@@ -220,7 +227,10 @@ export async function fetchWithRetry(fn, maxAttempts = 3, baseDelayMs = 500, bud
       if (attempt < maxAttempts) {
         let wait = baseDelayMs * Math.pow(2, attempt - 1);
         if (err.message && err.message.includes("HTTP 429")) {
-          wait += 5000;
+          // Aggressive backoff for rate limits: 8s, 15s, 25s, 40s...
+          wait = 8000 * Math.pow(1.8, attempt - 1);
+          // Signal all workers to back off
+          _rateLimitCooldownUntil = Date.now() + wait;
         }
         await sleep(wait);
       }
