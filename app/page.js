@@ -3,7 +3,7 @@
 import "./homepage.css";
 import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
-import { ArrowRight, Menu, X } from "lucide-react";
+import { ArrowRight, Menu, X, Zap, BarChart3, Target } from "lucide-react";
 
 /* ═══════════════════════════════════════════
    DATA
@@ -12,13 +12,33 @@ import { ArrowRight, Menu, X } from "lucide-react";
 const SCRAMBLE_GLYPHS = "αβγδεζηθλμξπστφχψωᚠᚢᚦᚨᚱᚲᛃᛈᛉᛊᛏ∑∆∏≈∞⊕⊗∇";
 
 const STATS = [
-  { value: "7", label: "Leaderboards" },
-  { value: "42", label: "Servers" },
-  { value: "8", label: "Classes" },
-  { value: "2", label: "Regions" },
+  { value: 42, label: "Servers Tracked", suffix: "" },
+  { value: 8, label: "Classes Analyzed", suffix: "" },
+  { value: 7, label: "Leaderboard Types", suffix: "" },
+  { value: 2, label: "Regions Supported", suffix: "" },
 ];
 
-// Map arcana set names to CSS tag classes
+const FEATURES = [
+  {
+    Icon: Zap,
+    title: "Real-Time Scraping",
+    description:
+      "Extract builds from top-ranked players in real-time. Intelligent caching and rate limiting across every server.",
+  },
+  {
+    Icon: BarChart3,
+    title: "Meta Analysis",
+    description:
+      "Automatic aggregation of skill distributions, equipment substats, and arcana set synergies from live data.",
+  },
+  {
+    Icon: Target,
+    title: "Build Intelligence",
+    description:
+      "Data-driven insights for every class. Compare stigma combos, passives, and gear choices across leaderboards.",
+  },
+];
+
 const ARCANA_TAG_COLORS = {
   "pure blood": "cin-widget-arcana-tag--red",
   frenzy: "cin-widget-arcana-tag--orange",
@@ -90,11 +110,32 @@ function useReducedMotion() {
   return reduced;
 }
 
+function useInView(threshold = 0.15) {
+  const ref = useRef(null);
+  const [inView, setInView] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setInView(true);
+          observer.unobserve(el);
+        }
+      },
+      { threshold }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [threshold]);
+  return [ref, inView];
+}
+
 /* ═══════════════════════════════════════════
-   CINEMATIC HEADLINE
+   CINEMATIC HEADLINE — scramble reveal
    ═══════════════════════════════════════════ */
 
-function CinematicHeadline({ text, startDelay = 1200, className = "" }) {
+function CinematicHeadline({ text, startDelay = 800, className = "" }) {
   const charsRef = useRef([]);
   const [started, setStarted] = useState(false);
   const reduced = useReducedMotion();
@@ -110,17 +151,14 @@ function CinematicHeadline({ text, startDelay = 1200, className = "" }) {
 
   useEffect(() => {
     if (!started || reduced) return;
-
     charsRef.current.forEach((el, i) => {
       if (!el) return;
       const finalChar = text[i];
       const delay = i * 80;
       const scrambleFrames = 10;
       let frame = 0;
-
       const timer = setTimeout(() => {
         el.classList.add("cin-hero-char--visible");
-
         const interval = setInterval(() => {
           if (frame < scrambleFrames) {
             el.textContent = SCRAMBLE_GLYPHS[Math.floor(Math.random() * SCRAMBLE_GLYPHS.length)];
@@ -133,7 +171,6 @@ function CinematicHeadline({ text, startDelay = 1200, className = "" }) {
           }
         }, 40);
       }, delay);
-
       return () => clearTimeout(timer);
     });
   }, [started, text, reduced]);
@@ -170,11 +207,9 @@ function ScrambleText({ text, as: Tag = "span", className = "" }) {
     const el = elRef.current;
     if (!el || isScrambling.current) return;
     isScrambling.current = true;
-
     const length = text.length;
     const maxFrames = length + 12;
     let frame = 0;
-
     const tick = () => {
       let output = "";
       for (let i = 0; i < length; i++) {
@@ -203,7 +238,43 @@ function ScrambleText({ text, as: Tag = "span", className = "" }) {
 }
 
 /* ═══════════════════════════════════════════
-   META WIDGET
+   COUNT-UP — animates numbers on scroll
+   ═══════════════════════════════════════════ */
+
+function CountUp({ end, suffix = "", duration = 1800 }) {
+  const [count, setCount] = useState(0);
+  const [ref, inView] = useInView(0.3);
+  const counted = useRef(false);
+  const reduced = useReducedMotion();
+
+  useEffect(() => {
+    if (!inView || counted.current) return;
+    counted.current = true;
+    if (reduced) {
+      setCount(end);
+      return;
+    }
+    const startTime = performance.now();
+    function tick(now) {
+      const elapsed = now - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      setCount(Math.floor(eased * end));
+      if (progress < 1) requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  }, [inView, end, duration, reduced]);
+
+  return (
+    <span ref={ref}>
+      {count}
+      {suffix}
+    </span>
+  );
+}
+
+/* ═══════════════════════════════════════════
+   META WIDGET — live data preview
    ═══════════════════════════════════════════ */
 
 function MetaWidget({ active }) {
@@ -234,13 +305,11 @@ function MetaWidget({ active }) {
 
   useEffect(() => {
     if (!active || metaData.length === 0) return;
-
     const initTimers = [
       setTimeout(() => setSectionsVisible((p) => [...p, 0]), 150),
       setTimeout(() => setSectionsVisible((p) => [...p, 1]), 300),
       setTimeout(() => setSectionsVisible((p) => [...p, 2]), 450),
     ];
-
     const intervalId = setInterval(() => {
       setSectionsVisible([]);
       setTimeout(() => {
@@ -250,7 +319,6 @@ function MetaWidget({ active }) {
         setTimeout(() => setSectionsVisible((p) => [...p, 2]), 450);
       }, 500);
     }, 6000);
-
     return () => {
       initTimers.forEach(clearTimeout);
       clearInterval(intervalId);
@@ -276,9 +344,12 @@ function MetaWidget({ active }) {
           className="cin-widget-body cin-widget-body--meta"
           style={{ textAlign: "center", padding: "40px 20px" }}
         >
-          <div className="cin-meta-label" style={{ color: "var(--text-secondary)" }}>
+          <div className="cin-meta-label" style={{ color: "var(--hp-text-body)" }}>
             No snapshot data yet — run an analysis in the{" "}
-            <Link href="/analyzer" style={{ color: "var(--accent)", textDecoration: "underline" }}>
+            <Link
+              href="/analyzer"
+              style={{ color: "var(--hp-accent)", textDecoration: "underline" }}
+            >
               Analyzer
             </Link>{" "}
             to populate live data.
@@ -288,7 +359,7 @@ function MetaWidget({ active }) {
           <div className="cin-widget-updated">
             <span
               className="cin-widget-updated-dot"
-              style={{ background: "var(--text-secondary)" }}
+              style={{ background: "var(--hp-text-body)" }}
             />
             Awaiting Data
           </div>
@@ -333,17 +404,13 @@ function MetaWidget({ active }) {
           </div>
           <div
             className="cin-meta-label"
-            style={{
-              marginTop: "4px",
-              fontSize: "0.65rem",
-              color: "var(--text-secondary)",
-            }}
+            style={{ marginTop: "4px", fontSize: "0.65rem", color: "var(--hp-text-body)" }}
           >
             Based on {currentData.totalPlayers} top players
           </div>
           <div
             className="cin-meta-label"
-            style={{ marginTop: "12px", color: "var(--text-secondary)" }}
+            style={{ marginTop: "12px", color: "var(--hp-text-body)" }}
           >
             Stigmas
           </div>
@@ -362,7 +429,7 @@ function MetaWidget({ active }) {
         <div
           className={`cin-meta-section ${sectionsVisible.includes(1) ? "cin-meta-section--visible" : ""}`}
         >
-          <div className="cin-meta-label" style={{ color: "var(--text-secondary)" }}>
+          <div className="cin-meta-label" style={{ color: "var(--hp-text-body)" }}>
             Skills
           </div>
           <div className="cin-meta-skills">
@@ -378,7 +445,7 @@ function MetaWidget({ active }) {
         <div
           className={`cin-meta-section ${sectionsVisible.includes(2) ? "cin-meta-section--visible" : ""}`}
         >
-          <div className="cin-meta-label" style={{ color: "var(--text-secondary)" }}>
+          <div className="cin-meta-label" style={{ color: "var(--hp-text-body)" }}>
             Passives
           </div>
           <div className="cin-meta-skills">
@@ -416,7 +483,7 @@ function MetaWidget({ active }) {
 }
 
 /* ═══════════════════════════════════════════
-   MAIN HOMEPAGE — Single-screen layout
+   MAIN HOMEPAGE
    ═══════════════════════════════════════════ */
 
 export default function HomePage() {
@@ -424,23 +491,26 @@ export default function HomePage() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const reduced = useReducedMotion();
 
-  /* ── Intro Sequence ── */
+  /* Scroll-triggered section refs */
+  const [proofRef, proofInView] = useInView(0.2);
+  const [featRef, featInView] = useInView(0.1);
+  const [statsRef, statsInView] = useInView(0.2);
+  const [ctaRef, ctaInView] = useInView(0.2);
+
+  /* Intro sequence — staggered load */
   useEffect(() => {
     if (reduced) {
       setIntroPhase(10);
       return;
     }
-
     const timers = [
       setTimeout(() => setIntroPhase(1), 100),
-      setTimeout(() => setIntroPhase(2), 400),
-      setTimeout(() => setIntroPhase(3), 800),
-      setTimeout(() => setIntroPhase(4), 1000),
-      setTimeout(() => setIntroPhase(5), 1200),
-      setTimeout(() => setIntroPhase(6), 1600),
-      setTimeout(() => setIntroPhase(7), 1900),
-      setTimeout(() => setIntroPhase(8), 2100),
-      setTimeout(() => setIntroPhase(9), 2500),
+      setTimeout(() => setIntroPhase(2), 300),
+      setTimeout(() => setIntroPhase(3), 500),
+      setTimeout(() => setIntroPhase(4), 700),
+      setTimeout(() => setIntroPhase(5), 850),
+      setTimeout(() => setIntroPhase(6), 1050),
+      setTimeout(() => setIntroPhase(7), 1300),
     ];
     return () => timers.forEach(clearTimeout);
   }, [reduced]);
@@ -448,41 +518,16 @@ export default function HomePage() {
   return (
     <div className="cin-page">
       {/* ═══ BACKGROUND SYSTEM ═══ */}
-      <div
-        className={`cin-bg-void ${introPhase >= 1 ? "cin-bg-void--active" : ""}`}
-        aria-hidden="true"
-      />
-      <div
-        className={`cin-bg-stars ${introPhase >= 1 ? "cin-bg-stars--active" : ""}`}
-        aria-hidden="true"
-      />
-      <div
-        className={`cin-bg-wisps ${introPhase >= 2 ? "cin-bg-wisps--active" : ""}`}
-        aria-hidden="true"
-      />
-      <div
-        className={`cin-bg-geo ${introPhase >= 3 ? "cin-bg-geo--active" : ""}`}
-        aria-hidden="true"
-      >
-        <div className="cin-sigil cin-sigil--1" />
-        <div className="cin-sigil cin-sigil--2" />
-        <div className="cin-sigil cin-sigil--3" />
-        <div className="cin-sigil-cross--1" />
+      <div className="cin-bg" aria-hidden="true">
+        <div className={`cin-bg-base ${introPhase >= 1 ? "cin-bg-base--active" : ""}`} />
+        <div className="cin-bg-grid" />
+        <div className="cin-bg-glow" />
+        <div className="cin-bg-grain" />
       </div>
-      <div
-        className={`cin-lights ${introPhase >= 2 ? "cin-lights--active" : ""}`}
-        aria-hidden="true"
-      >
-        <div className="cin-light cin-light--1" />
-        <div className="cin-light cin-light--2" />
-        <div className="cin-light cin-light--3" />
-      </div>
-      <div className="cin-grain" aria-hidden="true" />
-      <div className="cin-vignette" aria-hidden="true" />
 
       {/* ═══ NAVIGATION ═══ */}
       <nav
-        className={`cin-nav ${introPhase >= 4 ? "cin-nav--visible" : ""}`}
+        className={`cin-nav ${introPhase >= 2 ? "cin-nav--visible" : ""}`}
         role="navigation"
         aria-label="Main navigation"
       >
@@ -492,10 +537,18 @@ export default function HomePage() {
             <span className="cin-nav-logo-text">DAEVA</span>
           </Link>
 
-          <Link href="/analyzer" className="cin-nav-cta">
-            Launch Analyzer
-            <ArrowRight size={14} />
-          </Link>
+          <div className="cin-nav-links">
+            <a href="#features" className="cin-nav-link">
+              Features
+            </a>
+            <a href="#stats" className="cin-nav-link">
+              Stats
+            </a>
+            <Link href="/analyzer" className="cin-nav-cta">
+              Launch Analyzer
+              <ArrowRight size={14} />
+            </Link>
+          </div>
 
           <button
             className="cin-nav-mobile-btn"
@@ -511,6 +564,22 @@ export default function HomePage() {
           className={`cin-nav-mobile-menu ${mobileMenuOpen ? "cin-nav-mobile-menu--open" : ""}`}
           role="menu"
         >
+          <a
+            href="#features"
+            className="cin-mobile-link"
+            role="menuitem"
+            onClick={() => setMobileMenuOpen(false)}
+          >
+            Features
+          </a>
+          <a
+            href="#stats"
+            className="cin-mobile-link"
+            role="menuitem"
+            onClick={() => setMobileMenuOpen(false)}
+          >
+            Stats
+          </a>
           <Link
             href="/analyzer"
             className="cin-mobile-link cin-mobile-link--cta"
@@ -525,9 +594,8 @@ export default function HomePage() {
       {/* ═══ HERO — Full viewport ═══ */}
       <section className="cin-hero" aria-labelledby="hero-heading">
         <div className="cin-hero-grid">
-          {/* ── Left column ── */}
           <div className="cin-hero-left">
-            <div className={`cin-hero-badge ${introPhase >= 5 ? "cin-hero-badge--visible" : ""}`}>
+            <div className={`cin-hero-badge ${introPhase >= 3 ? "cin-hero-badge--visible" : ""}`}>
               <div className="cin-sonar">
                 <div className="cin-sonar-dot" />
                 <div className="cin-sonar-ring" />
@@ -536,46 +604,130 @@ export default function HomePage() {
             </div>
 
             <h1 id="hero-heading" className="cin-hero-title">
-              <CinematicHeadline text="DAEVA" startDelay={1200} />
+              <CinematicHeadline text="DAEVA" startDelay={800} />
               <span className="cin-hero-line2">
                 <span
-                  className={`cin-hero-line2-inner ${introPhase >= 6 ? "cin-hero-line2-inner--visible" : ""}`}
+                  className={`cin-hero-line2-inner ${introPhase >= 5 ? "cin-hero-line2-inner--visible" : ""}`}
                 >
                   ANALYZER
                 </span>
               </span>
             </h1>
 
-            <p className={`cin-hero-tagline ${introPhase >= 6 ? "cin-hero-tagline--visible" : ""}`}>
+            <p className={`cin-hero-tagline ${introPhase >= 5 ? "cin-hero-tagline--visible" : ""}`}>
               Decode the meta from top-ranked players across Atreia. Real-time leaderboard analysis
               and competitive intelligence for every class.
             </p>
 
             <div
-              className={`cin-hero-actions ${introPhase >= 7 ? "cin-hero-actions--visible" : ""}`}
+              className={`cin-hero-actions ${introPhase >= 6 ? "cin-hero-actions--visible" : ""}`}
             >
-              <Link href="/analyzer" className="cin-cta-primary">
+              <Link href="/analyzer" className="cin-btn-primary">
                 <span>Launch Analyzer</span>
                 <ArrowRight size={18} />
               </Link>
-            </div>
-
-            <div className={`cin-hero-trust ${introPhase >= 9 ? "cin-hero-trust--visible" : ""}`}>
-              {STATS.map((s) => (
-                <div key={s.label} className="cin-trust-item">
-                  <span className="cin-trust-value">{s.value}</span>
-                  <span className="cin-trust-label">{s.label}</span>
-                </div>
-              ))}
+              <a href="#features" className="cin-btn-ghost">
+                Explore Features
+              </a>
             </div>
           </div>
 
-          {/* ── Right column — Meta Widget ── */}
-          <MetaWidget active={introPhase >= 8} />
+          <div className="cin-hero-visual">
+            <MetaWidget active={introPhase >= 7} />
+          </div>
         </div>
       </section>
 
-      {/* ═══ FOOTER — inline at bottom ═══ */}
+      {/* ═══ SOCIAL PROOF STRIP ═══ */}
+      <section
+        ref={proofRef}
+        className={`cin-proof ${proofInView ? "cin-proof--visible" : ""}`}
+        aria-label="Platform coverage"
+      >
+        <div className="cin-proof-inner">
+          <p className="cin-proof-text">
+            Competitive intelligence across the entire Aion 2 ecosystem
+          </p>
+          <div className="cin-proof-divider" />
+          <div className="cin-proof-stats">
+            {STATS.map((s) => (
+              <div key={s.label} className="cin-proof-stat">
+                <span className="cin-proof-value">{s.value}</span>
+                <span className="cin-proof-label">{s.label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ═══ FEATURES ═══ */}
+      <section
+        id="features"
+        ref={featRef}
+        className={`cin-features ${featInView ? "cin-features--visible" : ""}`}
+        aria-labelledby="features-heading"
+      >
+        <div className="cin-features-inner">
+          <h2 id="features-heading" className="cin-section-heading">
+            Built for Competitive Play
+          </h2>
+
+          <div className="cin-features-grid">
+            {FEATURES.map((feat, i) => (
+              <div
+                key={feat.title}
+                className="cin-feature-card"
+                style={{ transitionDelay: `${i * 150}ms` }}
+              >
+                <div className="cin-feature-icon">
+                  <feat.Icon size={24} />
+                </div>
+                <h3 className="cin-feature-title">{feat.title}</h3>
+                <p className="cin-feature-desc">{feat.description}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ═══ STATS BAND ═══ */}
+      <section
+        id="stats"
+        ref={statsRef}
+        className={`cin-stats ${statsInView ? "cin-stats--visible" : ""}`}
+        aria-label="Platform statistics"
+      >
+        <div className="cin-stats-inner">
+          {STATS.map((s) => (
+            <div key={s.label} className="cin-stat-item">
+              <span className="cin-stat-value">
+                <CountUp end={s.value} suffix={s.suffix} />
+              </span>
+              <span className="cin-stat-label">{s.label}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* ═══ FINAL CTA ═══ */}
+      <section
+        ref={ctaRef}
+        className={`cin-final ${ctaInView ? "cin-final--visible" : ""}`}
+        aria-label="Call to action"
+      >
+        <div className="cin-final-inner">
+          <h2 className="cin-final-heading">Ready to decode the meta?</h2>
+          <p className="cin-final-sub">
+            Join the players using data-driven builds to climb the leaderboards.
+          </p>
+          <Link href="/analyzer" className="cin-btn-primary cin-btn-primary--lg">
+            <span>Launch Analyzer</span>
+            <ArrowRight size={20} />
+          </Link>
+        </div>
+      </section>
+
+      {/* ═══ FOOTER ═══ */}
       <footer className="cin-footer" role="contentinfo">
         <div className="cin-footer-inner">
           <p className="cin-footer-text">
