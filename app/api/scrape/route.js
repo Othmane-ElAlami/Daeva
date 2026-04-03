@@ -231,6 +231,7 @@ export async function POST(req) {
       const enriched = [];
       const priorEnriched = []; // Players from prior continuation batches
       const allArcanaIds = [];
+      const itemDetailsMap = {};
 
       try {
         // ═══════════════════════════════════════════════════════════════════
@@ -976,8 +977,7 @@ export async function POST(req) {
         // ═══════════════════════════════════════════════════════════════════
         // PHASE 4: Fetch arcana item details in parallel batches
         // ═══════════════════════════════════════════════════════════════════
-        const uniqueItemIds = [...new Set(allArcanaIds)];
-        const itemDetailsMap = {};
+        const uniqueItemIds = [...new Set(allArcanaIds)].filter(Boolean);
 
         if (uniqueItemIds.length > 0) {
           const chunks = [];
@@ -1001,13 +1001,18 @@ export async function POST(req) {
             }
           });
 
-          const arcanaResults = await runPool(arcanaChunkTasks, 5, budget);
+          // Pass null budget so arcana tasks aren't preemptively skipped by
+          // runPool's canAfford(3) gate — each chunk only costs 1 subrequest
+          // and the individual fetchJSON calls still respect the budget.
+          const arcanaResults = await runPool(arcanaChunkTasks, 5, null);
           for (const items of arcanaResults) {
             if (!Array.isArray(items)) continue;
             for (const item of items) {
               if (item?.id) itemDetailsMap[item.id] = item;
             }
           }
+        } else {
+          log.warn("arcana", `No arcana item IDs found — skipping arcana detail fetch.`);
         }
 
         log.info("aggregate", `Building analysis results...`);
@@ -1086,7 +1091,6 @@ export async function POST(req) {
               "system",
               `Request limit reached. Returning ${enriched.length} players scanned so far.`
             );
-            const itemDetailsMap = {};
             const builds = enriched.map((p) =>
               extractBuild(
                 p,
