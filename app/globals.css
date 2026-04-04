@@ -30,7 +30,7 @@
   --warning: #f59e0b;
   --error: #ef4444;
 
-  --stat-offense: #b91c1c;
+  --stat-offense: #fd6969;
   --stat-defense: #22c55e;
   --stat-utility: #3b82f6;
   --stat-skill: #c084fc;
@@ -100,9 +100,9 @@ body::after {
   backdrop-filter: blur(8px);
   box-shadow:
     0 0 0 1px rgba(255, 255, 255, 0.01) inset,
-    \ninset01px 0 rgba(255, 255, 255, 0.05),
-    \n04px24px rgba(0, 0, 0, 0.8),
-    \n01px2px rgba(0, 0, 0, 0.6);
+    \ninset01px0 rgba(255, 255, 255, 0.05),
+    \n04px24pxrgba(0, 0, 0, 0.8),
+    \n01px2pxrgba(0, 0, 0, 0.6);
   transition:
     border-color 0.3s ease,
     box-shadow 0.3s ease;
@@ -112,8 +112,8 @@ body::after {
   border-color: var(--border-hover);
   box-shadow:
     0 0 0 1px rgba(185, 28, 28, 0.05) inset,
-    \ninset01px 0 rgba(185, 28, 28, 0.1),
-    \n08px40px rgba(0, 0, 0, 0.9),
+    \ninset01px0 rgba(185, 28, 28, 0.1),
+    \n08px40pxrgba(0, 0, 0, 0.9),
     0 0 30px -10px var(--accent-glow);
 }
 

@@ -1695,12 +1695,13 @@ export default function Home() {
                                   Lv {stat.avgLv}
                                 </span>
                                 <span
+                                  className="badge"
                                   style={{
-                                    fontSize: "0.7rem",
-                                    fontWeight: 700,
+                                    fontSize: "0.6rem",
+                                    background: "rgba(34,211,238,0.12)",
                                     color: "#22d3ee",
-                                    minWidth: "36px",
-                                    textAlign: "right",
+                                    border: "1px solid rgba(34,211,238,0.25)",
+                                    flexShrink: 0,
                                   }}
                                 >
                                   {equipPct}%
@@ -1751,23 +1752,15 @@ export default function Home() {
                                     #{i + 1}
                                   </span>
                                   <span
+                                    className="badge"
                                     style={{
-                                      fontSize: "0.7rem",
-                                      fontWeight: 700,
-                                      color: "#fff",
+                                      fontSize: "0.6rem",
+                                      background: "rgba(56,189,248,0.12)",
+                                      color: "#38bdf8",
+                                      border: "1px solid rgba(56,189,248,0.25)",
                                     }}
                                   >
                                     {pct}%
-                                    <span
-                                      style={{
-                                        fontSize: "0.55rem",
-                                        color: "var(--text-tertiary)",
-                                        marginLeft: "4px",
-                                        fontWeight: 400,
-                                      }}
-                                    >
-                                      ({count})
-                                    </span>
                                   </span>
                                 </div>
                                 <div className="flex flex-wrap" style={{ gap: "4px" }}>
@@ -1904,13 +1897,13 @@ export default function Home() {
                                 })}
                               </div>
                               <span
+                                className="badge"
                                 style={{
-                                  fontSize: "0.85rem",
-                                  fontWeight: 800,
+                                  fontSize: "0.6rem",
+                                  background: "rgba(129,140,248,0.12)",
                                   color: "#818cf8",
+                                  border: "1px solid rgba(129,140,248,0.25)",
                                   flexShrink: 0,
-                                  textAlign: "right",
-                                  minWidth: "40px",
                                 }}
                               >
                                 {pct}%
@@ -1963,9 +1956,12 @@ export default function Home() {
                                 >
                                   <span className="font-medium">{stat}</span>
                                   <span
+                                    className="badge"
                                     style={{
+                                      fontSize: "0.6rem",
+                                      background: "rgba(245,158,11,0.12)",
                                       color: "#fbbf24",
-                                      fontWeight: 700,
+                                      border: "1px solid rgba(245,158,11,0.25)",
                                     }}
                                   >
                                     {activePct}%
@@ -2070,6 +2066,211 @@ export default function Home() {
                       </div>
                     </motion.div>
                   )}
+                </div>
+
+                {/* Most Used Theostones + Manastones */}
+                <div className="grid-cols-2">
+                  {displayData.stats.theostoneUsage &&
+                    Object.keys(displayData.stats.theostoneUsage).length > 0 && (
+                      <motion.div variants={fadeUp} className="glass-panel">
+                        <h3 className="mb-6 flex items-center gap-2">
+                          <span
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              width: "28px",
+                              height: "28px",
+                              borderRadius: "8px",
+                              background: "rgba(168,85,247,0.08)",
+                              border: "1px solid rgba(168,85,247,0.15)",
+                            }}
+                          >
+                            <Sparkles size={14} style={{ color: "#a855f7" }} />
+                          </span>
+                          Most Used Theostones
+                        </h3>
+                        <div
+                          className="flex-col custom-scrollbar-slim"
+                          style={{
+                            gap: "2px",
+                            maxHeight: "340px",
+                            overflowY: "auto",
+                          }}
+                        >
+                          {Object.entries(displayData.stats.theostoneUsage)
+                            .sort((a, b) => b[1].count - a[1].count)
+                            .slice(0, 15)
+                            .map(([stone, data], i) => (
+                              <div
+                                key={stone}
+                                style={{
+                                  display: "flex",
+                                  justifyContent: "space-between",
+                                  alignItems: "center",
+                                  padding: "8px 12px",
+                                  borderRadius: "8px",
+                                  borderBottom: "1px solid var(--border-subtle)",
+                                  transition: "background 0.15s",
+                                  gap: "8px",
+                                }}
+                                className="hover:bg-white/5"
+                              >
+                                <div
+                                  className="flex items-center gap-3"
+                                  style={{ flex: 1, minWidth: 0 }}
+                                >
+                                  <span
+                                    style={{
+                                      fontSize: "0.6rem",
+                                      fontWeight: 700,
+                                      color: "var(--text-tertiary)",
+                                      width: "16px",
+                                      flexShrink: 0,
+                                    }}
+                                  >
+                                    {i + 1}
+                                  </span>
+                                  <div style={{ minWidth: 0 }}>
+                                    <span
+                                      style={{
+                                        fontSize: "0.8rem",
+                                        fontWeight: 500,
+                                        display: "block",
+                                        color: gradeColor(data.grade),
+                                      }}
+                                    >
+                                      {stone}
+                                    </span>
+                                    {data.desc && (
+                                      <span
+                                        style={{
+                                          fontSize: "0.65rem",
+                                          color: "var(--text-tertiary)",
+                                          lineHeight: "1.3",
+                                          display: "block",
+                                          marginTop: "2px",
+                                        }}
+                                      >
+                                        {data.desc.split("\n")[0]}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                                <span
+                                  className="badge"
+                                  style={{
+                                    fontSize: "0.6rem",
+                                    background: "rgba(168,85,247,0.12)",
+                                    color: "#a855f7",
+                                    border: "1px solid rgba(168,85,247,0.25)",
+                                    flexShrink: 0,
+                                  }}
+                                >
+                                  {percent(data.count, displayData.count)}%
+                                </span>
+                              </div>
+                            ))}
+                        </div>
+                      </motion.div>
+                    )}
+
+                  {displayData.stats.manastoneUsage &&
+                    Object.keys(displayData.stats.manastoneUsage).length > 0 && (
+                      <motion.div variants={fadeUp} className="glass-panel">
+                        <h3 className="mb-6 flex items-center gap-2">
+                          <span
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              width: "28px",
+                              height: "28px",
+                              borderRadius: "8px",
+                              background: "rgba(56,189,248,0.08)",
+                              border: "1px solid rgba(56,189,248,0.15)",
+                            }}
+                          >
+                            <Zap size={14} style={{ color: "#38bdf8" }} />
+                          </span>
+                          Most Used Manastones
+                        </h3>
+                        <div
+                          className="flex-col custom-scrollbar-slim"
+                          style={{
+                            gap: "2px",
+                            maxHeight: "340px",
+                            overflowY: "auto",
+                          }}
+                        >
+                          {Object.entries(displayData.stats.manastoneUsage)
+                            .sort((a, b) => b[1].count - a[1].count)
+                            .slice(0, 15)
+                            .map(([stone, data], i) => {
+                              const color = gradeColor(data.grade);
+                              return (
+                                <div
+                                  key={stone}
+                                  style={{
+                                    display: "flex",
+                                    justifyContent: "space-between",
+                                    alignItems: "center",
+                                    padding: "8px 12px",
+                                    borderRadius: "8px",
+                                    borderBottom: "1px solid var(--border-subtle)",
+                                    transition: "background 0.15s",
+                                  }}
+                                  className="hover:bg-white/5"
+                                >
+                                  <div className="flex items-center gap-3">
+                                    <span
+                                      style={{
+                                        fontSize: "0.6rem",
+                                        fontWeight: 700,
+                                        color: "var(--text-tertiary)",
+                                        width: "16px",
+                                      }}
+                                    >
+                                      {i + 1}
+                                    </span>
+                                    <span
+                                      style={{
+                                        fontSize: "0.8rem",
+                                        fontWeight: 500,
+                                        color,
+                                      }}
+                                    >
+                                      {stone}
+                                      {data.maxValue && (
+                                        <span
+                                          style={{
+                                            marginLeft: "6px",
+                                            fontSize: "0.7rem",
+                                            opacity: 0.85,
+                                          }}
+                                        >
+                                          {data.maxValue}
+                                        </span>
+                                      )}
+                                    </span>
+                                  </div>
+                                  <span
+                                    className="badge"
+                                    style={{
+                                      fontSize: "0.6rem",
+                                      background: "rgba(56,189,248,0.12)",
+                                      color: "#38bdf8",
+                                      border: "1px solid rgba(56,189,248,0.25)",
+                                    }}
+                                  >
+                                    {percent(data.count, displayData.count)}%
+                                  </span>
+                                </div>
+                              );
+                            })}
+                        </div>
+                      </motion.div>
+                    )}
                 </div>
 
                 {/* Equipment Substats */}
@@ -2285,12 +2486,19 @@ export default function Home() {
                                     (a, b) => b[1] - a[1]
                                   );
                                   const topVal = sortedVals[0];
+                                  const maxVal = statData.values.reduce((best, v) => {
+                                    const n = parseFloat(String(v).replace(/[^\d.]/g, "")) || 0;
+                                    const m =
+                                      parseFloat(String(best || "").replace(/[^\d.]/g, "")) || 0;
+                                    return n > m ? v : best;
+                                  }, statData.values[0] || "");
                                   const pct = (statData.count / totalItems) * 100;
                                   const type = classifyStatType(statName, statData.values);
                                   return {
                                     statName,
                                     statData,
                                     topVal,
+                                    maxVal,
                                     pct,
                                     type,
                                   };
@@ -2346,53 +2554,101 @@ export default function Home() {
                                       overflowY: "auto",
                                     }}
                                   >
-                                    {classified.map(({ statName, topVal, pct, type }) => (
-                                      <div key={statName}>
-                                        <div className="substat-row">
+                                    {classified.map(({ statName, maxVal, pct, type }) => (
+                                      <div
+                                        key={statName}
+                                        className="hover:bg-white/5"
+                                        style={{
+                                          padding: "5px 6px",
+                                          borderRadius: "6px",
+                                          transition: "background 0.15s ease",
+                                        }}
+                                      >
+                                        {/* name row */}
+                                        <div
+                                          style={{
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: "7px",
+                                          }}
+                                        >
                                           <span
-                                            className="substat-type-dot"
                                             style={{
+                                              width: "5px",
+                                              height: "5px",
+                                              borderRadius: "50%",
+                                              flexShrink: 0,
                                               background: `var(--stat-${type})`,
                                             }}
                                           />
-                                          <div className="substat-info">
+                                          <span
+                                            title={statName}
+                                            style={{
+                                              flex: 1,
+                                              fontSize: "0.72rem",
+                                              fontWeight: 500,
+                                              color: "var(--text-primary)",
+                                              whiteSpace: "normal",
+                                              lineHeight: 1.3,
+                                              minWidth: 0,
+                                            }}
+                                          >
+                                            {statName}
+                                          </span>
+                                          {maxVal && (
                                             <span
-                                              className="substat-name"
-                                              title={statName}
+                                              title="Highest value seen"
                                               style={{
-                                                whiteSpace: "normal",
-                                                lineHeight: "1.3",
+                                                fontSize: "0.70rem",
+                                                fontFamily: "ui-monospace, monospace",
+                                                fontWeight: 700,
+                                                color: `var(--stat-${type})`,
+                                                opacity: 0.7,
+                                                flexShrink: 0,
                                               }}
                                             >
-                                              {statName}
+                                              {maxVal}
                                             </span>
-                                            <span
-                                              className="substat-peak"
-                                              title="Most common value"
-                                            >
-                                              {topVal ? topVal[0] : "—"}
-                                            </span>
-                                          </div>
+                                          )}
                                           <span
-                                            className="substat-pct"
+                                            className="badge"
                                             style={{
+                                              fontSize: "0.6rem",
+                                              background: `color-mix(in srgb, var(--stat-${type}) 12%, transparent)`,
                                               color: `var(--stat-${type})`,
+                                              border: `1px solid color-mix(in srgb, var(--stat-${type}) 30%, transparent)`,
+                                              flexShrink: 0,
                                             }}
                                           >
                                             {pct.toFixed(0)}%
                                           </span>
-                                          <div className="substat-bar-bg">
-                                            <motion.div
-                                              initial={{ width: 0 }}
-                                              animate={{ width: `${pct}%` }}
-                                              transition={{
-                                                duration: 0.8,
-                                                ease: "easeOut",
-                                                delay: 0.15 + slotIdx * 0.03,
-                                              }}
-                                              className={`substat-bar bg-${type}`}
-                                            />
-                                          </div>
+                                        </div>
+                                        {/* always-visible progress bar */}
+                                        <div
+                                          style={{
+                                            marginTop: "4px",
+                                            marginLeft: "12px",
+                                            height: "2px",
+                                            background: "rgba(255,255,255,0.05)",
+                                            borderRadius: "1px",
+                                            overflow: "hidden",
+                                          }}
+                                        >
+                                          <motion.div
+                                            initial={{ width: 0 }}
+                                            animate={{ width: `${pct}%` }}
+                                            transition={{
+                                              duration: 0.8,
+                                              ease: "easeOut",
+                                              delay: 0.15 + slotIdx * 0.03,
+                                            }}
+                                            style={{
+                                              height: "100%",
+                                              borderRadius: "1px",
+                                              background: `var(--stat-${type})`,
+                                              opacity: 0.55,
+                                            }}
+                                          />
                                         </div>
                                       </div>
                                     ))}
@@ -2538,7 +2794,7 @@ export default function Home() {
                                       overflowY: "auto",
                                     }}
                                   >
-                                    {sorted.map(([itemName, { count, grade }], i) => {
+                                    {sorted.map(([itemName, { count, grade, itemLevel }], i) => {
                                       const pct = ((count / displayData.count) * 100).toFixed(0);
                                       const color = gradeColor(grade);
                                       return (
@@ -2559,7 +2815,7 @@ export default function Home() {
                                                   color,
                                                   whiteSpace: "normal",
                                                   lineHeight: "1.3",
-                                                  fontSize: "0.78rem",
+                                                  fontSize: "0.72rem",
                                                 }}
                                               >
                                                 <span
@@ -2574,7 +2830,30 @@ export default function Home() {
                                                 {itemName}
                                               </span>
                                             </div>
-                                            <span className="substat-pct" style={{ color }}>
+                                            {itemLevel != null && (
+                                              <span
+                                                style={{
+                                                  fontSize: "0.7rem",
+                                                  fontFamily: "ui-monospace, monospace",
+                                                  fontWeight: 700,
+                                                  color,
+                                                  opacity: 0.75,
+                                                  flexShrink: 0,
+                                                }}
+                                              >
+                                                {itemLevel}
+                                              </span>
+                                            )}
+                                            <span
+                                              className="badge"
+                                              style={{
+                                                fontSize: "0.6rem",
+                                                background: `color-mix(in srgb, ${color} 12%, transparent)`,
+                                                color,
+                                                border: `1px solid color-mix(in srgb, ${color} 30%, transparent)`,
+                                                flexShrink: 0,
+                                              }}
+                                            >
                                               {pct}%
                                             </span>
                                             <div className="substat-bar-bg">

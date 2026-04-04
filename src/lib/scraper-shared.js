@@ -359,6 +359,8 @@ export function extractBuild(
     arcanaSets: [],
     equipSubStats: [],
     equipItems: [],
+    theostones: [],
+    manastones: [],
   };
 
   // Skills — Active skills are included if equipped OR leveled (API may not flag `equip` on all active skills).
@@ -421,6 +423,14 @@ export function extractBuild(
   const slotPosToName = {};
   const slotPosToGrade = {};
   const slotPosToCategory = {};
+  // Pre-build item-level map from batch-equipment response (eqItem.itemLevel or eqItem.level)
+  const slotPosToItemLevel = {};
+  for (const d of equipDetailsList) {
+    if (d?.slotPos != null) {
+      const lv = d.itemLevel ?? d.level ?? null;
+      if (lv != null) slotPosToItemLevel[d.slotPos] = lv;
+    }
+  }
 
   for (const item of equipList) {
     if (!item) continue;
@@ -434,6 +444,8 @@ export function extractBuild(
         categoryName: cat,
         itemName: item.name,
         grade: item.grade,
+        enchantLevel: item.enchantLevel || 0,
+        itemLevel: item.level ?? item.itemLevel ?? slotPosToItemLevel[item.slotPos] ?? null,
       });
     }
   }
@@ -459,6 +471,21 @@ export function extractBuild(
     const combined = [...subs, ...skills];
     if (combined.length > 0) {
       build.equipSubStats.push({ categoryName: cat, subStats: combined });
+    }
+
+    // Theostones (godStoneStat) — found on weapons (Main Hand / Guard)
+    for (const s of eqItem.godStoneStat || []) {
+      build.theostones.push({ name: s.name, desc: s.desc || "", grade: s.grade || "", slot: cat });
+    }
+
+    // Manastones (magicStoneStat) — found on most equipment slots
+    for (const s of eqItem.magicStoneStat || []) {
+      build.manastones.push({
+        name: s.name,
+        value: s.value || "",
+        grade: s.grade || "",
+        slot: cat,
+      });
     }
   }
 
@@ -525,6 +552,8 @@ export function aggregate(builds) {
     equippedStigmaCombos: {},
     subStatsBySlot: {},
     itemsBySlot: {},
+    theostoneUsage: {},
+    manastoneUsage: {},
     scannedPlayers: [],
   };
 
@@ -592,13 +621,46 @@ export function aggregate(builds) {
         entry.values.push(s.value);
       }
     }
+    for (const t of b.theostones || []) {
+      const entry = (stats.theostoneUsage[t.name] ||= {
+        count: 0,
+        desc: t.desc || "",
+        grade: t.grade || "",
+      });
+      entry.count++;
+      if (!entry.desc && t.desc) entry.desc = t.desc;
+      if (!entry.grade && t.grade) entry.grade = t.grade;
+    }
+    for (const m of b.manastones || []) {
+      const me = (stats.manastoneUsage[m.name] ||= { count: 0, maxValue: "", grade: "" });
+      me.count++;
+      if (m.value) {
+        const num = parseFloat(m.value.replace(/[^\d.]/g, "")) || 0;
+        const cur = parseFloat((me.maxValue || "").replace(/[^\d.]/g, "")) || 0;
+        if (num > cur) {
+          me.maxValue = m.value;
+          me.grade = m.grade || me.grade;
+        }
+      }
+    }
     for (const eq of b.equipItems || []) {
       const slotItems = (stats.itemsBySlot[eq.categoryName] ||= {});
       const existing = slotItems[eq.itemName];
       if (existing) {
         existing.count++;
+        if (eq.enchantLevel > existing.maxEnchant) existing.maxEnchant = eq.enchantLevel;
+        if (
+          eq.itemLevel != null &&
+          (existing.itemLevel == null || eq.itemLevel > existing.itemLevel)
+        )
+          existing.itemLevel = eq.itemLevel;
       } else {
-        slotItems[eq.itemName] = { count: 1, grade: eq.grade };
+        slotItems[eq.itemName] = {
+          count: 1,
+          grade: eq.grade,
+          maxEnchant: eq.enchantLevel || 0,
+          itemLevel: eq.itemLevel ?? null,
+        };
       }
     }
     stats.scannedPlayers.push({
