@@ -10,8 +10,10 @@ const SESSION_COOKIE_NAME = "admin_session";
  * Checks Authorization header (Bearer token) or session cookie.
  * @returns {{ authorized: boolean }} result
  */
-export function validateAdminRequest(request, env) {
-  const secret = env.ADMIN_SECRET;
+export function validateAdminRequest(request, env = {}) {
+  // env.ADMIN_SECRET — set via wrangler.toml [vars], .dev.vars, or Cloudflare Pages Environment Variables
+  // process.env fallback covers local `next dev` where .env.local is used
+  const secret = env.ADMIN_SECRET || process.env.ADMIN_SECRET;
   if (!secret) return { authorized: false };
 
   // Check Authorization: Bearer <secret>

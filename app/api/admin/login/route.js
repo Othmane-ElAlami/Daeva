@@ -7,8 +7,10 @@ const MAX_ATTEMPTS = 5;
 const WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 
 export async function POST(request) {
-  const { env } = getRequestContext();
-  const secret = env.ADMIN_SECRET;
+  const { env = {} } = getRequestContext();
+  // env.ADMIN_SECRET — set via .dev.vars locally or Pages Environment Variables in prod
+  // process.env fallback covers `next dev` where .env.local is loaded
+  const secret = env.ADMIN_SECRET || process.env.ADMIN_SECRET;
 
   if (!secret) {
     return new Response(JSON.stringify({ error: "Server misconfigured" }), {
