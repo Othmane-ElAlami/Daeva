@@ -7,7 +7,7 @@ export const runtime = "edge";
 export async function POST(request) {
   const { env } = getRequestContext();
 
-  const { authorized } = validateAdminRequest(request, env);
+  const { authorized } = await validateAdminRequest(request, env);
   if (!authorized) return unauthorizedResponse();
 
   const db = env.DB;

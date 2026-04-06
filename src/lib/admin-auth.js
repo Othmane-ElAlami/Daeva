@@ -10,10 +10,17 @@ const SESSION_COOKIE_NAME = "admin_session";
  * Checks Authorization header (Bearer token) or session cookie.
  * @returns {{ authorized: boolean }} result
  */
-export function validateAdminRequest(request, env = {}) {
-  // env.ADMIN_SECRET — set via wrangler.toml [vars], .dev.vars, or Cloudflare Pages Environment Variables
-  // process.env fallback covers local `next dev` where .env.local is used
-  const secret = env.ADMIN_SECRET || process.env.ADMIN_SECRET;
+export async function validateAdminRequest(request, env = {}) {
+  // Resolution order:
+  // 1. Cloudflare Secrets Store binding (env.ADMIN_SECRETS.get("ADMIN_SECRET"))
+  // 2. Direct env binding / wrangler.toml [vars] / .dev.vars (env.ADMIN_SECRET)
+  // 3. process.env fallback for local `next dev` with .env.local
+  let secret;
+  if (env.ADMIN_SECRETS) {
+    secret = await env.ADMIN_SECRETS.get("ADMIN_SECRET");
+  } else {
+    secret = env.ADMIN_SECRET || process.env.ADMIN_SECRET;
+  }
   if (!secret) return { authorized: false };
 
   // Check Authorization: Bearer <secret>
@@ -39,8 +46,8 @@ export function validateAdminRequest(request, env = {}) {
  * Check if a request is from an authenticated admin (for page-level guards).
  * @returns {boolean}
  */
-export function isAdminAuthenticated(request, env) {
-  return validateAdminRequest(request, env).authorized;
+export async function isAdminAuthenticated(request, env) {
+  return (await validateAdminRequest(request, env)).authorized;
 }
 
 /**

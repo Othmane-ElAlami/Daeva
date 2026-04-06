@@ -7,6 +7,11 @@ compatibility_flags = ["nodejs_compat"]
 # ADMIN_SECRET is stored in the Cloudflare Secrets Store — do NOT put the real value here.
 # For local development, add ADMIN_SECRET to .env.local (which is gitignored).
 
+[[secrets_store_secrets]]
+binding = "ADMIN_SECRETS"
+store_id = "a74173ac78614ed6b7c6a4ab4366bf12"
+secret_name = "ADMIN_SECRET"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "player-cache"
