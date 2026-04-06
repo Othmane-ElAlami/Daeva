@@ -3,6 +3,10 @@ pages_build_output_dir = ".vercel/output/static"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 
+[vars]
+# ADMIN_SECRET is stored in the Cloudflare Secrets Store — do NOT put the real value here.
+# For local development, add ADMIN_SECRET to .env.local (which is gitignored).
+
 [[d1_databases]]
 binding = "DB"
 database_name = "player-cache"

@@ -9,6 +9,16 @@ vi.mock("@cloudflare/next-on-pages", () => ({
   getRequestContext: vi.fn(),
 }));
 
+const TEST_SECRET = "test-secret";
+
+/** Create a Request pre-populated with the admin Bearer token. */
+function authRequest(url, method = "GET") {
+  return new Request(url, {
+    method,
+    headers: { Authorization: `Bearer ${TEST_SECRET}` },
+  });
+}
+
 describe("Admin API Routes", () => {
   let getRequestContext;
 
@@ -53,10 +63,10 @@ describe("Admin API Routes", () => {
         }),
       };
 
-      getRequestContext.mockReturnValue({ env: { DB: mockDb } });
+      getRequestContext.mockReturnValue({ env: { DB: mockDb, ADMIN_SECRET: TEST_SECRET } });
 
       const { GET } = await import("../../app/api/admin/tables/route.js");
-      const res = await GET();
+      const res = await GET(authRequest("http://localhost/api/admin/tables"));
       expect(res.status).toBe(200);
 
       const body = await res.json();
@@ -71,6 +81,7 @@ describe("Admin API Routes", () => {
     it("returns empty array when no tables exist", async () => {
       getRequestContext.mockReturnValue({
         env: {
+          ADMIN_SECRET: TEST_SECRET,
           DB: {
             prepare: vi.fn(() => ({
               all: vi.fn(async () => ({ results: [] })),
@@ -80,7 +91,7 @@ describe("Admin API Routes", () => {
       });
 
       const { GET } = await import("../../app/api/admin/tables/route.js");
-      const res = await GET();
+      const res = await GET(authRequest("http://localhost/api/admin/tables"));
       const body = await res.json();
       expect(body.tables).toEqual([]);
     });
@@ -88,6 +99,7 @@ describe("Admin API Routes", () => {
     it("returns 500 on database error", async () => {
       getRequestContext.mockReturnValue({
         env: {
+          ADMIN_SECRET: TEST_SECRET,
           DB: {
             prepare: vi.fn(() => ({
               all: vi.fn(async () => {
@@ -99,7 +111,7 @@ describe("Admin API Routes", () => {
       });
 
       const { GET } = await import("../../app/api/admin/tables/route.js");
-      const res = await GET();
+      const res = await GET(authRequest("http://localhost/api/admin/tables"));
       expect(res.status).toBe(500);
     });
   });
@@ -109,11 +121,11 @@ describe("Admin API Routes", () => {
   describe("GET /api/admin/table-data", () => {
     it("returns 400 when table parameter is missing", async () => {
       getRequestContext.mockReturnValue({
-        env: { DB: { prepare: vi.fn() } },
+        env: { ADMIN_SECRET: TEST_SECRET, DB: { prepare: vi.fn() } },
       });
 
       const { GET } = await import("../../app/api/admin/table-data/route.js");
-      const req = new Request("http://localhost/api/admin/table-data");
+      const req = authRequest("http://localhost/api/admin/table-data");
       const res = await GET(req);
       expect(res.status).toBe(400);
       const body = await res.json();
@@ -130,10 +142,10 @@ describe("Admin API Routes", () => {
         })),
       };
 
-      getRequestContext.mockReturnValue({ env: { DB: mockDb } });
+      getRequestContext.mockReturnValue({ env: { ADMIN_SECRET: TEST_SECRET, DB: mockDb } });
 
       const { GET } = await import("../../app/api/admin/table-data/route.js");
-      const req = new Request("http://localhost/api/admin/table-data?table=nonexistent");
+      const req = authRequest("http://localhost/api/admin/table-data?table=nonexistent");
       const res = await GET(req);
       expect(res.status).toBe(404);
     });
@@ -165,10 +177,10 @@ describe("Admin API Routes", () => {
         }),
       };
 
-      getRequestContext.mockReturnValue({ env: { DB: mockDb } });
+      getRequestContext.mockReturnValue({ env: { ADMIN_SECRET: TEST_SECRET, DB: mockDb } });
 
       const { GET } = await import("../../app/api/admin/table-data/route.js");
-      const req = new Request("http://localhost/api/admin/table-data?table=player_cache");
+      const req = authRequest("http://localhost/api/admin/table-data?table=player_cache");
       const res = await GET(req);
       expect(res.status).toBe(200);
       const body = await res.json();
@@ -185,10 +197,10 @@ describe("Admin API Routes", () => {
         })),
       };
 
-      getRequestContext.mockReturnValue({ env: { DB: mockDb } });
+      getRequestContext.mockReturnValue({ env: { ADMIN_SECRET: TEST_SECRET, DB: mockDb } });
 
       const { GET } = await import("../../app/api/admin/table-data/route.js");
-      const req = new Request(
+      const req = authRequest(
         `http://localhost/api/admin/table-data?table=${encodeURIComponent("'; DROP TABLE --")}`
       );
       const res = await GET(req);
@@ -201,40 +213,44 @@ describe("Admin API Routes", () => {
 
   describe("POST /api/admin/reset", () => {
     it("clears all user tables and returns cleared list", async () => {
-      const deletedTables = [];
       const mockDb = {
         prepare: vi.fn((query) => {
+          const self = {
+            bind: vi.fn(function () {
+              return this;
+            }),
+            run: vi.fn(async () => ({})),
+            all: vi.fn(async () => ({ results: [] })),
+          };
           if (query.includes("sqlite_master")) {
             return {
+              ...self,
               all: vi.fn(async () => ({
                 results: [{ name: "player_cache" }, { name: "rate_limits" }],
               })),
             };
           }
-          if (query.includes("DELETE FROM")) {
-            const tableName = query.match(/"(.+?)"/)?.[1];
-            deletedTables.push(tableName);
-            return { run: vi.fn(async () => ({})) };
-          }
-          return { all: vi.fn(async () => ({ results: [] })) };
+          return self;
         }),
       };
 
-      getRequestContext.mockReturnValue({ env: { DB: mockDb } });
+      getRequestContext.mockReturnValue({ env: { ADMIN_SECRET: TEST_SECRET, DB: mockDb } });
 
       const { POST } = await import("../../app/api/admin/reset/route.js");
-      const res = await POST();
+      const res = await POST(authRequest("http://localhost/api/admin/reset", "POST"));
       expect(res.status).toBe(200);
 
       const body = await res.json();
-      expect(body.success).toBe(true);
-      expect(body.cleared).toContain("player_cache");
-      expect(body.cleared).toContain("rate_limits");
+      // New response shape: { reset, created, skipped, errors }
+      expect(body.reset).toContain("player_cache");
+      expect(body.reset).toContain("rate_limits");
+      expect(Array.isArray(body.errors)).toBe(true);
     });
 
     it("returns 500 on database error", async () => {
       getRequestContext.mockReturnValue({
         env: {
+          ADMIN_SECRET: TEST_SECRET,
           DB: {
             prepare: vi.fn(() => ({
               all: vi.fn(async () => {
@@ -246,7 +262,7 @@ describe("Admin API Routes", () => {
       });
 
       const { POST } = await import("../../app/api/admin/reset/route.js");
-      const res = await POST();
+      const res = await POST(authRequest("http://localhost/api/admin/reset", "POST"));
       expect(res.status).toBe(500);
       const body = await res.json();
       expect(body.error).toBeDefined();
@@ -255,19 +271,26 @@ describe("Admin API Routes", () => {
     it("handles empty database gracefully", async () => {
       getRequestContext.mockReturnValue({
         env: {
+          ADMIN_SECRET: TEST_SECRET,
           DB: {
             prepare: vi.fn(() => ({
+              bind: vi.fn(function () {
+                return this;
+              }),
               all: vi.fn(async () => ({ results: [] })),
+              run: vi.fn(async () => ({})),
             })),
           },
         },
       });
 
       const { POST } = await import("../../app/api/admin/reset/route.js");
-      const res = await POST();
+      const res = await POST(authRequest("http://localhost/api/admin/reset", "POST"));
       const body = await res.json();
-      expect(body.success).toBe(true);
-      expect(body.cleared).toEqual([]);
+      // New response shape: all manifest tables get created (none exist yet)
+      expect(Array.isArray(body.created)).toBe(true);
+      expect(Array.isArray(body.reset)).toBe(true);
+      expect(Array.isArray(body.errors)).toBe(true);
     });
   });
 });

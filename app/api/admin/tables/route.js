@@ -1,9 +1,14 @@
 import { getRequestContext } from "@cloudflare/next-on-pages";
+import { validateAdminRequest, unauthorizedResponse } from "@/lib/admin-auth";
 
 export const runtime = "edge";
 
-export async function GET() {
+export async function GET(request) {
   const { env } = getRequestContext();
+
+  const { authorized } = validateAdminRequest(request, env);
+  if (!authorized) return unauthorizedResponse();
+
   const db = env.DB;
 
   try {
