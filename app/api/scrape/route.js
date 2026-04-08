@@ -278,6 +278,8 @@ export async function POST(req) {
           // entries will be discarded by the client-side filter.
           const isFiltered = (region && region !== "all") || (serverId && serverId !== "all");
           pagesNeeded = Math.min(Math.ceil((limit * (isFiltered ? 8 : 1.5)) / 100), 20);
+          let lbSeasonMeta = null;
+
           const lbPageTasks = Array.from({ length: pagesNeeded }, (_, i) => {
             const pg = i + 1;
             return async () => {
@@ -289,6 +291,8 @@ export async function POST(req) {
                   retryBaseMs,
                   budget
                 );
+                // Capture season metadata from first page
+                if (pg === 1 && data?.season) lbSeasonMeta = data.season;
                 return data?.rankings || [];
               } catch (err) {
                 if (err instanceof subrequestBudgetExhausted) throw err;
@@ -307,6 +311,35 @@ export async function POST(req) {
               seen.add(key);
               allPlayers.push(p);
             }
+          }
+
+          // If leaderboard is empty on a fresh season, abort early with a helpful message
+          if (allPlayers.length === 0 && lbSeasonMeta) {
+            const seasonStart = lbSeasonMeta.startDate
+              ? new Date(lbSeasonMeta.startDate).toLocaleDateString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                  year: "numeric",
+                })
+              : null;
+            const seasonNo = lbSeasonMeta.seasonNo;
+            log.warn(
+              "leaderboard",
+              `Season ${seasonNo ?? "new"} just started${seasonStart ? ` (${seasonStart})` : ""}. No ${lbInfo.label} rankings available yet.`
+            );
+            sendEvent({
+              type: "empty-leaderboard",
+              season: seasonNo ?? null,
+              seasonStart: lbSeasonMeta.startDate ?? null,
+              leaderboard: lbInfo.label,
+            });
+            if (isActive) {
+              try {
+                controller.close();
+              } catch (e) {}
+              isActive = false;
+            }
+            return;
           }
 
           log.info("leaderboard", `Found ${allPlayers.length} players to analyze.`);

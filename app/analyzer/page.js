@@ -435,6 +435,14 @@ export default function Home() {
                     ]);
                   } else if (event.type === "progress") {
                     setProgress(event);
+                  } else if (event.type === "empty-leaderboard") {
+                    const seasonLabel = event.season ? `Season ${event.season}` : "A new season";
+                    const startLabel = event.seasonStart
+                      ? ` on ${new Date(event.seasonStart).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+                      : "";
+                    throw new Error(
+                      `${seasonLabel} just started${startLabel} — ${event.leaderboard} rankings aren't available yet. Try Abyss or check back soon.`
+                    );
                   } else if (event.type === "done") {
                     setData({
                       stats: event.stats,
