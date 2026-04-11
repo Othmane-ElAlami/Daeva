@@ -119,6 +119,8 @@ function clientAggregate(builds) {
     equippedStigmaCombos: {},
     subStatsBySlot: {},
     itemsBySlot: {},
+    theostoneUsage: {},
+    manastoneUsage: {},
     scannedPlayers: [],
   };
   for (const b of builds) {
@@ -190,8 +192,41 @@ function clientAggregate(builds) {
       const existing = slotItems[eq.itemName];
       if (existing) {
         existing.count++;
+        if (eq.enchantLevel > existing.maxEnchant) existing.maxEnchant = eq.enchantLevel;
+        if (
+          eq.itemLevel != null &&
+          (existing.itemLevel == null || eq.itemLevel > existing.itemLevel)
+        )
+          existing.itemLevel = eq.itemLevel;
       } else {
-        slotItems[eq.itemName] = { count: 1, grade: eq.grade };
+        slotItems[eq.itemName] = {
+          count: 1,
+          grade: eq.grade,
+          maxEnchant: eq.enchantLevel || 0,
+          itemLevel: eq.itemLevel ?? null,
+        };
+      }
+    }
+    for (const t of b.theostones || []) {
+      const entry = (stats.theostoneUsage[t.name] ||= {
+        count: 0,
+        desc: t.desc || "",
+        grade: t.grade || "",
+      });
+      entry.count++;
+      if (!entry.desc && t.desc) entry.desc = t.desc;
+      if (!entry.grade && t.grade) entry.grade = t.grade;
+    }
+    for (const m of b.manastones || []) {
+      const me = (stats.manastoneUsage[m.name] ||= { count: 0, maxValue: "", grade: "" });
+      me.count++;
+      if (m.value) {
+        const num = parseFloat(m.value.replace(/[^\d.]/g, "")) || 0;
+        const cur = parseFloat((me.maxValue || "").replace(/[^\d.]/g, "")) || 0;
+        if (num > cur) {
+          me.maxValue = m.value;
+          me.grade = m.grade || me.grade;
+        }
       }
     }
     stats.scannedPlayers.push({
