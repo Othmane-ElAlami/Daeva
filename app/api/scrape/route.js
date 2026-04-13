@@ -49,6 +49,13 @@ function sanitizeErrorMessage(msg) {
   return "An unexpected error occurred. Please try again.";
 }
 
+// Extract the numeric charKey from a player's profileImage URL.
+// shugo.gg's batch-equipment API requires this numeric ID (not the base64 characterId).
+function extractCharKey(player) {
+  const match = (player.profileImage || "").match(/[?&]charKey=(\d+)/);
+  return match ? match[1] : player.characterId;
+}
+
 const MAX_LIMIT = 100;
 const RATE_LIMIT_WINDOW_MS = 1000; // 1 second
 
@@ -378,7 +385,10 @@ export async function POST(req) {
             const hasEquip = !!cached.equipData;
             const equipCount = cached.equipData?.equipment?.equipmentList?.length || 0;
             const detailCount = Array.isArray(cached.equipDetails) ? cached.equipDetails.length : 0;
-            const isComplete = hasEquip && detailCount > 0 && cached.itemLevel != null;
+            const hasNonNullDetails =
+              Array.isArray(cached.equipDetails) && cached.equipDetails.some((d) => d !== null);
+            const isComplete =
+              hasEquip && detailCount > 0 && hasNonNullDetails && cached.itemLevel != null;
 
             if (isComplete) {
               const result = {
@@ -562,7 +572,7 @@ export async function POST(req) {
                         "POST",
                         {
                           items,
-                          characterId: p.characterId,
+                          characterId: extractCharKey(p),
                           serverId: p.serverId,
                           region: p.region || "KR",
                         },
@@ -694,6 +704,7 @@ export async function POST(req) {
                 globalRank: p.globalRank,
                 rank: p.rank,
                 faction: p.faction,
+                profileImage: p.profileImage,
               })),
               processedCount: priorEnriched.length + enriched.length,
               processedPlayers: [...priorEnriched, ...enriched].map((p) => ({
@@ -704,6 +715,7 @@ export async function POST(req) {
                 faction: p.faction,
                 globalRank: p.globalRank,
                 rank: p.rank,
+                profileImage: p.profileImage,
               })),
             });
             if (isActive) {
@@ -770,7 +782,10 @@ export async function POST(req) {
                 const detailCount2 = Array.isArray(cached.equipDetails)
                   ? cached.equipDetails.length
                   : 0;
-                const isComplete2 = hasEquip2 && detailCount2 > 0 && cached.itemLevel != null;
+                const hasNonNullDetails2 =
+                  Array.isArray(cached.equipDetails) && cached.equipDetails.some((d) => d !== null);
+                const isComplete2 =
+                  hasEquip2 && detailCount2 > 0 && hasNonNullDetails2 && cached.itemLevel != null;
 
                 if (isComplete2) {
                   if (enriched.length >= limit) break;
@@ -867,7 +882,7 @@ export async function POST(req) {
                           "POST",
                           {
                             items,
-                            characterId: p.characterId,
+                            characterId: extractCharKey(p),
                             serverId: p.serverId,
                             region: p.region,
                           },
@@ -975,6 +990,7 @@ export async function POST(req) {
                 globalRank: p.globalRank,
                 rank: p.rank,
                 faction: p.faction,
+                profileImage: p.profileImage,
               })),
               processedCount: priorEnriched.length + enriched.length,
               processedPlayers: [...priorEnriched, ...enriched].map((p) => ({
@@ -985,6 +1001,7 @@ export async function POST(req) {
                 faction: p.faction,
                 globalRank: p.globalRank,
                 rank: p.rank,
+                profileImage: p.profileImage,
               })),
             });
             if (isActive) {
@@ -1106,6 +1123,7 @@ export async function POST(req) {
                 globalRank: p.globalRank,
                 rank: p.rank,
                 faction: p.faction,
+                profileImage: p.profileImage,
               })),
               processedCount: priorEnriched.length + enriched.length,
               processedPlayers: [...priorEnriched, ...enriched].map((p) => ({
@@ -1116,6 +1134,7 @@ export async function POST(req) {
                 faction: p.faction,
                 globalRank: p.globalRank,
                 rank: p.rank,
+                profileImage: p.profileImage,
               })),
             });
           } else if (enriched.length > 0) {

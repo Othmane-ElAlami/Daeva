@@ -29,6 +29,12 @@ import {
 
 const log = createCliLogger();
 
+// Extract the numeric charKey from a player's profileImage URL.
+// shugo.gg's batch-equipment API requires this numeric ID (not the base64 characterId).
+function extractCharKey(player) {
+  const match = (player.profileImage || "").match(/[?&]charKey=(\d+)/);
+  return match ? match[1] : player.characterId;
+}
 // ── CLI Args ─────────────────────────────────────────────────────────────────
 const args = argv.slice(2);
 function getArg(name) {
@@ -235,7 +241,7 @@ async function fetchEquipmentDetails(player, headers) {
 
   const data = await fetchJSON(`${baseUrl}/api/items/batch-equipment`, headers, "POST", {
     items,
-    characterId: player.characterId,
+    characterId: extractCharKey(player),
     serverId: player.serverId,
     region: player.region,
   });
