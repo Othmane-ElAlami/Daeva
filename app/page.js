@@ -731,16 +731,7 @@ export default function HomePage() {
       <footer className="cin-footer" role="contentinfo">
         <div className="cin-footer-inner">
           <p className="cin-footer-text">
-            Aion 2 Build Intelligence &middot; Leaderboards from{" "}
-            <a
-              href="https://shugo.gg/leaderboard"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="cin-footer-link"
-            >
-              shugo.gg
-            </a>{" "}
-            &middot; Data from Official API
+            Aion 2 Build Intelligence &middot; Leaderboards &middot; Data from Official API
           </p>
           <p className="cin-footer-tagline">
             Forged in the shadows of the abyss with love, hate, the spilled blood of Balaurs, and

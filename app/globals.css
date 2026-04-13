@@ -100,7 +100,7 @@ body::after {
   backdrop-filter: blur(8px);
   box-shadow:
     0 0 0 1px rgba(255, 255, 255, 0.01) inset,
-    \ninset01px0 rgba(255, 255, 255, 0.05),
+    \ninset01px0rgba(255, 255, 255, 0.05),
     \n04px24pxrgba(0, 0, 0, 0.8),
     \n01px2pxrgba(0, 0, 0, 0.6);
   transition:
@@ -112,7 +112,7 @@ body::after {
   border-color: var(--border-hover);
   box-shadow:
     0 0 0 1px rgba(185, 28, 28, 0.05) inset,
-    \ninset01px0 rgba(185, 28, 28, 0.1),
+    \ninset01px0rgba(185, 28, 28, 0.1),
     \n08px40pxrgba(0, 0, 0, 0.9),
     0 0 30px -10px var(--accent-glow);
 }
@@ -532,11 +532,6 @@ select option {
   gap: 8px;
   padding: 5px 6px;
   border-radius: 6px;
-  transition: background 0.15s ease;
-}
-
-.substat-row:hover {
-  background: rgba(255, 255, 255, 0.025);
 }
 
 .substat-type-dot {
@@ -582,18 +577,12 @@ select option {
 }
 
 .substat-bar-bg {
-  max-width: 0;
   width: 60px;
   height: 3px;
   background: rgba(255, 255, 255, 0.06);
   border-radius: 2px;
   overflow: hidden;
   flex-shrink: 0;
-  transition: max-width 0.25s ease;
-}
-
-.substat-row:hover .substat-bar-bg {
-  max-width: 60px;
 }
 
 .substat-bar {
