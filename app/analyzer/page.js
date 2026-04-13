@@ -36,7 +36,6 @@ const LEADERBOARDS = [
   { id: "arena-solo", label: "Arena Solo" },
   { id: "arena-coop", label: "Arena Coop" },
   { id: "ascension", label: "Ascension" },
-  { id: "raid", label: "Raid" },
 ];
 
 const REGIONS = [
@@ -46,51 +45,51 @@ const REGIONS = [
 ];
 
 const ELYOS_SERVERS = [
-  { id: "1001", name: "Siel" },
-  { id: "1002", name: "Nezekan" },
-  { id: "1003", name: "Vaizel" },
-  { id: "1004", name: "Kaisinel" },
-  { id: "1005", name: "Yustiel" },
   { id: "1006", name: "Ariel" },
-  { id: "1007", name: "Fregion" },
-  { id: "1008", name: "Meslamtaeda" },
-  { id: "1009", name: "Hithanya" },
-  { id: "1010", name: "Nania" },
-  { id: "1011", name: "Tahavatha" },
-  { id: "1012", name: "Luteros" },
-  { id: "1013", name: "Phernos" },
-  { id: "1014", name: "Daminu" },
-  { id: "1015", name: "Kasaka" },
   { id: "1016", name: "Bakarma" },
-  { id: "1017", name: "Tsenka" },
-  { id: "1018", name: "Kochi" },
+  { id: "1014", name: "Daminu" },
+  { id: "1007", name: "Fregion" },
+  { id: "1009", name: "Hithanya" },
   { id: "1019", name: "Ishtar" },
-  { id: "1020", name: "Tiamat" },
+  { id: "1004", name: "Kaisinel" },
+  { id: "1015", name: "Kasaka" },
+  { id: "1018", name: "Kochi" },
+  { id: "1012", name: "Luteros" },
+  { id: "1008", name: "Meslamtaeda" },
+  { id: "1010", name: "Nania" },
+  { id: "1002", name: "Nezekan" },
+  { id: "1013", name: "Phernos" },
   { id: "1021", name: "Poeta" },
+  { id: "1001", name: "Siel" },
+  { id: "1011", name: "Tahavatha" },
+  { id: "1020", name: "Tiamat" },
+  { id: "1017", name: "Tsenka" },
+  { id: "1003", name: "Vaizel" },
+  { id: "1005", name: "Yustiel" },
 ];
 
 const ASMODIAN_SERVERS = [
+  { id: "2006", name: "Azphel" },
+  { id: "2018", name: "Baba" },
+  { id: "2008", name: "Beritra" },
+  { id: "2007", name: "Ereshkigal" },
+  { id: "2019", name: "Fafnir" },
+  { id: "2010", name: "Hadala" },
+  { id: "2020", name: "Indnah" },
   { id: "2001", name: "Israphel" },
-  { id: "2002", name: "Zikel" },
-  { id: "2003", name: "Triniel" },
+  { id: "2016", name: "Kromede" },
+  { id: "2011", name: "Ludra" },
   { id: "2004", name: "Lumiel" },
   { id: "2005", name: "Marchutan" },
-  { id: "2006", name: "Azphel" },
-  { id: "2007", name: "Ereshkigal" },
-  { id: "2008", name: "Beritra" },
-  { id: "2009", name: "Nemon" },
-  { id: "2010", name: "Hadala" },
-  { id: "2011", name: "Ludra" },
-  { id: "2012", name: "Ulgorn" },
   { id: "2013", name: "Munin" },
+  { id: "2009", name: "Nemon" },
   { id: "2014", name: "Odar" },
-  { id: "2015", name: "Zemurru" },
-  { id: "2016", name: "Kromede" },
-  { id: "2017", name: "Quai" },
-  { id: "2018", name: "Baba" },
-  { id: "2019", name: "Fafnir" },
-  { id: "2020", name: "Indnah" },
   { id: "2021", name: "Pandemonium" },
+  { id: "2017", name: "Quai" },
+  { id: "2003", name: "Triniel" },
+  { id: "2012", name: "Ulgorn" },
+  { id: "2015", name: "Zemurru" },
+  { id: "2002", name: "Zikel" },
 ];
 
 const fadeUp = {
@@ -2841,42 +2840,57 @@ export default function Home() {
                                       const pct = ((count / displayData.count) * 100).toFixed(0);
                                       const color = gradeColor(grade);
                                       return (
-                                        <div key={itemName}>
-                                          <div className="substat-row">
+                                        <div
+                                          key={itemName}
+                                          style={{
+                                            padding: "5px 6px",
+                                            borderRadius: "6px",
+                                          }}
+                                        >
+                                          {/* name row */}
+                                          <div
+                                            style={{
+                                              display: "flex",
+                                              alignItems: "center",
+                                              gap: "7px",
+                                            }}
+                                          >
                                             <span
-                                              className="substat-type-dot"
                                               style={{
+                                                width: "5px",
+                                                height: "5px",
+                                                borderRadius: "50%",
+                                                flexShrink: 0,
                                                 background: color,
-                                                boxShadow: `0 0 6px ${color}66`,
                                               }}
                                             />
-                                            <div className="substat-info">
+                                            <span
+                                              title={itemName}
+                                              style={{
+                                                flex: 1,
+                                                fontSize: "0.72rem",
+                                                fontWeight: 500,
+                                                color,
+                                                whiteSpace: "normal",
+                                                lineHeight: 1.3,
+                                                minWidth: 0,
+                                              }}
+                                            >
                                               <span
-                                                className="substat-name"
-                                                title={itemName}
                                                 style={{
-                                                  color,
-                                                  whiteSpace: "normal",
-                                                  lineHeight: "1.3",
-                                                  fontSize: "0.72rem",
+                                                  color: "var(--text-tertiary)",
+                                                  marginRight: "6px",
+                                                  fontSize: "0.65rem",
                                                 }}
                                               >
-                                                <span
-                                                  style={{
-                                                    color: "var(--text-tertiary)",
-                                                    marginRight: "6px",
-                                                    fontSize: "0.65rem",
-                                                  }}
-                                                >
-                                                  {i + 1}.
-                                                </span>
-                                                {itemName}
+                                                {i + 1}.
                                               </span>
-                                            </div>
+                                              {itemName}
+                                            </span>
                                             {itemLevel != null && (
                                               <span
                                                 style={{
-                                                  fontSize: "0.7rem",
+                                                  fontSize: "0.70rem",
                                                   fontFamily: "ui-monospace, monospace",
                                                   fontWeight: 700,
                                                   color,
@@ -2899,24 +2913,33 @@ export default function Home() {
                                             >
                                               {pct}%
                                             </span>
-                                            <div className="substat-bar-bg">
-                                              <motion.div
-                                                initial={{ width: 0 }}
-                                                animate={{
-                                                  width: `${pct}%`,
-                                                }}
-                                                transition={{
-                                                  duration: 0.8,
-                                                  ease: "easeOut",
-                                                  delay: 0.15 + slotIdx * 0.03,
-                                                }}
-                                                className="substat-bar"
-                                                style={{
-                                                  background: color,
-                                                  boxShadow: `0 0 8px ${color}4d`,
-                                                }}
-                                              />
-                                            </div>
+                                          </div>
+                                          {/* always-visible progress bar */}
+                                          <div
+                                            style={{
+                                              marginTop: "4px",
+                                              marginLeft: "12px",
+                                              height: "2px",
+                                              background: "rgba(255,255,255,0.05)",
+                                              borderRadius: "1px",
+                                              overflow: "hidden",
+                                            }}
+                                          >
+                                            <motion.div
+                                              initial={{ width: 0 }}
+                                              animate={{ width: `${pct}%` }}
+                                              transition={{
+                                                duration: 0.8,
+                                                ease: "easeOut",
+                                                delay: 0.15 + slotIdx * 0.03,
+                                              }}
+                                              style={{
+                                                height: "100%",
+                                                borderRadius: "1px",
+                                                background: color,
+                                                opacity: 0.55,
+                                              }}
+                                            />
                                           </div>
                                         </div>
                                       );

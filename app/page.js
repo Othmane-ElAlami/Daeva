@@ -14,7 +14,7 @@ const SCRAMBLE_GLYPHS = "αβγδεζηθλμξπστφχψωᚠᚢᚦᚨᚱᚲ�
 const STATS = [
   { value: 42, label: "Servers Tracked", suffix: "" },
   { value: 8, label: "Classes Analyzed", suffix: "" },
-  { value: 7, label: "Leaderboard Types", suffix: "" },
+  { value: 6, label: "Leaderboard Types", suffix: "" },
   { value: 2, label: "Regions Supported", suffix: "" },
 ];
 
@@ -81,7 +81,6 @@ function snapshotToDisplay(snap) {
     "arena-coop": "Arena Coop",
     transcendence: "Transcendence",
     ascension: "Ascension",
-    raid: "Raid",
   };
 
   return {
@@ -731,11 +730,11 @@ export default function HomePage() {
       <footer className="cin-footer" role="contentinfo">
         <div className="cin-footer-inner">
           <p className="cin-footer-text">
-            Aion 2 Build Intelligence &middot; Leaderboards &middot; Data from Official API
+            Aion 2 Build Intelligence &middot; Data from Official API
           </p>
           <p className="cin-footer-tagline">
-            Forged in the shadows of the abyss with love, hate, the spilled blood of Balaurs, and
-            the torn skin of my enemies.
+            Forged in the shadows of the abyss with spilled blood of Balaurs, and the torn skin of
+            my enemies.
           </p>
         </div>
       </footer>
