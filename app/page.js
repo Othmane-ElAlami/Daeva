@@ -540,9 +540,6 @@ export default function HomePage() {
             <a href="#features" className="cin-nav-link">
               Features
             </a>
-            <a href="#stats" className="cin-nav-link">
-              Stats
-            </a>
             <Link href="/analyzer" className="cin-nav-cta">
               Launch Analyzer
               <ArrowRight size={14} />
@@ -570,14 +567,6 @@ export default function HomePage() {
             onClick={() => setMobileMenuOpen(false)}
           >
             Features
-          </a>
-          <a
-            href="#stats"
-            className="cin-mobile-link"
-            role="menuitem"
-            onClick={() => setMobileMenuOpen(false)}
-          >
-            Stats
           </a>
           <Link
             href="/analyzer"
@@ -636,29 +625,6 @@ export default function HomePage() {
           </div>
         </div>
       </section>
-
-      {/* ═══ SOCIAL PROOF STRIP ═══ */}
-      <section
-        ref={proofRef}
-        className={`cin-proof ${proofInView ? "cin-proof--visible" : ""}`}
-        aria-label="Platform coverage"
-      >
-        <div className="cin-proof-inner">
-          <p className="cin-proof-text">
-            Competitive intelligence across the entire Aion 2 ecosystem
-          </p>
-          <div className="cin-proof-divider" />
-          <div className="cin-proof-stats">
-            {STATS.map((s) => (
-              <div key={s.label} className="cin-proof-stat">
-                <span className="cin-proof-value">{s.value}</span>
-                <span className="cin-proof-label">{s.label}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
       {/* ═══ FEATURES ═══ */}
       <section
         id="features"
@@ -716,9 +682,7 @@ export default function HomePage() {
       >
         <div className="cin-final-inner">
           <h2 className="cin-final-heading">Ready to decode the meta?</h2>
-          <p className="cin-final-sub">
-            Join the players using data-driven builds to climb the leaderboards.
-          </p>
+          <p className="cin-final-sub">Stop guessing. Build smarter with real meta data.</p>
           <Link href="/analyzer" className="cin-btn-primary cin-btn-primary--lg">
             <span>Launch Analyzer</span>
             <ArrowRight size={20} />

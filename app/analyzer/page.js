@@ -277,6 +277,8 @@ export default function Home() {
   const [rawBuilds, setRawBuilds] = useState(null);
   const [raceFilter, setRaceFilter] = useState("all");
   const [runeFilter, setRuneFilter] = useState("all");
+  const [serverDropdownOpen, setServerDropdownOpen] = useState(false);
+  const [serverSearch, setServerSearch] = useState("");
   const [error, setError] = useState("");
   const [logs, setLogs] = useState([]);
   const [progress, setProgress] = useState({
@@ -295,6 +297,7 @@ export default function Home() {
 
   const logContainerRef = useRef(null);
   const resultsLogContainerRef = useRef(null);
+  const serverDropdownRef = useRef(null);
 
   // Derive race from a specific server ID
   const raceFromServer = (sid) => {
@@ -375,6 +378,18 @@ export default function Home() {
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (serverDropdownRef.current && !serverDropdownRef.current.contains(e.target)) {
+        setServerDropdownOpen(false);
+      }
+    };
+    if (serverDropdownOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [serverDropdownOpen]);
 
   useEffect(() => {
     if (logContainerRef.current) {
@@ -679,66 +694,382 @@ export default function Home() {
             </div>
 
             <div className="input-group">
-              <label>Race</label>
-              <div className="relative">
-                <select
-                  value={forma.race}
-                  onChange={(e) => handleRaceChange(e.target.value)}
-                  className="appearance-none"
-                >
-                  <option value="all">All Races</option>
-                  <option value="elyos">☀️ Elyos</option>
-                  <option value="asmodians">🌙 Asmodians</option>
-                </select>
-                <ChevronDown
-                  className="absolute pointer-events-none"
-                  style={{
-                    right: "14px",
-                    top: "12px",
-                    color: "var(--text-tertiary)",
+              <label>Race & Server</label>
+              <div className="relative" ref={serverDropdownRef}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setServerDropdownOpen((o) => !o);
+                    setServerSearch("");
                   }}
-                  size={14}
-                />
-              </div>
-            </div>
+                  style={{
+                    width: "100%",
+                    background: "rgba(0, 0, 0, 0.3)",
+                    border: `1px solid ${
+                      serverDropdownOpen ? "var(--accent)" : "var(--border-default)"
+                    }`,
+                    borderRadius: "var(--radius-sm)",
+                    padding: "10px 14px",
+                    color: "var(--text-primary)",
+                    fontSize: "0.9rem",
+                    fontFamily: "inherit",
+                    outline: "none",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    transition: "border-color 0.2s, box-shadow 0.2s",
+                    ...(serverDropdownOpen && {
+                      boxShadow: "0 0 0 3px var(--accent-glow), 0 0 20px -5px var(--accent-glow)",
+                    }),
+                  }}
+                >
+                  <span>
+                    {(() => {
+                      if (forma.serverId !== "all") {
+                        const elyos = ELYOS_SERVERS.find((s) => s.id === forma.serverId);
+                        if (elyos) return `🌕 ${elyos.name}`;
+                        const asmo = ASMODIAN_SERVERS.find((s) => s.id === forma.serverId);
+                        if (asmo) return `🌑 ${asmo.name}`;
+                      }
+                      if (forma.race === "elyos") return "🌕 Elyos — All Servers";
+                      if (forma.race === "asmodians") return "🌑 Asmodian — All Servers";
+                      return "All Races & Servers";
+                    })()}
+                  </span>
+                  <ChevronDown
+                    size={14}
+                    style={{
+                      color: "var(--text-tertiary)",
+                      flexShrink: 0,
+                      transform: serverDropdownOpen ? "rotate(180deg)" : "none",
+                      transition: "transform 0.2s",
+                    }}
+                  />
+                </button>
 
-            <div className="input-group">
-              <label>Server</label>
-              <div className="relative">
-                <select
-                  value={forma.serverId}
-                  onChange={(e) => handleServerChange(e.target.value)}
-                  className="appearance-none"
-                >
-                  <option value="all">All Servers</option>
-                  {filteredServers.elyos.length > 0 && (
-                    <optgroup label="☀️ Elyos">
-                      {filteredServers.elyos.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name}
-                        </option>
-                      ))}
-                    </optgroup>
+                <AnimatePresence>
+                  {serverDropdownOpen && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -6, scale: 0.98 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: -6, scale: 0.98 }}
+                      transition={{ duration: 0.15 }}
+                      style={{
+                        position: "absolute",
+                        top: "calc(100% + 4px)",
+                        left: 0,
+                        right: 0,
+                        zIndex: 100,
+                        background: "var(--bg-elevated)",
+                        border: "1px solid rgba(255,255,255,0.08)",
+                        borderRadius: "var(--radius-md)",
+                        boxShadow: "0 12px 40px rgba(0,0,0,0.7), 0 0 0 1px rgba(185,28,28,0.1)",
+                        overflow: "hidden",
+                      }}
+                    >
+                      <div style={{ padding: "8px 8px 6px" }}>
+                        <input
+                          type="text"
+                          placeholder="Search server…"
+                          value={serverSearch}
+                          onChange={(e) => setServerSearch(e.target.value)}
+                          autoFocus
+                          style={{ fontSize: "0.8rem", padding: "7px 10px" }}
+                        />
+                      </div>
+
+                      <div
+                        style={{ maxHeight: "240px", overflowY: "auto", padding: "0 6px 6px" }}
+                        className="custom-scrollbar-slim"
+                      >
+                        {(() => {
+                          const q = serverSearch.toLowerCase();
+                          const allActive = forma.race === "all" && forma.serverId === "all";
+                          const elyosAllActive = forma.race === "elyos" && forma.serverId === "all";
+                          const asmoAllActive =
+                            forma.race === "asmodians" && forma.serverId === "all";
+
+                          const showAll =
+                            !q ||
+                            "all".includes(q) ||
+                            "all races".includes(q) ||
+                            "all servers".includes(q);
+                          const showElyosFaction = !q || "elyos".includes(q) || "all".includes(q);
+                          const showAsmoFaction =
+                            !q || "asmodian".includes(q) || "asmo".includes(q) || "all".includes(q);
+
+                          const elyosList = ELYOS_SERVERS.filter((s) =>
+                            s.name.toLowerCase().includes(q)
+                          );
+                          const asmoList = ASMODIAN_SERVERS.filter((s) =>
+                            s.name.toLowerCase().includes(q)
+                          );
+
+                          const hasAnything =
+                            showAll ||
+                            showElyosFaction ||
+                            showAsmoFaction ||
+                            elyosList.length > 0 ||
+                            asmoList.length > 0;
+
+                          if (!hasAnything) {
+                            return (
+                              <div
+                                style={{
+                                  padding: "16px 10px",
+                                  textAlign: "center",
+                                  fontSize: "0.8rem",
+                                  color: "var(--text-tertiary)",
+                                }}
+                              >
+                                No results for &ldquo;{serverSearch}&rdquo;
+                              </div>
+                            );
+                          }
+
+                          return (
+                            <>
+                              {/* ── All Races & Servers ── */}
+                              {showAll && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    handleRaceChange("all");
+                                    setServerDropdownOpen(false);
+                                    setServerSearch("");
+                                  }}
+                                  style={{
+                                    width: "100%",
+                                    textAlign: "left",
+                                    padding: "9px 12px",
+                                    borderRadius: "var(--radius-sm)",
+                                    fontSize: "0.85rem",
+                                    cursor: "pointer",
+                                    fontFamily: "inherit",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: "8px",
+                                    marginBottom: "4px",
+                                    background: allActive
+                                      ? "linear-gradient(90deg, rgba(185,28,28,0.15), rgba(185,28,28,0.06))"
+                                      : "rgba(255,255,255,0.02)",
+                                    border: allActive
+                                      ? "1px solid rgba(185,28,28,0.3)"
+                                      : "1px solid rgba(255,255,255,0.04)",
+                                    color: allActive
+                                      ? "var(--accent-light)"
+                                      : "var(--text-primary)",
+                                    fontWeight: allActive ? 600 : 400,
+                                  }}
+                                >
+                                  <span
+                                    style={{
+                                      width: "18px",
+                                      height: "18px",
+                                      borderRadius: "4px",
+                                      background: "rgba(185,28,28,0.15)",
+                                      border: "1px solid rgba(185,28,28,0.2)",
+                                      display: "flex",
+                                      alignItems: "center",
+                                      justifyContent: "center",
+                                      fontSize: "0.65rem",
+                                      flexShrink: 0,
+                                    }}
+                                  >
+                                    ✦
+                                  </span>
+                                  All Races & Servers
+                                </button>
+                              )}
+
+                              {/* ── Elyos section ── */}
+                              {(showElyosFaction || elyosList.length > 0) && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      handleRaceChange("elyos");
+                                      setServerDropdownOpen(false);
+                                      setServerSearch("");
+                                    }}
+                                    style={{
+                                      width: "100%",
+                                      textAlign: "left",
+                                      padding: "9px 12px",
+                                      borderRadius: "var(--radius-sm)",
+                                      fontSize: "0.85rem",
+                                      fontWeight: 600,
+                                      cursor: "pointer",
+                                      fontFamily: "inherit",
+                                      display: "flex",
+                                      alignItems: "center",
+                                      justifyContent: "space-between",
+                                      gap: "8px",
+                                      marginTop: showAll ? "2px" : "0",
+                                      background: elyosAllActive
+                                        ? "linear-gradient(90deg, rgba(6,182,212,0.15), rgba(6,182,212,0.05))"
+                                        : "rgba(6,182,212,0.04)",
+                                      border: elyosAllActive
+                                        ? "1px solid rgba(6,182,212,0.3)"
+                                        : "1px solid rgba(6,182,212,0.1)",
+                                      color: "#67e8f9",
+                                    }}
+                                  >
+                                    <span
+                                      style={{ display: "flex", alignItems: "center", gap: "7px" }}
+                                    >
+                                      <span style={{ fontSize: "1rem", lineHeight: 1 }}>🌕</span>
+                                      Elyos
+                                    </span>
+                                    <span
+                                      style={{
+                                        fontSize: "0.6rem",
+                                        fontWeight: 400,
+                                        color: "rgba(103,232,249,0.6)",
+                                        whiteSpace: "nowrap",
+                                      }}
+                                    >
+                                      All servers →
+                                    </span>
+                                  </button>
+                                  {elyosList.map((s) => (
+                                    <button
+                                      key={s.id}
+                                      type="button"
+                                      onClick={() => {
+                                        handleServerChange(s.id);
+                                        setServerDropdownOpen(false);
+                                        setServerSearch("");
+                                      }}
+                                      style={{
+                                        width: "100%",
+                                        textAlign: "left",
+                                        padding: "6px 12px 6px 28px",
+                                        borderRadius: "var(--radius-sm)",
+                                        fontSize: "0.82rem",
+                                        cursor: "pointer",
+                                        fontFamily: "inherit",
+                                        background:
+                                          forma.serverId === s.id
+                                            ? "rgba(6,182,212,0.1)"
+                                            : "transparent",
+                                        color:
+                                          forma.serverId === s.id
+                                            ? "#67e8f9"
+                                            : "var(--text-secondary)",
+                                        border:
+                                          forma.serverId === s.id
+                                            ? "1px solid rgba(6,182,212,0.2)"
+                                            : "1px solid transparent",
+                                        fontWeight: forma.serverId === s.id ? 600 : 400,
+                                      }}
+                                    >
+                                      {s.name}
+                                    </button>
+                                  ))}
+                                </>
+                              )}
+
+                              {/* ── Asmodian section ── */}
+                              {(showAsmoFaction || asmoList.length > 0) && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      handleRaceChange("asmodians");
+                                      setServerDropdownOpen(false);
+                                      setServerSearch("");
+                                    }}
+                                    style={{
+                                      width: "100%",
+                                      textAlign: "left",
+                                      padding: "9px 12px",
+                                      borderRadius: "var(--radius-sm)",
+                                      fontSize: "0.85rem",
+                                      fontWeight: 600,
+                                      cursor: "pointer",
+                                      fontFamily: "inherit",
+                                      display: "flex",
+                                      alignItems: "center",
+                                      justifyContent: "space-between",
+                                      gap: "8px",
+                                      marginTop:
+                                        showElyosFaction || elyosList.length > 0
+                                          ? "4px"
+                                          : showAll
+                                            ? "2px"
+                                            : "0",
+                                      background: asmoAllActive
+                                        ? "linear-gradient(90deg, rgba(244,63,94,0.15), rgba(244,63,94,0.05))"
+                                        : "rgba(244,63,94,0.04)",
+                                      border: asmoAllActive
+                                        ? "1px solid rgba(244,63,94,0.3)"
+                                        : "1px solid rgba(244,63,94,0.1)",
+                                      color: "#fda4af",
+                                    }}
+                                  >
+                                    <span
+                                      style={{ display: "flex", alignItems: "center", gap: "7px" }}
+                                    >
+                                      <span style={{ fontSize: "1rem", lineHeight: 1 }}>🌑</span>
+                                      Asmodian
+                                    </span>
+                                    <span
+                                      style={{
+                                        fontSize: "0.6rem",
+                                        fontWeight: 400,
+                                        color: "rgba(253,164,175,0.6)",
+                                        whiteSpace: "nowrap",
+                                      }}
+                                    >
+                                      All servers →
+                                    </span>
+                                  </button>
+                                  {asmoList.map((s) => (
+                                    <button
+                                      key={s.id}
+                                      type="button"
+                                      onClick={() => {
+                                        handleServerChange(s.id);
+                                        setServerDropdownOpen(false);
+                                        setServerSearch("");
+                                      }}
+                                      style={{
+                                        width: "100%",
+                                        textAlign: "left",
+                                        padding: "6px 12px 6px 28px",
+                                        borderRadius: "var(--radius-sm)",
+                                        fontSize: "0.82rem",
+                                        cursor: "pointer",
+                                        fontFamily: "inherit",
+                                        background:
+                                          forma.serverId === s.id
+                                            ? "rgba(244,63,94,0.1)"
+                                            : "transparent",
+                                        color:
+                                          forma.serverId === s.id
+                                            ? "#fda4af"
+                                            : "var(--text-secondary)",
+                                        border:
+                                          forma.serverId === s.id
+                                            ? "1px solid rgba(244,63,94,0.2)"
+                                            : "1px solid transparent",
+                                        fontWeight: forma.serverId === s.id ? 600 : 400,
+                                      }}
+                                    >
+                                      {s.name}
+                                    </button>
+                                  ))}
+                                </>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </div>
+                    </motion.div>
                   )}
-                  {filteredServers.asmodian.length > 0 && (
-                    <optgroup label="🌙 Asmodian">
-                      {filteredServers.asmodian.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                </select>
-                <ChevronDown
-                  className="absolute pointer-events-none"
-                  style={{
-                    right: "14px",
-                    top: "12px",
-                    color: "var(--text-tertiary)",
-                  }}
-                  size={14}
-                />
+                </AnimatePresence>
               </div>
             </div>
 
@@ -751,8 +1082,8 @@ export default function Home() {
                   className="appearance-none"
                 >
                   <option value="all">All Runes</option>
-                  <option value="pve">⚔️ PvE (Clash Rune)</option>
-                  <option value="pvp">🛡️ PvP (Devotion Rune)</option>
+                  <option value="pve">🐉 PvE (Clash Rune)</option>
+                  <option value="pvp">⚔️ PvP (Devotion Rune)</option>
                 </select>
                 <ChevronDown
                   className="absolute pointer-events-none"
@@ -1244,7 +1575,7 @@ export default function Home() {
                             fontWeight: 600,
                           }}
                         >
-                          {raceFilter === "elyos" ? "☀️ Elyos" : "🌙 Asmodians"}
+                          {raceFilter === "elyos" ? "🌕 Elyos" : "🌑 Asmodians"}
                         </span>
                       )}
                       {runeFilter !== "all" && (
@@ -1259,7 +1590,7 @@ export default function Home() {
                             fontWeight: 600,
                           }}
                         >
-                          {runeFilter === "pve" ? "⚔️ PvE (Clash)" : "🛡️ PvP (Devotion)"}
+                          {runeFilter === "pve" ? "🐉 PvE (Clash)" : "⚔️ PvP (Devotion)"}
                         </span>
                       )}
                       <div
