@@ -470,6 +470,10 @@ export async function POST(req) {
         const fetchPadding = runeFilterActive ? 4 : 0.3;
         const toFetch = uncachedPlayers.slice(0, remaining + Math.ceil(remaining * fetchPadding));
 
+        // Track all players that were network-fetched (including rune-skipped), so they are
+        // excluded from continuation batches and never re-fetched unnecessarily.
+        const fetchedIds = new Set();
+
         if (toFetch.length > 0 && remaining > 0) {
           // reservedCount: incremented synchronously at task start to prevent over-fetching
           // doneCount: incremented at task completion for sequential display numbers
@@ -488,7 +492,10 @@ export async function POST(req) {
 
             sendEvent({
               type: "progress",
-              current: alreadyProcessed + Math.min(reservedCount, limit),
+              // When rune filter is active, tie progress to matched players (not total fetched)
+              // so the progress bar stays in sync with the "(X/Y)" numbers in the logs.
+              current:
+                alreadyProcessed + Math.min(runeFilterActive ? matchedCount : reservedCount, limit),
               total: originalLimit,
               target: p.characterName,
             });
@@ -603,11 +610,17 @@ export async function POST(req) {
                 p.region === "TW"
                   ? "https://tw.ncsoft.com/aion2/api"
                   : "https://aion2.plaync.com/api";
-              const infoData = await fetchJSON(
-                `${gsApiBase}/character/info?lang=en&characterId=${p.characterId}&serverId=${p.serverId}`,
-                makeDirectHeaders(),
-                "GET",
-                null,
+              const infoData = await fetchWithRetry(
+                () =>
+                  fetchJSON(
+                    `${gsApiBase}/character/info?lang=en&characterId=${p.characterId}&serverId=${p.serverId}`,
+                    makeDirectHeaders(),
+                    "GET",
+                    null,
+                    budget
+                  ),
+                maxRetries,
+                retryBaseMs,
                 budget
               );
               itemLevel = extractItemLevelFromInfo(infoData);
@@ -674,6 +687,8 @@ export async function POST(req) {
 
           // Collect successful results (skip rune-filtered players)
           for (const r of results) {
+            // Track every fetched player (matched or skipped) to avoid re-fetching in later batches
+            if (r) fetchedIds.add(`${r.characterId}_${r.serverId}`);
             if (!r || r._runeSkipped || enriched.length >= limit) continue;
             enriched.push(r);
             for (const item of r._equip?.equipment?.equipmentList || []) {
@@ -684,7 +699,10 @@ export async function POST(req) {
 
         // ─── Continuation check: if budget exhausted before finishing, hand off ───
         if (enriched.length < limit && !budget.canAfford(3)) {
-          const processedIds = new Set(enriched.map((p) => `${p.characterId}_${p.serverId}`));
+          const processedIds = new Set([
+            ...enriched.map((p) => `${p.characterId}_${p.serverId}`),
+            ...fetchedIds,
+          ]);
           const remainingPlayers = allPlayers.filter(
             (p) => !processedIds.has(`${p.characterId}_${p.serverId}`)
           );
@@ -910,11 +928,17 @@ export async function POST(req) {
                       p.region === "TW"
                         ? "https://tw.ncsoft.com/aion2/api"
                         : "https://aion2.plaync.com/api";
-                    const infoD = await fetchJSON(
-                      `${gsApiBase2}/character/info?lang=en&characterId=${p.characterId}&serverId=${p.serverId}`,
-                      makeDirectHeaders(),
-                      "GET",
-                      null,
+                    const infoD = await fetchWithRetry(
+                      () =>
+                        fetchJSON(
+                          `${gsApiBase2}/character/info?lang=en&characterId=${p.characterId}&serverId=${p.serverId}`,
+                          makeDirectHeaders(),
+                          "GET",
+                          null,
+                          budget
+                        ),
+                      maxRetries,
+                      retryBaseMs,
                       budget
                     );
                     itemLevel2 = extractItemLevelFromInfo(infoD);
@@ -970,7 +994,10 @@ export async function POST(req) {
 
         // ─── Second continuation check after Phase 3b ───
         if (enriched.length < limit && !budget.canAfford(3)) {
-          const processedIds = new Set(enriched.map((p) => `${p.characterId}_${p.serverId}`));
+          const processedIds = new Set([
+            ...enriched.map((p) => `${p.characterId}_${p.serverId}`),
+            ...fetchedIds,
+          ]);
           const remainingPlayers = allPlayers.filter(
             (p) => !processedIds.has(`${p.characterId}_${p.serverId}`)
           );
