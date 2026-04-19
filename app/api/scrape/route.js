@@ -56,6 +56,18 @@ function extractCharKey(player) {
   return match ? match[1] : player.characterId;
 }
 
+// Persist a scrape lifecycle event to admin_events (fire-and-forget).
+async function logScrapeEvent(db, eventType, metadata) {
+  try {
+    await db
+      .prepare("INSERT INTO admin_events (event_type, metadata, created_at) VALUES (?, ?, ?)")
+      .bind(eventType, JSON.stringify(metadata), Date.now())
+      .run();
+  } catch {
+    // non-critical — never fail the analysis for a logging error
+  }
+}
+
 const MAX_LIMIT = 100;
 const RATE_LIMIT_WINDOW_MS = 1000; // 1 second
 
@@ -241,6 +253,17 @@ export async function POST(req) {
       const itemDetailsMap = {};
 
       try {
+        if (!isContinuation) {
+          await logScrapeEvent(db, "analysis_start", {
+            cls,
+            lbType,
+            region: region || "all",
+            serverId: serverId || "all",
+            limit: originalLimit,
+            ip: req.headers.get("cf-connecting-ip") || "unknown",
+          });
+        }
+
         // ═══════════════════════════════════════════════════════════════════
         // PHASE 1: Fetch leaderboard (or resume from continuation)
         // ═══════════════════════════════════════════════════════════════════
@@ -712,6 +735,13 @@ export async function POST(req) {
               "system",
               `Subrequest budget reached — continuing in next batch (${alreadyProcessed + enriched.length}/${originalLimit} done)...`
             );
+            await logScrapeEvent(db, "analysis_continue", {
+              cls,
+              lbType,
+              processed: priorEnriched.length + enriched.length,
+              remaining: remainingPlayers.length,
+              phase: "2a",
+            });
             sendEvent({
               type: "continue",
               players: remainingPlayers.map((p) => ({
@@ -1007,6 +1037,13 @@ export async function POST(req) {
               "system",
               `Subrequest budget reached — continuing in next batch (${alreadyProcessed + enriched.length}/${originalLimit} done)...`
             );
+            await logScrapeEvent(db, "analysis_continue", {
+              cls,
+              lbType,
+              processed: priorEnriched.length + enriched.length,
+              remaining: remainingPlayers.length,
+              phase: "3b",
+            });
             sendEvent({
               type: "continue",
               players: remainingPlayers.map((p) => ({
@@ -1116,6 +1153,7 @@ export async function POST(req) {
           console.error("[meta-snapshot] Save failed:", snapshotErr?.message || snapshotErr);
         }
 
+        await logScrapeEvent(db, "analysis_done", { cls, lbType, count: allEnriched.length });
         sendEvent({ type: "done", stats, count: allEnriched.length, builds });
         if (isActive) {
           try {
@@ -1140,6 +1178,13 @@ export async function POST(req) {
               "system",
               `Subrequest budget reached — continuing in next batch (${alreadyProcessed + enriched.length}/${originalLimit} done)...`
             );
+            await logScrapeEvent(db, "analysis_continue", {
+              cls,
+              lbType,
+              processed: priorEnriched.length + enriched.length,
+              remaining: remainingPlayers.length,
+              phase: "catch",
+            });
             sendEvent({
               type: "continue",
               players: remainingPlayers.map((p) => ({
@@ -1183,8 +1228,20 @@ export async function POST(req) {
             try {
               await saveMetaSnapshot(db, cls, lbType, stats);
             } catch (_) {}
+            await logScrapeEvent(db, "analysis_done", {
+              cls,
+              lbType,
+              count: enriched.length,
+              partial: true,
+            });
             sendEvent({ type: "done", stats, count: enriched.length, builds });
           } else {
+            await logScrapeEvent(db, "analysis_error", {
+              cls,
+              lbType,
+              message:
+                "Unable to scan players at this time. Please try again with a smaller limit.",
+            });
             sendEvent({
               type: "error",
               message:
@@ -1196,6 +1253,12 @@ export async function POST(req) {
           const rawMsg = String(error?.message || error || "");
           const safeMessage = sanitizeErrorMessage(rawMsg);
           log.error("POST", rawMsg);
+          await logScrapeEvent(db, "analysis_error", {
+            cls,
+            lbType,
+            message: safeMessage,
+            raw: rawMsg.slice(0, 300),
+          });
           sendEvent({ type: "error", message: safeMessage });
         }
         if (isActive) {

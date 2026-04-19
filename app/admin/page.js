@@ -339,10 +339,104 @@ export default function AdminPage() {
                 </div>
               )}
 
+              {/* Scrape Trace */}
+              {analytics.scrapeEvents?.length > 0 && (
+                <div style={s.section}>
+                  <h3 style={s.sectionTitle}>Scrape Trace (last 50)</h3>
+                  <div style={s.tableWrapper}>
+                    <table style={s.dataTable}>
+                      <thead>
+                        <tr>
+                          <th style={s.th}>Event</th>
+                          <th style={s.th}>Timestamp</th>
+                          <th style={s.th}>Details</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {analytics.scrapeEvents.map((ev, i) => {
+                          const meta = ev.metadata
+                            ? (() => {
+                                try {
+                                  return JSON.parse(ev.metadata);
+                                } catch {
+                                  return null;
+                                }
+                              })()
+                            : null;
+                          const badgeColor = {
+                            analysis_start: {
+                              bg: "rgba(59,130,246,0.15)",
+                              color: "#60a5fa",
+                              border: "rgba(59,130,246,0.3)",
+                            },
+                            analysis_done: {
+                              bg: "rgba(16,185,129,0.15)",
+                              color: "#34d399",
+                              border: "rgba(16,185,129,0.3)",
+                            },
+                            analysis_continue: {
+                              bg: "rgba(245,158,11,0.15)",
+                              color: "#fbbf24",
+                              border: "rgba(245,158,11,0.3)",
+                            },
+                            analysis_error: {
+                              bg: "rgba(220,38,38,0.15)",
+                              color: "#f87171",
+                              border: "rgba(220,38,38,0.3)",
+                            },
+                          }[ev.event_type] || {
+                            bg: "rgba(148,163,184,0.1)",
+                            color: "#94a3b8",
+                            border: "rgba(148,163,184,0.2)",
+                          };
+                          const detail = meta
+                            ? ev.event_type === "analysis_start"
+                              ? `${meta.cls} · ${meta.lbType}${meta.region !== "all" ? ` · ${meta.region}` : ""}${meta.serverId !== "all" ? `/${meta.serverId}` : ""} · limit ${meta.limit}`
+                              : ev.event_type === "analysis_done"
+                                ? `${meta.cls} · ${meta.lbType} · ${meta.count} players${meta.partial ? " (partial)" : ""}`
+                                : ev.event_type === "analysis_continue"
+                                  ? `${meta.cls} · ${meta.lbType} · ${meta.processed} processed, ${meta.remaining} remaining [phase ${meta.phase}]`
+                                  : ev.event_type === "analysis_error"
+                                    ? `${meta.cls} · ${meta.lbType} · ${meta.message}`
+                                    : truncateValue(ev.metadata)
+                            : "—";
+                          return (
+                            <tr key={ev.id || i} style={i % 2 === 0 ? s.trEven : s.trOdd}>
+                              <td style={s.td}>
+                                <span
+                                  style={{
+                                    display: "inline-block",
+                                    fontSize: "0.65rem",
+                                    fontWeight: 700,
+                                    padding: "0.1rem 0.4rem",
+                                    borderRadius: "4px",
+                                    background: badgeColor.bg,
+                                    color: badgeColor.color,
+                                    border: `1px solid ${badgeColor.border}`,
+                                    textTransform: "uppercase",
+                                    letterSpacing: "0.03em",
+                                  }}
+                                >
+                                  {ev.event_type.replace("analysis_", "")}
+                                </span>
+                              </td>
+                              <td style={s.td}>{formatTimestamp(ev.created_at)}</td>
+                              <td style={{ ...s.td, maxWidth: "420px", wordBreak: "break-word" }}>
+                                {detail}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
               {/* Event Log */}
               {analytics.adminEvents?.length > 0 && (
                 <div style={s.section}>
-                  <h3 style={s.sectionTitle}>Event Log (last 20)</h3>
+                  <h3 style={s.sectionTitle}>Event Log (last 50)</h3>
                   <div style={s.tableWrapper}>
                     <table style={s.dataTable}>
                       <thead>

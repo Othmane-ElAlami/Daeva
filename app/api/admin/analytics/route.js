@@ -138,14 +138,22 @@ export async function GET(request) {
       healthy: missingFromDB.length === 0 && unexpectedInDB.length === 0,
     };
 
-    // ─── Admin Events (last 20) ───
+    // ─── Admin Events (last 50, excluding scrape trace) ───
     if (existingTableNames.has("admin_events")) {
       const { results: events } = await db
         .prepare(
-          "SELECT id, event_type, metadata, created_at FROM admin_events ORDER BY created_at DESC LIMIT 20"
+          "SELECT id, event_type, metadata, created_at FROM admin_events WHERE event_type NOT LIKE 'analysis_%' ORDER BY created_at DESC LIMIT 50"
         )
         .all();
       analytics.adminEvents = events || [];
+
+      // Scrape trace events (analysis_start, analysis_done, analysis_continue, analysis_error)
+      const { results: scrapeEvents } = await db
+        .prepare(
+          "SELECT id, event_type, metadata, created_at FROM admin_events WHERE event_type LIKE 'analysis_%' ORDER BY created_at DESC LIMIT 50"
+        )
+        .all();
+      analytics.scrapeEvents = scrapeEvents || [];
 
       // Last reset
       const lastReset = await db
