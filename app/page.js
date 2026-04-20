@@ -540,6 +540,9 @@ export default function HomePage() {
             <a href="#features" className="cin-nav-link">
               Features
             </a>
+            <Link href="/changelog" className="cin-nav-link">
+              Changelog
+            </Link>
             <Link href="/analyzer" className="cin-nav-cta">
               Launch Analyzer
               <ArrowRight size={14} />
@@ -568,6 +571,14 @@ export default function HomePage() {
           >
             Features
           </a>
+          <Link
+            href="/changelog"
+            className="cin-mobile-link"
+            role="menuitem"
+            onClick={() => setMobileMenuOpen(false)}
+          >
+            Changelog
+          </Link>
           <Link
             href="/analyzer"
             className="cin-mobile-link cin-mobile-link--cta"
@@ -694,7 +705,10 @@ export default function HomePage() {
       <footer className="cin-footer" role="contentinfo">
         <div className="cin-footer-inner">
           <p className="cin-footer-text">
-            Aion 2 Build Intelligence &middot; Data from Official API
+            Aion 2 Build Intelligence &middot; Data from Official API &middot;{" "}
+            <Link href="/changelog" className="cin-footer-link">
+              v0.9-beta
+            </Link>
           </p>
           <p className="cin-footer-tagline">
             Forged in the shadows of the abyss with spilled blood of Balaurs, and the torn skin of
