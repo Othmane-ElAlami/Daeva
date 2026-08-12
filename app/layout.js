@@ -1,9 +1,11 @@
-import { Inter, Cinzel } from "next/font/google";
+import localFont from "next/font/local";
+import { Cinzel } from "next/font/google";
 import "./globals.css";
 
-const inter = Inter({
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700", "800"],
+const inter = localFont({
+  src: "./fonts/InterVariable.woff2",
+  display: "swap",
+  weight: "400 800",
 });
 
 const cinzel = Cinzel({

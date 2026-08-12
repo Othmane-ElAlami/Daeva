@@ -9,7 +9,7 @@ const compat = new FlatCompat({ baseDirectory: __dirname });
 
 const eslintConfig = defineConfig([
   ...compat.extends("next/core-web-vitals", "prettier"),
-  globalIgnores([".next/**", "out/**", "build/**", "next-env.d.ts"]),
+  globalIgnores([".next/**", "out/**", "build/**", "next-env.d.ts", ".open-next/**", ".vercel/**"]),
 ]);
 
 export default eslintConfig;
