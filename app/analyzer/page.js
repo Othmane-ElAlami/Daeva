@@ -1802,7 +1802,7 @@ export default function Home() {
                         border: "rgba(96,165,250,0.12)",
                         tagBg: "rgba(96,165,250,0.07)",
                         tagBorder: "rgba(96,165,250,0.18)",
-                        entries: Object.entries(displayData.stats.activeSkills)
+                        entries: Object.entries(displayData.stats.activeSkills || {})
                           .filter(([, d]) => d.avgLv > 0)
                           .sort((a, b) => b[1].avgLv - a[1].avgLv)
                           .slice(0, 5),
@@ -1814,7 +1814,7 @@ export default function Home() {
                         border: "rgba(52,211,153,0.12)",
                         tagBg: "rgba(52,211,153,0.07)",
                         tagBorder: "rgba(52,211,153,0.18)",
-                        entries: Object.entries(displayData.stats.passiveSkills)
+                        entries: Object.entries(displayData.stats.passiveSkills || {})
                           .filter(([, d]) => d.avgLv > 0)
                           .sort((a, b) => b[1].avgLv - a[1].avgLv)
                           .slice(0, 5),
@@ -1826,7 +1826,7 @@ export default function Home() {
                         border: "rgba(192,132,252,0.12)",
                         tagBg: "rgba(192,132,252,0.07)",
                         tagBorder: "rgba(192,132,252,0.18)",
-                        entries: Object.entries(displayData.stats.stigmaSkills)
+                        entries: Object.entries(displayData.stats.stigmaSkills || {})
                           .filter(([, d]) => d.equippedCount > displayData.count / 2)
                           .sort((a, b) => b[1].avgLv - a[1].avgLv)
                           .slice(0, 5),
@@ -2029,7 +2029,7 @@ export default function Home() {
                         paddingRight: "8px",
                       }}
                     >
-                      {Object.entries(displayData.stats.activeSkills)
+                      {Object.entries(displayData.stats.activeSkills || {})
                         .sort((a, b) => b[1].avgLv - a[1].avgLv)
                         .map(([name, stat], i) => (
                           <div key={name} className="flex-col" style={{ gap: "4px" }}>
@@ -2095,7 +2095,7 @@ export default function Home() {
                         paddingRight: "8px",
                       }}
                     >
-                      {Object.entries(displayData.stats.passiveSkills)
+                      {Object.entries(displayData.stats.passiveSkills || {})
                         .sort((a, b) => b[1].avgLv - a[1].avgLv)
                         .map(([name, stat], i) => (
                           <div key={name} className="flex-col" style={{ gap: "4px" }}>
@@ -2165,7 +2165,7 @@ export default function Home() {
                         paddingRight: "8px",
                       }}
                     >
-                      {Object.entries(displayData.stats.stigmaSkills)
+                      {Object.entries(displayData.stats.stigmaSkills || {})
                         .sort((a, b) => b[1].equippedCount - a[1].equippedCount)
                         .map(([name, stat], i) => {
                           const equipPct = percent(stat.equippedCount, displayData.count);
@@ -2231,7 +2231,7 @@ export default function Home() {
                     </div>
                   </motion.div>
 
-                  {Object.keys(displayData.stats.equippedStigmaCombos).length > 0 && (
+                  {Object.keys(displayData.stats.equippedStigmaCombos || {}).length > 0 && (
                     <motion.div variants={fadeUp} className="glass-panel">
                       <h3 className="mb-4 flex items-center gap-2">
                         <Sparkles size={16} style={{ color: "#38bdf8" }} />
@@ -2241,7 +2241,7 @@ export default function Home() {
                         className="flex-col gap-3 custom-scrollbar-slim"
                         style={{ maxHeight: "340px", overflowY: "auto" }}
                       >
-                        {Object.entries(displayData.stats.equippedStigmaCombos)
+                        {Object.entries(displayData.stats.equippedStigmaCombos || {})
                           .sort((a, b) => b[1] - a[1])
                           .slice(0, 8)
                           .map(([combo, count], i) => {
@@ -2307,7 +2307,7 @@ export default function Home() {
                 </div>
 
                 {/* Arcana Combos */}
-                {Object.keys(displayData.stats.arcanaSetCombos).length > 0 && (
+                {Object.keys(displayData.stats.arcanaSetCombos || {}).length > 0 && (
                   <motion.div variants={fadeUp} className="glass-panel">
                     <h3 className="mb-4 flex items-center gap-2">
                       <Layers size={16} style={{ color: "#818cf8" }} />
@@ -2317,7 +2317,7 @@ export default function Home() {
                       className="flex-col gap-2 custom-scrollbar-slim"
                       style={{ maxHeight: "300px", overflowY: "auto" }}
                     >
-                      {Object.entries(displayData.stats.arcanaSetCombos)
+                      {Object.entries(displayData.stats.arcanaSetCombos || {})
                         .sort((a, b) => b[1] - a[1])
                         .slice(0, 10)
                         .map(([combo, count], i) => {
@@ -2435,7 +2435,7 @@ export default function Home() {
 
                 {/* Arcana Stats + Cards */}
                 <div className="grid-cols-2">
-                  {Object.keys(displayData.stats.arcanaMainStats).length > 0 && (
+                  {Object.keys(displayData.stats.arcanaMainStats || {}).length > 0 && (
                     <motion.div variants={fadeUp} className="glass-panel">
                       <h3 className="mb-6 flex items-center gap-2">
                         <span
@@ -2458,7 +2458,7 @@ export default function Home() {
                         className="flex-col gap-4 custom-scrollbar-slim"
                         style={{ maxHeight: "340px", overflowY: "auto" }}
                       >
-                        {Object.entries(displayData.stats.arcanaMainStats)
+                        {Object.entries(displayData.stats.arcanaMainStats || {})
                           .sort((a, b) => b[1] - a[1])
                           .slice(0, 15)
                           .map(([stat, count]) => {
@@ -2512,7 +2512,7 @@ export default function Home() {
                     </motion.div>
                   )}
 
-                  {Object.keys(displayData.stats.arcanaUsage).length > 0 && (
+                  {Object.keys(displayData.stats.arcanaUsage || {}).length > 0 && (
                     <motion.div variants={fadeUp} className="glass-panel">
                       <h3 className="mb-6 flex items-center gap-2">
                         <span
@@ -2539,7 +2539,7 @@ export default function Home() {
                           overflowY: "auto",
                         }}
                       >
-                        {Object.entries(displayData.stats.arcanaUsage)
+                        {Object.entries(displayData.stats.arcanaUsage || {})
                           .sort((a, b) => b[1] - a[1])
                           .slice(0, 15)
                           .map(([card, count], i) => (
@@ -2589,7 +2589,7 @@ export default function Home() {
                 {/* Most Used Theostones + Manastones */}
                 <div className="grid-cols-2">
                   {displayData.stats.theostoneUsage &&
-                    Object.keys(displayData.stats.theostoneUsage).length > 0 && (
+                    Object.keys(displayData.stats.theostoneUsage || {}).length > 0 && (
                       <motion.div variants={fadeUp} className="glass-panel">
                         <h3 className="mb-6 flex items-center gap-2">
                           <span
@@ -2616,7 +2616,7 @@ export default function Home() {
                             overflowY: "auto",
                           }}
                         >
-                          {Object.entries(displayData.stats.theostoneUsage)
+                          {Object.entries(displayData.stats.theostoneUsage || {})
                             .sort((a, b) => b[1].count - a[1].count)
                             .slice(0, 15)
                             .map(([stone, data], i) => (
@@ -2694,7 +2694,7 @@ export default function Home() {
                     )}
 
                   {displayData.stats.manastoneUsage &&
-                    Object.keys(displayData.stats.manastoneUsage).length > 0 && (
+                    Object.keys(displayData.stats.manastoneUsage || {}).length > 0 && (
                       <motion.div variants={fadeUp} className="glass-panel">
                         <h3 className="mb-6 flex items-center gap-2">
                           <span
@@ -2721,7 +2721,7 @@ export default function Home() {
                             overflowY: "auto",
                           }}
                         >
-                          {Object.entries(displayData.stats.manastoneUsage)
+                          {Object.entries(displayData.stats.manastoneUsage || {})
                             .sort((a, b) => b[1].count - a[1].count)
                             .slice(0, 15)
                             .map(([stone, data], i) => {
@@ -2792,7 +2792,7 @@ export default function Home() {
                 </div>
 
                 {/* Equipment Substats */}
-                {Object.keys(displayData.stats.subStatsBySlot).length > 0 && (
+                {Object.keys(displayData.stats.subStatsBySlot || {}).length > 0 && (
                   <motion.div variants={fadeUp} className="glass-panel">
                     <h3 className="mb-4 flex items-center gap-2">
                       <span
@@ -2893,9 +2893,9 @@ export default function Home() {
                         "Arcana",
                       ];
 
-                      const allSlots = Object.entries(displayData.stats.subStatsBySlot).filter(
-                        ([, stats]) => Object.keys(stats).length > 0
-                      );
+                      const allSlots = Object.entries(
+                        displayData.stats.subStatsBySlot || {}
+                      ).filter(([, stats]) => Object.keys(stats).length > 0);
 
                       const matchesGroup = (slot, slotList) =>
                         slotList.some((s) => slot === s || slot.startsWith(s + "("));
@@ -3182,7 +3182,7 @@ export default function Home() {
                 )}
 
                 {/* Most Used Items by Slot */}
-                {Object.keys(displayData.stats.itemsBySlot).length > 0 && (
+                {Object.keys(displayData.stats.itemsBySlot || {}).length > 0 && (
                   <motion.div variants={fadeUp} className="glass-panel">
                     <h3 className="mb-4 flex items-center gap-2">
                       <span
@@ -3232,7 +3232,7 @@ export default function Home() {
                         "Arcana",
                       ];
 
-                      const allSlots = Object.entries(displayData.stats.itemsBySlot).filter(
+                      const allSlots = Object.entries(displayData.stats.itemsBySlot || {}).filter(
                         ([, items]) => Object.keys(items).length > 0
                       );
 

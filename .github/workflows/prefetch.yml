@@ -21,9 +21,12 @@ jobs:
     steps:
       - name: Run prefetch jobs
         env:
-          API_URL: ${{ secrets.PREFETCH_API_URL }}
+          API_URL: ${{ vars.API_URL }}
           ADMIN_SECRET: ${{ secrets.ADMIN_SECRET }}
         run: |
+          : "${API_URL:?API_URL is not configured}"
+          : "${ADMIN_SECRET:?ADMIN_SECRET is not configured}"
+
           CLASSES="gladiator templar ranger assassin spiritmaster sorcerer cleric chanter"
           LEADERBOARDS="nightmare abyss arena-solo arena-coop transcendence ascension raid"
 
@@ -35,15 +38,15 @@ jobs:
             for lb in $LEADERBOARDS; do
               echo "::group::$cls / $lb"
               HTTP_CODE=$(curl -s -o /tmp/prefetch_response.json -w "%{http_code}" \
-                -X POST "${API_URL}/api/prefetch/run" \
+                -X POST "${API_URL%/}/api/prefetch/run" \
                 -H "Content-Type: application/json" \
-                -H "Authorization: Bearer ${ADMIN_SECRET}" \
-                -d "{\"cls\": \"${cls}\", \"leaderboard\": \"${lb}\"}" \
+                -H "Authorization: ${ADMIN_SECRET}" \
+                -d "{\"cls\":\"${cls}\",\"leaderboard\":\"${lb}\"}" \
                 --max-time 120)
 
               if [ "$HTTP_CODE" -eq 200 ]; then
                 echo "✓ $cls/$lb — HTTP $HTTP_CODE"
-                cat /tmp/prefetch_response.json | jq -r '"  players: \(.playerCount), errors: \(.errorCount), duration: \(.durationMs)ms"' 2>/dev/null || true
+                jq -r '"  players: \(.playerCount), errors: \(.errorCount), duration: \(.durationMs)ms"' /tmp/prefetch_response.json 2>/dev/null || true
                 succeeded=$((succeeded + 1))
               elif [ "$HTTP_CODE" -eq 503 ]; then
                 echo "⊘ $cls/$lb — SKIPPED (prefetch disabled)"
