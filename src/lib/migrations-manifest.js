@@ -54,6 +54,20 @@ export const migrations = [
   first_attempt_at INTEGER NOT NULL
 )`,
   },
+  // Added for background prefetching system — stores pre-fetched leaderboard data
+  {
+    tableName: "prefetch_cache",
+    createSQL: `CREATE TABLE IF NOT EXISTS prefetch_cache (
+  class TEXT NOT NULL,
+  leaderboard TEXT NOT NULL,
+  data TEXT NOT NULL,
+  builds TEXT NOT NULL,
+  fetched_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  source TEXT NOT NULL DEFAULT 'prefetch',
+  PRIMARY KEY (class, leaderboard)
+)`,
+  },
 ];
 
 /**

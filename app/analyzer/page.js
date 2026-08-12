@@ -281,6 +281,7 @@ export default function Home() {
   const [serverSearch, setServerSearch] = useState("");
   const [error, setError] = useState("");
   const [logs, setLogs] = useState([]);
+  const [sourceMeta, setSourceMeta] = useState(null);
   const [progress, setProgress] = useState({
     current: 0,
     total: 10,
@@ -414,6 +415,7 @@ export default function Home() {
     setData(null);
     setRawBuilds(null);
     setLogs([]);
+    setSourceMeta(null);
     setProgress({ current: 0, total: forma.limit, target: "" });
 
     try {
@@ -484,6 +486,8 @@ export default function Home() {
                     ]);
                   } else if (event.type === "progress") {
                     setProgress(event);
+                  } else if (event.type === "source_health") {
+                    setSourceMeta(event.meta);
                   } else if (event.type === "empty-leaderboard") {
                     const seasonLabel = event.season ? `Season ${event.season}` : "A new season";
                     const startLabel = event.seasonStart
@@ -1535,6 +1539,110 @@ export default function Home() {
                       </span>
                     </div>
                   </div>
+
+                  {/* Source Health Bar */}
+                  {sourceMeta && (
+                    <div
+                      style={{
+                        padding: "8px 24px",
+                        background: "rgba(0,0,0,0.15)",
+                        borderBottom: "1px solid rgba(255,255,255,0.05)",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        fontSize: "0.75rem",
+                      }}
+                    >
+                      <span style={{ color: "var(--text-muted)" }}>
+                        Source:{" "}
+                        <span style={{ color: "var(--text-primary)", fontWeight: 500 }}>
+                          {sourceMeta.source}
+                        </span>
+                      </span>
+                      {sourceMeta.health === "stale" ? (
+                        <span
+                          style={{
+                            color: "#f97316",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "6px",
+                          }}
+                        >
+                          <span
+                            style={{
+                              width: 6,
+                              height: 6,
+                              borderRadius: "50%",
+                              background: "#f97316",
+                            }}
+                          ></span>
+                          Stale Cache ({Math.round(sourceMeta.ageMs / (1000 * 60 * 60 * 24))}d ago)
+                        </span>
+                      ) : sourceMeta.ageMs > 0 ? (
+                        <span
+                          style={{
+                            color: "#fbbf24",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "6px",
+                          }}
+                        >
+                          <span
+                            style={{
+                              width: 6,
+                              height: 6,
+                              borderRadius: "50%",
+                              background: "#fbbf24",
+                            }}
+                          ></span>
+                          Cached (
+                          {sourceMeta.ageMs > 1000 * 60 * 60
+                            ? Math.round(sourceMeta.ageMs / (1000 * 60 * 60)) + "h"
+                            : Math.round(sourceMeta.ageMs / 60000) + "m"}{" "}
+                          ago)
+                        </span>
+                      ) : sourceMeta.health === "partial" ? (
+                        <span
+                          style={{
+                            color: "#fbbf24",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "6px",
+                          }}
+                        >
+                          <span
+                            style={{
+                              width: 6,
+                              height: 6,
+                              borderRadius: "50%",
+                              background: "#fbbf24",
+                            }}
+                          ></span>
+                          Partial Data ({sourceMeta.successfulServers}/{sourceMeta.expectedServers}{" "}
+                          servers)
+                        </span>
+                      ) : (
+                        <span
+                          style={{
+                            color: "#34d399",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "6px",
+                          }}
+                        >
+                          <span
+                            style={{
+                              width: 6,
+                              height: 6,
+                              borderRadius: "50%",
+                              background: "#34d399",
+                            }}
+                          ></span>
+                          {sourceMeta.expectedServers}/{sourceMeta.expectedServers} servers
+                        </span>
+                      )}
+                    </div>
+                  )}
 
                   {/* Filter Status Bar */}
                   {(raceFilter !== "all" || runeFilter !== "all") && (

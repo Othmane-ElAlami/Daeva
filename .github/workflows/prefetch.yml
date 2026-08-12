@@ -1,0 +1,71 @@
+# Prefetch Cron - Populate D1 Leaderboard Cache
+#
+# Runs every 30 minutes. Iterates all 8 classes x 7 leaderboards = 56 combos,
+# POSTing to /api/prefetch/run for each one with a 5-second delay between calls.
+#
+# Required repository secrets:
+#   PREFETCH_API_URL  - Base URL of the deployed site (e.g. https://shugo.pages.dev)
+#   ADMIN_SECRET      - Same ADMIN_SECRET configured in the Cloudflare Pages env
+
+name: Prefetch Leaderboard Data
+
+on:
+  schedule:
+    - cron: "0,30 * * * *"
+  workflow_dispatch:
+
+jobs:
+  prefetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - name: Run prefetch jobs
+        env:
+          API_URL: ${{ secrets.PREFETCH_API_URL }}
+          ADMIN_SECRET: ${{ secrets.ADMIN_SECRET }}
+        run: |
+          CLASSES="gladiator templar ranger assassin spiritmaster sorcerer cleric chanter"
+          LEADERBOARDS="nightmare abyss arena-solo arena-coop transcendence ascension raid"
+
+          succeeded=0
+          failed=0
+          skipped=0
+
+          for cls in $CLASSES; do
+            for lb in $LEADERBOARDS; do
+              echo "::group::$cls / $lb"
+              HTTP_CODE=$(curl -s -o /tmp/prefetch_response.json -w "%{http_code}" \
+                -X POST "${API_URL}/api/prefetch/run" \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer ${ADMIN_SECRET}" \
+                -d "{\"cls\": \"${cls}\", \"leaderboard\": \"${lb}\"}" \
+                --max-time 120)
+
+              if [ "$HTTP_CODE" -eq 200 ]; then
+                echo "✓ $cls/$lb — HTTP $HTTP_CODE"
+                cat /tmp/prefetch_response.json | jq -r '"  players: \(.playerCount), errors: \(.errorCount), duration: \(.durationMs)ms"' 2>/dev/null || true
+                succeeded=$((succeeded + 1))
+              elif [ "$HTTP_CODE" -eq 503 ]; then
+                echo "⊘ $cls/$lb — SKIPPED (prefetch disabled)"
+                skipped=$((skipped + 1))
+              else
+                echo "✗ $cls/$lb — HTTP $HTTP_CODE"
+                cat /tmp/prefetch_response.json 2>/dev/null || true
+                failed=$((failed + 1))
+              fi
+              echo "::endgroup::"
+
+              # Delay between calls to avoid overwhelming upstream APIs
+              sleep 5
+            done
+          done
+
+          echo ""
+          echo "════════════════════════════════════════"
+          echo "  Prefetch complete: $succeeded succeeded, $failed failed, $skipped skipped"
+          echo "════════════════════════════════════════"
+
+          if [ "$failed" -gt 28 ]; then
+            echo "::error::More than half of prefetch jobs failed ($failed/56)"
+            exit 1
+          fi

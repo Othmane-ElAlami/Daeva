@@ -1,6 +1,9 @@
+// Changed: added D1 prefetch cache import for cache-first serving
 import { getCachedPlayer, setCachedPlayer } from "@/lib/db";
 import { getRequestContext } from "@cloudflare/next-on-pages";
 import { createWebLogger } from "@/lib/logger";
+import { getPrefetchCache } from "@/lib/prefetch/cache";
+import { getLeaderboard as fetchLeaderboardProviders } from "@/lib/providers/leaderboard/index";
 import {
   baseUrl,
   leaderboardTypes,
@@ -223,6 +226,105 @@ export async function POST(req) {
     isContinuation && continuation.processedCount > 0 ? continuation.processedCount : 0;
   const limit = originalLimit - alreadyProcessed;
 
+  // ── Prefetch cache integration ─────────────────────────────────────────
+  // Changed: check the D1 prefetch cache before doing any upstream fetches.
+  // If we have pre-computed data and the user wants top-100 with no continuation,
+  // serve from cache immediately. Filters (region/server/race/rune) are applied
+  // to the cached builds on the fly.
+  if (!isContinuation) {
+    try {
+      const cached = await getPrefetchCache(db, cls, lbType, true);
+      if (cached && cached.builds && cached.builds.length > 0) {
+        let builds = cached.builds;
+
+        // Apply client filters to cached builds
+        if (region && region !== "all") {
+          builds = builds.filter((b) => b.region === region);
+        }
+        if (serverId && serverId !== "all") {
+          builds = builds.filter((b) => String(b.serverId) === String(serverId));
+        }
+        if (race && race !== "all") {
+          builds = builds.filter((b) => {
+            const sid = Number(b.serverId);
+            return race === "elyos" ? sid >= 1001 && sid <= 1021 : sid >= 2001 && sid <= 2021;
+          });
+        }
+
+        // Rune filter on cached builds
+        if (runeFilterActive) {
+          builds = builds.filter((b) => {
+            const items = b.equipItems || [];
+            const rune = items.find((e) => (e.categoryName || "") === "Rune");
+            if (!rune) return false;
+            const name = (rune.itemName || "").toLowerCase();
+            if (runeFilter === "pve") return name.includes("clash");
+            if (runeFilter === "pvp") return name.includes("devotion");
+            return true;
+          });
+        }
+
+        // Only serve from cache if we have enough builds to meet the limit
+        if (builds.length >= limit || builds.length >= cached.builds.length * 0.5) {
+          const slicedBuilds = builds.slice(0, originalLimit);
+          const stats = slicedBuilds.length > 0 ? aggregate(slicedBuilds) : null;
+
+          // Serve as SSE to match the existing client contract
+          const encoder = new TextEncoder();
+          const stream = new ReadableStream({
+            start(controller) {
+              const sendEvent = (data) => {
+                try {
+                  controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+                } catch {
+                  /* stream closed */
+                }
+              };
+
+              sendEvent({
+                type: "log",
+                level: "SUCCESS",
+                context: "cache",
+                timestamp: new Date().toISOString(),
+                message: `Serving from prefetch cache (${slicedBuilds.length} players, cached ${Math.round((Date.now() - cached.fetchedAt) / 60000)}m ago)`,
+              });
+              sendEvent({
+                type: "progress",
+                current: slicedBuilds.length,
+                total: slicedBuilds.length,
+                target: "",
+              });
+
+              if (stats) {
+                sendEvent({ type: "result", stats });
+              }
+              sendEvent({ type: "done" });
+
+              try {
+                controller.close();
+              } catch {
+                /* already closed */
+              }
+            },
+          });
+
+          return new Response(stream, {
+            headers: {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              Connection: "keep-alive",
+              "X-Prefetch-Cache": "hit",
+              "X-Prefetch-Age": String(Date.now() - cached.fetchedAt),
+            },
+          });
+        }
+      }
+    } catch {
+      // Prefetch cache miss or error — fall through to live fetch
+    }
+  }
+  // ── End prefetch cache integration ──────────────────────────────────────
+
   const lbInfo = leaderboardTypes[lbType];
   const rankingType = classRankingIds[cls];
   const headers = makeHeaders(`${baseUrl}/leaderboard/${lbType}?class=${cls}`);
@@ -307,32 +409,36 @@ export async function POST(req) {
           // When filtering by server/region, we need many more pages since most
           // entries will be discarded by the client-side filter.
           const isFiltered = (region && region !== "all") || (serverId && serverId !== "all");
-          pagesNeeded = Math.min(Math.ceil((limit * (isFiltered ? 8 : 1.5)) / 100), 20);
+
           let lbSeasonMeta = null;
+          let lbSourceMeta = null;
+          let rawPlayers = [];
 
-          const lbPageTasks = Array.from({ length: pagesNeeded }, (_, i) => {
-            const pg = i + 1;
-            return async () => {
-              const url = `${baseUrl}/api/leaderboard?contentType=${lbInfo.contentType}&rankingType=${rankingType}&page=${pg}&limit=100`;
-              try {
-                const data = await fetchWithRetry(
-                  () => fetchJSON(url, headers, "GET", null, budget),
-                  maxRetries,
-                  retryBaseMs,
-                  budget
-                );
-                // Capture season metadata from first page
-                if (pg === 1 && data?.season) lbSeasonMeta = data.season;
-                return data?.rankings || [];
-              } catch (err) {
-                if (err instanceof subrequestBudgetExhausted) throw err;
-                return [];
-              }
-            };
-          });
+          try {
+            const result = await fetchLeaderboardProviders(
+              {
+                db,
+                cls,
+                lbType,
+                lbInfo,
+                rankingType,
+                limit,
+                isFiltered,
+                baseUrl,
+              },
+              budget
+            );
 
-          const lbResults = await runPool(lbPageTasks, 5, budget);
-          const rawPlayers = lbResults.flat().filter(Boolean);
+            rawPlayers = result.rankings;
+            lbSourceMeta = result.meta;
+            lbSeasonMeta = result.meta.season;
+
+            // Send source metadata to UI immediately
+            sendEvent({ type: "source_health", meta: lbSourceMeta });
+          } catch (err) {
+            if (err instanceof subrequestBudgetExhausted) throw err;
+            throw err;
+          }
 
           // Deduplicate by characterId + serverId
           for (const p of rawPlayers) {
@@ -403,6 +509,16 @@ export async function POST(req) {
           // Normal mode: stop early once we have enough candidates
           if (!runeFilterActive && cachedResults.length + uncachedPlayers.length >= limit * 2)
             break;
+
+          // If the provider already loaded the full build (e.g. from prefetch_cache), bypass lookups
+          if (p._isFromCache && p._equip) {
+            cachedResults.push(p);
+            for (const item of p._equip?.equipment?.equipmentList || []) {
+              if ((item.slotPosName || "").startsWith("Arcana")) allArcanaIds.push(item.id);
+            }
+            continue;
+          }
+
           const cached = await getCachedPlayer(db, p.characterId, p.serverId);
           if (cached) {
             const hasEquip = !!cached.equipData;
@@ -781,24 +897,36 @@ export async function POST(req) {
         // (skipped on continuation — player list is already established)
         // ═══════════════════════════════════════════════════════════════════
         if (!isContinuation && enriched.length < limit && budget.canAfford(5)) {
-          let extraPage = pagesNeeded + 1;
+          let extraPage = (lbSourceMeta?.pagesFetched || 0) + 1;
           while (enriched.length < limit && extraPage <= 50) {
             if (!isActive || !budget.canAfford(5)) break;
-            const url = `${baseUrl}/api/leaderboard?contentType=${lbInfo.contentType}&rankingType=${rankingType}&page=${extraPage}&limit=100`;
+
             let moreRankings;
             try {
-              const data = await fetchWithRetry(
-                () => fetchJSON(url, headers, "GET", null, budget),
-                maxRetries,
-                retryBaseMs,
+              const extraResult = await fetchLeaderboardProviders(
+                {
+                  db,
+                  cls,
+                  lbType,
+                  lbInfo,
+                  rankingType,
+                  limit: 100,
+                  isFiltered,
+                  baseUrl,
+                  startPage: extraPage,
+                  maxPages: 1,
+                  forceProvider: lbSourceMeta.source,
+                },
                 budget
               );
-              moreRankings = data?.rankings || [];
+
+              moreRankings = extraResult.rankings;
             } catch (err) {
               if (err instanceof subrequestBudgetExhausted) break;
+              log.warn("leaderboard", `Extra page error: ${err.message}`);
               break;
             }
-            if (!moreRankings.length) break;
+            if (!moreRankings || !moreRankings.length) break;
 
             // Deduplicate against already-seen players
             let moreCandidates = [];
