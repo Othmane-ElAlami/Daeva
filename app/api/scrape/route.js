@@ -437,6 +437,68 @@ export async function POST(req) {
             sendEvent({ type: "source_health", meta: lbSourceMeta });
           } catch (err) {
             if (err instanceof subrequestBudgetExhausted) throw err;
+
+            // Try to serve historical meta-snapshot ONLY if leaderboard fetch explicitly fails due to provider exhaustion
+            if (err.name === "AllProvidersFailedError") {
+              try {
+                const fallback = await db
+                  .prepare("SELECT * FROM meta_snapshots WHERE class = ? AND leaderboard = ?")
+                  .bind(cls, lbType)
+                  .first();
+
+                if (fallback) {
+                  const convertToMap = (arr) => {
+                    const map = {};
+                    for (const item of arr || []) {
+                      map[item.name] = { count: item.count, avgLv: item.avgLv, pct: item.pct };
+                    }
+                    return map;
+                  };
+
+                  const convertCombos = (arr) => {
+                    const map = {};
+                    for (const item of arr || []) {
+                      map[item.combo] = item.count;
+                    }
+                    return map;
+                  };
+
+                  const stats = {
+                    total: fallback.total_players,
+                    stigmaSkills: convertToMap(JSON.parse(fallback.stigma_skills || "[]")),
+                    activeSkills: convertToMap(JSON.parse(fallback.active_skills || "[]")),
+                    passiveSkills: convertToMap(JSON.parse(fallback.passive_skills || "[]")),
+                    arcanaSetCombos: convertCombos(JSON.parse(fallback.arcana_set_combos || "[]")),
+                    isHistorical: true,
+                    updatedAt: fallback.updated_at,
+                  };
+
+                  const dateStr = new Date(fallback.updated_at).toLocaleDateString();
+                  log.warn(
+                    "system",
+                    `Live providers unavailable. Serving historical snapshot from ${dateStr}.`
+                  );
+
+                  sendEvent({
+                    type: "done",
+                    stats,
+                    count: fallback.total_players,
+                    builds: [],
+                  });
+
+                  if (isActive) {
+                    try {
+                      controller.close();
+                    } catch (e) {}
+                    isActive = false;
+                  }
+                  return;
+                }
+              } catch (fallbackErr) {
+                console.error("[meta-snapshot] Fallback retrieval failed:", fallbackErr);
+              }
+            } // Close if (err.message...)
+
             throw err;
           }
 

@@ -1,7 +1,7 @@
 import { getLeaderboard as officialProvider } from "./official.js";
 import { getLeaderboard as shugoProvider } from "./shugo.js";
 import { getLeaderboard as cacheProvider } from "./cache.js";
-import { ProviderError } from "./base.js";
+import { ProviderError, AllProvidersFailedError } from "./base.js";
 
 // Priority order: Official -> Shugo -> Cache
 const PROVIDERS = {
@@ -38,5 +38,5 @@ export async function getLeaderboard(config, budget) {
 
   // If all providers failed, throw an aggregate error
   const details = errors.map((e) => e.message).join(" | ");
-  throw new Error(`All leaderboard providers failed: ${details}`);
+  throw new AllProvidersFailedError(`All leaderboard providers failed: ${details}`);
 }

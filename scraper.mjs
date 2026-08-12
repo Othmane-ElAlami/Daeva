@@ -8,6 +8,7 @@
 import { writeFileSync } from "fs";
 import { argv } from "process";
 import { createInterface } from "readline";
+import { getLeaderboard as fetchLeaderboardProviders } from "./src/lib/providers/leaderboard/index.js";
 import { createCliLogger } from "./src/lib/logger.js";
 import {
   baseUrl,
@@ -134,30 +135,45 @@ function printHeader(title) {
 async function fetchLeaderboard(config, headers) {
   printHeader("📋 FETCHING LEADERBOARD");
 
-  const { lbInfo, limit, cls } = config;
+  const { lbInfo, limit, cls, lbType } = config;
   const rankingType = classRankingIds[cls] || 0;
-  const players = [];
-  let page = 1;
 
-  while (players.length < limit && page <= 10) {
-    const url = `${baseUrl}/api/leaderboard?contentType=${lbInfo.contentType}&rankingType=${rankingType}&page=${page}&limit=100`;
-    log.info("fetchLeaderboard", `Fetching page ${page}...`);
-    try {
-      const data = await fetchJSON(url, headers);
-      const rankings = data?.rankings || [];
-      if (rankings.length === 0) break;
-      players.push(...rankings);
-      page++;
-      await sleep(delayMs);
-    } catch (err) {
-      log.warn("fetchLeaderboard", `Page ${page} error: ${err.message}`);
-      break;
+  try {
+    const result = await fetchLeaderboardProviders(
+      {
+        db: null, // No D1 cache available in CLI
+        cls,
+        lbType,
+        lbInfo,
+        rankingType,
+        limit,
+        isFiltered: false, // CLI currently doesn't filter by server
+        baseUrl,
+        startPage: 1,
+        maxPages: 10,
+      },
+      {
+        canAfford: () => true,
+        consume: () => {},
+      }
+    ); // mock budget
+
+    const players = result.rankings || [];
+    const sourceMeta = result.meta;
+
+    if (sourceMeta.health === "partial" || sourceMeta.health === "unavailable") {
+      throw new Error(`Upstream leaderboard API failed (${sourceMeta.health})`);
     }
-  }
 
-  const result = players.slice(0, limit);
-  log.success("fetchLeaderboard", `${result.length} player(s) found`);
-  return result;
+    const finalPlayers = players.slice(0, limit);
+    log.success(
+      "fetchLeaderboard",
+      `${finalPlayers.length} player(s) found (Source: ${sourceMeta.source})`
+    );
+    return finalPlayers;
+  } catch (err) {
+    throw err;
+  }
 }
 
 // ── Fetch Character Equipment + Skills ───────────────────────────────────────
@@ -527,6 +543,11 @@ async function main() {
       const url = `${baseUrl}/api/leaderboard?contentType=${lbInfo.contentType}&rankingType=${rankingType}&page=${lbPage}&limit=100`;
       try {
         const data = await fetchWithRetry(() => fetchJSON(url, headers), maxRetries, retryBaseMs);
+        if (data && data.expectedServers > 0 && data.successfulServers === 0) {
+          throw new Error(
+            `Upstream leaderboard API failed (0/${data.expectedServers} servers successful).`
+          );
+        }
         const rankings = data?.rankings || [];
         if (rankings.length === 0) break; // no more pages
         players.push(...rankings);

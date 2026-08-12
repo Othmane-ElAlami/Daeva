@@ -1518,12 +1518,22 @@ export default function Home() {
                         </p>
                       </div>
                     </div>
-                    <div
+                    <button
+                      disabled={displayData.stats.isHistorical}
                       style={{
                         display: "flex",
                         alignItems: "center",
                         gap: "6px",
+                        opacity: displayData.stats.isHistorical ? 0.3 : 1,
+                        cursor: displayData.stats.isHistorical ? "not-allowed" : "pointer",
+                        background: "transparent",
+                        border: "none",
+                        padding: 0,
+                        outline: "none",
                       }}
+                      title={
+                        displayData.stats.isHistorical ? "Unavailable for historical snapshots" : ""
+                      }
                     >
                       <Zap size={13} style={{ color: "#a78bfa", opacity: 0.8 }} />
                       <span
@@ -1537,8 +1547,35 @@ export default function Home() {
                       >
                         Quick Build
                       </span>
-                    </div>
+                    </button>
                   </div>
+
+                  {/* Historical Banner */}
+                  {displayData.stats.isHistorical && (
+                    <div
+                      style={{
+                        padding: "12px 24px",
+                        background: "rgba(249, 115, 22, 0.1)",
+                        borderBottom: "1px solid rgba(249, 115, 22, 0.2)",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "10px",
+                        color: "#fdba74",
+                        fontSize: "0.85rem",
+                      }}
+                    >
+                      <Info size={16} />
+                      <span>
+                        <strong>Historical Snapshot</strong> · Last updated{" "}
+                        {new Date(displayData.stats.updatedAt).toLocaleDateString("en-US", {
+                          month: "short",
+                          day: "numeric",
+                          year: "numeric",
+                        })}{" "}
+                        · Player-level analysis unavailable.
+                      </span>
+                    </div>
+                  )}
 
                   {/* Source Health Bar */}
                   {sourceMeta && (

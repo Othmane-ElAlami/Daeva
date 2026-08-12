@@ -7,6 +7,13 @@ export class ProviderError extends Error {
   }
 }
 
+export class AllProvidersFailedError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "AllProvidersFailedError";
+  }
+}
+
 export function calculateHealth(successfulServers, expectedServers) {
   if (expectedServers === 0) return "unavailable";
   if (successfulServers === 0) return "unavailable";
