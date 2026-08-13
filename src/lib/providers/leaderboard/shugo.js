@@ -2,6 +2,7 @@ import {
   fetchJSON,
   fetchWithRetry,
   runPool,
+  makeHeaders,
   subrequestBudgetExhausted,
 } from "../../scraper-shared.js";
 import { ProviderError, calculateHealth } from "./base.js";
@@ -28,7 +29,7 @@ export async function getLeaderboard(config, budget) {
       const url = `${baseUrl}/api/leaderboard?contentType=${lbInfo.contentType}&rankingType=${rankingType}&page=${pg}&limit=100`;
       try {
         const data = await fetchWithRetry(
-          () => fetchJSON(url, {}, "GET", null, budget),
+          () => fetchJSON(url, makeHeaders(`${baseUrl}/leaderboard`), "GET", null, budget),
           MAX_RETRIES,
           RETRY_BASE_MS,
           budget

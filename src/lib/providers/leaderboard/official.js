@@ -2,7 +2,7 @@ import {
   fetchJSON,
   fetchWithRetry,
   runPool,
-  makeHeaders,
+  makeDirectHeaders,
   subrequestBudgetExhausted,
 } from "../../scraper-shared.js";
 import { ProviderError, calculateHealth } from "./base.js";
@@ -21,7 +21,7 @@ export async function getLeaderboard(config, budget) {
       : Math.min(Math.ceil((limit * (isFiltered ? 8 : 1.5)) / 100), 20);
   const baseUrl = "https://aion2.plaync.com";
 
-  const headers = makeHeaders(`${baseUrl}/leaderboard`);
+  const headers = makeDirectHeaders();
 
   let expectedServers = 0;
   let successfulServers = 0;

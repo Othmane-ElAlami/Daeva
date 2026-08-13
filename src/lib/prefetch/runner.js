@@ -46,7 +46,7 @@ function extractCharKey(player) {
  * @param {string} lbType - Leaderboard type (e.g. "nightmare")
  * @returns {{ builds: Array, stats: object, playerCount: number, errors: string[], budgetUsed: number }}
  */
-export async function runPrefetchJob(cls, lbType) {
+export async function runPrefetchJob(cls, lbType, db) {
   const errors = [];
   const lbInfo = leaderboardTypes[lbType];
   const rankingType = classRankingIds[cls];
@@ -80,7 +80,9 @@ export async function runPrefetchJob(cls, lbType) {
     }
   } catch (err) {
     if (err instanceof subrequestBudgetExhausted) throw err;
-    throw new Error(`Leaderboard fetch failed for ${cls}/${lbType}: ${err.message}`);
+    const wrapErr = new Error(`Leaderboard fetch failed for ${cls}/${lbType}: ${err.message}`);
+    wrapErr.name = err.name;
+    throw wrapErr;
   }
 
   if (allPlayers.length === 0) {

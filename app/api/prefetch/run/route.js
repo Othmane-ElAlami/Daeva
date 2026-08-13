@@ -61,7 +61,7 @@ export async function POST(request) {
   const startTime = Date.now();
 
   try {
-    const result = await runPrefetchJob(cls, leaderboard);
+    const result = await runPrefetchJob(cls, leaderboard, env.DB);
 
     if (result.stats && result.builds.length > 0) {
       const ttlMs = config.cacheTtlMinutes * 60_000;
@@ -79,6 +79,7 @@ export async function POST(request) {
       errors: result.errors.slice(0, 10),
     });
   } catch (err) {
+    const isUpstreamFailure = err.name === "AllProvidersFailedError";
     return Response.json(
       {
         success: false,
@@ -87,7 +88,7 @@ export async function POST(request) {
         error: err.message,
         durationMs: Date.now() - startTime,
       },
-      { status: 500 }
+      { status: isUpstreamFailure ? 503 : 500 }
     );
   }
 }

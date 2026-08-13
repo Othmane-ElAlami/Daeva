@@ -40,7 +40,7 @@ jobs:
               HTTP_CODE=$(curl -s -o /tmp/prefetch_response.json -w "%{http_code}" \
                 -X POST "${API_URL%/}/api/prefetch/run" \
                 -H "Content-Type: application/json" \
-                -H "Authorization: ${ADMIN_SECRET}" \
+                -H "Authorization: Bearer ${ADMIN_SECRET}" \
                 -d "{\"cls\":\"${cls}\",\"leaderboard\":\"${lb}\"}" \
                 --max-time 120)
 
@@ -49,7 +49,7 @@ jobs:
                 jq -r '"  players: \(.playerCount), errors: \(.errorCount), duration: \(.durationMs)ms"' /tmp/prefetch_response.json 2>/dev/null || true
                 succeeded=$((succeeded + 1))
               elif [ "$HTTP_CODE" -eq 503 ]; then
-                echo "⊘ $cls/$lb — SKIPPED (prefetch disabled)"
+                echo "⊘ $cls/$lb — SKIPPED (prefetch disabled / upstream down)"
                 skipped=$((skipped + 1))
               else
                 echo "✗ $cls/$lb — HTTP $HTTP_CODE"
@@ -69,6 +69,6 @@ jobs:
           echo "════════════════════════════════════════"
 
           if [ "$failed" -gt 28 ]; then
-            echo "::error::More than half of prefetch jobs failed ($failed/56)"
+            echo "::error::Prefetch job failed ($failed/56)"
             exit 1
           fi
