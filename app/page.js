@@ -812,7 +812,7 @@ export default function HomePage() {
             Daeva is an independent, open-source community project and is not affiliated with or
             endorsed by NCSoft. &middot;{" "}
             <Link href="/changelog" className="cin-footer-link">
-              v0.9-beta
+              v0.10.0-beta
             </Link>
           </p>
           <p className="cin-footer-tagline">

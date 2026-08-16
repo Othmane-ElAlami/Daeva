@@ -9,10 +9,55 @@ export const metadata = {
 
 const CHANGELOG = [
   {
-    version: "0.9",
-    label: "Beta 0.9",
-    date: "Apr 19, 2026",
+    version: "0.10",
+    label: "Beta 0.10.0",
+    date: "Aug 16, 2026",
     latest: true,
+    groups: [
+      {
+        type: "new",
+        typeLabel: "New",
+        items: [
+          {
+            title: "Resilient leaderboard provider",
+            desc: "Abstracted leaderboard fetching with Shugo/Official provider failovers and historical snapshot fallback.",
+          },
+          {
+            title: "Full-build Cloudflare D1 cache",
+            desc: "Improved analyzer reliability and cache coverage for live and historical data.",
+          },
+          {
+            title: "Open-source transition",
+            desc: "Added contributor/security documentation, public repository metadata, and 0BSD licensing.",
+          },
+        ],
+      },
+      {
+        type: "improved",
+        typeLabel: "Improved",
+        items: [
+          {
+            title: "Source-health indicators",
+            desc: "More transparent data-source messaging separating live, cached, stale, and historical data.",
+          },
+        ],
+      },
+      {
+        type: "infra",
+        typeLabel: "Infrastructure",
+        items: [
+          {
+            title: "Testing & CI",
+            desc: "Added unit and integration test suite, and automated deployment with scheduled prefetch.",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.9",
+    label: "Beta 0.9.0",
+    date: "Apr 20, 2026",
     groups: [
       {
         type: "new",
@@ -361,7 +406,7 @@ export default function ChangelogPage() {
       <footer className="cl-footer" role="contentinfo">
         <div className="cl-footer-inner">
           <p className="cl-footer-text">Daeva Analyzer &middot; Aion 2 Build Intelligence</p>
-          <span className="cl-footer-version">v0.9-beta</span>
+          <span className="cl-footer-version">v0.10.0-beta</span>
         </div>
       </footer>
     </div>
