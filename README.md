@@ -1,10 +1,15 @@
 # Daeva
 
+[![License: 0BSD](https://img.shields.io/badge/License-0BSD-blue.svg)](https://opensource.org/licenses/0BSD)
+[![Deployed on Cloudflare Pages](https://img.shields.io/badge/Deployed-Cloudflare%20Pages-f38020.svg)](https://daeva.pages.dev)
+
 Open-source AION 2 build and meta analyzer that studies leaderboard data to identify popular skills, stigmas, equipment patterns, and other build trends.
 
-> Daeva is currently in beta. The core analyzer and fallback systems are production-deployed, but the upstream AION 2 leaderboard API is currently unavailable, preventing full live-data validation. See the [Changelog](CHANGELOG.md) for recent updates.
-> [![License: 0BSD](https://img.shields.io/badge/License-0BSD-blue.svg)](https://opensource.org/licenses/0BSD)
-> [![Deployed on Cloudflare Pages](https://img.shields.io/badge/Deployed-Cloudflare%20Pages-f38020.svg)](#)
+> **Beta**
+>
+> Daeva is currently in beta. The core analyzer and fallback systems are production-deployed, but the upstream AION 2 leaderboard API is currently unavailable, preventing full live-data validation.
+>
+> See the [Changelog](CHANGELOG.md) for recent updates.
 
 ## What Daeva Does
 
