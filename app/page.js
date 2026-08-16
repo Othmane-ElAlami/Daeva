@@ -614,8 +614,9 @@ export default function HomePage() {
             </h1>
 
             <p className={`cin-hero-tagline ${introPhase >= 5 ? "cin-hero-tagline--visible" : ""}`}>
-              Decode the meta from top-ranked players across Atreia. Real-time leaderboard analysis
-              and competitive intelligence for every class.
+              Open-source AION 2 meta & build analyzer. Analyze high-ranking players to discover
+              popular skills, stigmas, equipment, arcana patterns, and class-specific meta
+              tendencies.
             </p>
 
             <div
@@ -625,6 +626,28 @@ export default function HomePage() {
                 <span>Launch Analyzer</span>
                 <ArrowRight size={18} />
               </Link>
+              <a
+                href="https://github.com/Othmane-ElAlami/Daeva"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="cin-btn-ghost"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.2c3-.3 6-1.5 6-6.5a5.5 5.5 0 0 0-1.5-3.8 5.5 5.5 0 0 0 .2-3.8s-1.2-.4-3.9 1.4a12.8 12.8 0 0 0-7 0C6.2 1.4 5 1.8 5 1.8a5.5 5.5 0 0 0 .2 3.8A5.5 5.5 0 0 0 3.7 9.4c0 5 2.9 6.2 5.9 6.5a4.8 4.8 0 0 0-1 3.2v4" />
+                  <path d="M9 20c-4.1 1.4-5.6-1.4-7-2" />
+                </svg>
+                <span>View on GitHub</span>
+              </a>
               <a href="#features" className="cin-btn-ghost">
                 Explore Features
               </a>
@@ -662,6 +685,87 @@ export default function HomePage() {
                 <p className="cin-feature-desc">{feat.description}</p>
               </div>
             ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ═══ METHODOLOGY ═══ */}
+      <section
+        className={`cin-features ${featInView ? "cin-features--visible" : ""}`}
+        aria-labelledby="methodology-heading"
+        style={{ marginTop: "20px" }}
+      >
+        <div className="cin-features-inner">
+          <h2 id="methodology-heading" className="cin-section-heading">
+            Transparent Methodology
+          </h2>
+          <p
+            style={{
+              textAlign: "center",
+              color: "var(--text-secondary)",
+              maxWidth: "600px",
+              margin: "0 auto 40px",
+              fontSize: "0.9rem",
+            }}
+          >
+            Daeva reports observed build trends rather than claiming to mathematically determine the
+            &quot;perfect&quot; build. Recommendations are derived from:
+          </p>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "center",
+              alignItems: "center",
+              gap: "10px",
+              flexWrap: "wrap",
+              color: "#a78bfa",
+              fontSize: "0.9rem",
+              fontWeight: "bold",
+            }}
+          >
+            <span
+              style={{
+                padding: "8px 16px",
+                background: "rgba(124, 58, 237, 0.1)",
+                borderRadius: "8px",
+                border: "1px solid rgba(124, 58, 237, 0.2)",
+              }}
+            >
+              Leaderboard players
+            </span>
+            <ArrowRight size={16} />
+            <span
+              style={{
+                padding: "8px 16px",
+                background: "rgba(124, 58, 237, 0.1)",
+                borderRadius: "8px",
+                border: "1px solid rgba(124, 58, 237, 0.2)",
+              }}
+            >
+              Character builds
+            </span>
+            <ArrowRight size={16} />
+            <span
+              style={{
+                padding: "8px 16px",
+                background: "rgba(124, 58, 237, 0.1)",
+                borderRadius: "8px",
+                border: "1px solid rgba(124, 58, 237, 0.2)",
+              }}
+            >
+              Aggregation
+            </span>
+            <ArrowRight size={16} />
+            <span
+              style={{
+                padding: "8px 16px",
+                background: "rgba(124, 58, 237, 0.1)",
+                borderRadius: "8px",
+                border: "1px solid rgba(124, 58, 237, 0.2)",
+              }}
+            >
+              Meta recommendations
+            </span>
           </div>
         </div>
       </section>
@@ -705,14 +809,36 @@ export default function HomePage() {
       <footer className="cin-footer" role="contentinfo">
         <div className="cin-footer-inner">
           <p className="cin-footer-text">
-            Aion 2 Build Intelligence &middot; Data from Official API &middot;{" "}
+            Daeva is an independent, open-source community project and is not affiliated with or
+            endorsed by NCSoft. &middot;{" "}
             <Link href="/changelog" className="cin-footer-link">
               v0.9-beta
             </Link>
           </p>
           <p className="cin-footer-tagline">
-            Forged in the shadows of the abyss with spilled blood of Balaurs, and the torn skin of
-            my enemies.
+            <a
+              href="https://github.com/Othmane-ElAlami/Daeva"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="cin-footer-link"
+              style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.2c3-.3 6-1.5 6-6.5a5.5 5.5 0 0 0-1.5-3.8 5.5 5.5 0 0 0 .2-3.8s-1.2-.4-3.9 1.4a12.8 12.8 0 0 0-7 0C6.2 1.4 5 1.8 5 1.8a5.5 5.5 0 0 0 .2 3.8A5.5 5.5 0 0 0 3.7 9.4c0 5 2.9 6.2 5.9 6.5a4.8 4.8 0 0 0-1 3.2v4" />
+                <path d="M9 20c-4.1 1.4-5.6-1.4-7-2" />
+              </svg>{" "}
+              View on GitHub
+            </a>
           </p>
         </div>
       </footer>

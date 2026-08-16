@@ -1613,7 +1613,8 @@ export default function Home() {
                               background: "#f97316",
                             }}
                           ></span>
-                          Stale Cache ({Math.round(sourceMeta.ageMs / (1000 * 60 * 60 * 24))}d ago)
+                          Stale Cache &middot; Updated{" "}
+                          {Math.round(sourceMeta.ageMs / (1000 * 60 * 60 * 24))} days ago
                         </span>
                       ) : sourceMeta.ageMs > 0 ? (
                         <span
@@ -1632,11 +1633,11 @@ export default function Home() {
                               background: "#fbbf24",
                             }}
                           ></span>
-                          Cached (
+                          Cached Data &middot; Updated{" "}
                           {sourceMeta.ageMs > 1000 * 60 * 60
                             ? Math.round(sourceMeta.ageMs / (1000 * 60 * 60)) + "h"
                             : Math.round(sourceMeta.ageMs / 60000) + "m"}{" "}
-                          ago)
+                          ago
                         </span>
                       ) : sourceMeta.health === "partial" ? (
                         <span
@@ -1655,8 +1656,8 @@ export default function Home() {
                               background: "#fbbf24",
                             }}
                           ></span>
-                          Partial Data ({sourceMeta.successfulServers}/{sourceMeta.expectedServers}{" "}
-                          servers)
+                          Partial Data &middot; {sourceMeta.successfulServers}/
+                          {sourceMeta.expectedServers} servers
                         </span>
                       ) : (
                         <span
@@ -1675,7 +1676,7 @@ export default function Home() {
                               background: "#34d399",
                             }}
                           ></span>
-                          {sourceMeta.expectedServers}/{sourceMeta.expectedServers} servers
+                          Live Data
                         </span>
                       )}
                     </div>

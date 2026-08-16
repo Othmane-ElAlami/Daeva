@@ -15,8 +15,9 @@ const cinzel = Cinzel({
 });
 
 export const metadata = {
-  title: "Daeva Analyzer",
-  description: "Aion 2 Build Dashboard",
+  title: "Daeva — Open-source AION 2 meta and build analyzer",
+  description:
+    "Analyze high-ranking players to discover popular skills, stigmas, equipment, and build trends in Aion 2.",
   icons: {
     icon: [
       { url: "/icon0.svg", type: "image/svg+xml" },

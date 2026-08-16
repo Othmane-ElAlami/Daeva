@@ -1,14 +1,53 @@
 # Daeva
 
-A Next.js leaderboard and build analyzer for Aion 2. Leaderboards are sourced from [shugo.gg](https://shugo.gg/leaderboard), while player equipment and metadata are fetched from the official API. Deployed on Cloudflare Pages with a D1 database for player equipment caching.
+Open-source AION 2 build and meta analyzer that studies leaderboard data to identify popular skills, stigmas, equipment patterns, and other build trends.
 
-## Prerequisites
+[![License: 0BSD](https://img.shields.io/badge/License-0BSD-blue.svg)](https://opensource.org/licenses/0BSD)
+[![Deployed on Cloudflare Pages](https://img.shields.io/badge/Deployed-Cloudflare%20Pages-f38020.svg)](#)
+
+## What Daeva Does
+
+Daeva helps you understand the meta by analyzing high-ranking players across all leaderboards. It provides data-driven recommendations on:
+
+- Top active and passive skills
+- Must-have stigma combinations
+- Popular equipment and substats
+- Arcana choices and synergy patterns
+- Quick Build analysis for current trends
+
+By aggregating configurations from the official APIs and community platforms, Daeva reports observed build trends rather than claiming to mathematically determine the "perfect" build.
+
+## How It Works
+
+Daeva uses a resilient scraping and aggregation architecture:
+
+`Leaderboard Provider` → `Player Build Fetch` → `Aggregation` → `Analyzer`
+
+Because upstream APIs can be unreliable, Daeva follows a resilience ladder to ensure you always have access to data:
+
+1. **Official**: Live data directly from the official AION 2 API.
+2. **Shugo Fallback**: Alternative provider if official APIs are constrained.
+3. **Full-Build D1 Cache**: Cloudflare D1 cache serving instantly from background prefetch.
+4. **Historical Meta Snapshot**: Stored aggregate snapshot if all live data is unavailable.
+5. **Explicit Unavailable State**: If there's truly no data, Daeva tells you, rather than fabricating player builds.
+
+## Data Freshness
+
+The UI clearly indicates the health of the data source you are viewing:
+
+- **Live Data**: Full live synchronization.
+- **Partial Data**: Live synchronization with some servers failing.
+- **Cached Data**: Cache under 2 days old.
+- **Stale Cache**: Cache 2–7 days old.
+- **Historical Snapshot**: Cached aggregate data >7 days old, used as an ultimate fallback.
+
+## Local Development Setup
+
+### Prerequisites
 
 - [Node.js](https://nodejs.org/) v25+
 - A [Cloudflare](https://cloudflare.com) account (for D1 and Pages)
-- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/) (included as a dev dependency)
-
-## Local Development Setup
+- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/)
 
 ### 1. Install dependencies
 
@@ -16,15 +55,27 @@ A Next.js leaderboard and build analyzer for Aion 2. Leaderboards are sourced fr
 npm install
 ```
 
-### 2. Create the local D1 database table
+### 2. Database Setup
 
-The app uses a Cloudflare D1 database (`player-cache`) to cache player equipment data. On a fresh clone, the local SQLite database has no tables. Run this once to initialise it:
+The app uses a Cloudflare D1 database (`player-cache`) for caching player equipment. To set up the local SQLite database, run this once:
 
 ```bash
 npx wrangler d1 execute player-cache --local --command="CREATE TABLE IF NOT EXISTS player_cache (character_id TEXT NOT NULL, server_id TEXT NOT NULL, region TEXT, equip_data TEXT NOT NULL, equip_details TEXT NOT NULL, fetched_at INTEGER NOT NULL, PRIMARY KEY (character_id, server_id))"
 ```
 
-### 3. Start the development server
+### 3. Environment Variables
+
+Create `.env.local` for the Next.js app and `.dev.vars` for the Wrangler local environment. Use these placeholders (do not commit real secrets):
+
+```env
+# .dev.vars / .env.local
+ADMIN_SECRET=your-secret-here
+API_URL=http://localhost:3000
+```
+
+Note: `CLOUDFLARE_API_TOKEN` is used exclusively for CI/CD deployment via GitHub Actions. Never commit it.
+
+### 4. Start the development server
 
 ```bash
 npm run dev
@@ -32,160 +83,30 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-> The dev server uses `@cloudflare/next-on-pages/next-dev` to emulate the Cloudflare runtime (including D1 bindings) locally via `next.config.mjs`.
-
-## Available Scripts
-
-| Script                | Description                                      |
-| --------------------- | ------------------------------------------------ |
-| `npm run dev`         | Start the Next.js development server             |
-| `npm run build`       | Build the Next.js app                            |
-| `npm run pages:build` | Build for Cloudflare Pages using `next-on-pages` |
-| `npm run preview`     | Build and preview locally with Wrangler          |
-| `npm run deploy`      | Build and deploy to Cloudflare Pages             |
-| `npm run lint`        | Run ESLint                                       |
-
-## Deploying to Cloudflare Pages
-
-### 1. Create the remote D1 database
-
-```bash
-npx wrangler d1 create player-cache
-```
-
-Copy the `database_id` from the output and update `wrangler.toml` if it differs.
-
-### 2. Create the table in the remote database
-
-```bash
-npx wrangler d1 execute player-cache --remote --command="CREATE TABLE IF NOT EXISTS player_cache (character_id TEXT NOT NULL, server_id TEXT NOT NULL, region TEXT, equip_data TEXT NOT NULL, equip_details TEXT NOT NULL, fetched_at INTEGER NOT NULL, PRIMARY KEY (character_id, server_id))"
-```
-
-### 3. Deploy
-
-```bash
-npm run deploy
-```
-
-## Project Structure
-
-```text
-app/
-  api/scrape/route.js     # Edge API route — scans shugo.gg leaderboards and fetches character data from official API
-  api/prefetch/status/     # Prefetch system status endpoint (admin-gated)
-  layout.js / page.js     # Root layout and main page
-src/
-  lib/db.js               # D1 helper functions (getCachedPlayer, setCachedPlayer)
-  lib/prefetch/            # Background prefetching system (see below)
-instrumentation.js         # Next.js server startup hook — starts the prefetch scheduler
-wrangler.toml              # Cloudflare Workers / Pages + D1 binding config
-next.config.mjs            # Next.js config with Cloudflare dev platform setup
-```
-
 ## Background Prefetching
 
-The background prefetching system runs entirely in-process on the Node.js server. On startup, it begins a cache warming pass — fetching the top 100 players for every class across every leaderboard from shugo.gg and the official Aion 2 API. Results are stored in an in-memory cache so that subsequent user-facing requests to the analyzer are served instantly from cache (typically <5ms) instead of making live upstream fetches. After warming, the system enters a scheduled cycle that refreshes data on a configurable interval (default: every 30 minutes) with jittered offsets to prevent thundering herd spikes. All upstream requests are governed by a concurrency limiter (max 2 simultaneous), per-minute/per-hour rate budgets, per-job circuit breakers with exponential backoff, and a server load health gate that pauses background work when the server is under heavy user-facing load.
+Daeva includes a background prefetch system that runs entirely in-process on the Node.js server. On startup, it warms the cache by fetching the top 100 players for every class and leaderboard.
 
-### Data Flow
+This is governed by a scheduled workflow that calls the `POST /api/prefetch/run` endpoint (authenticated via `ADMIN_SECRET`) every 30 minutes, storing results in the D1 cache. This ensures instant load times for users. During upstream outages, Daeva gracefully falls back to the latest cached data.
 
-```text
-┌─────────────────────────┐
-│  Scheduler (+ Jitter)   │
-└────────────┬────────────┘
-             │
-             ▼
-┌─────────────────────────┐
-│        Job Queue        │
-└────────────┬────────────┘
-             │
-             ▼
-┌─────────────────────────┐
-│ Concurrency Limiter (2) │
-└────────────┬────────────┘
-             │
-             ▼
-┌─────────────────────────┐
-│ Rate Limiter (+ Health) │
-└────────────┬────────────┘
-             │
-             ▼
-┌─────────────────────────┐
-│      Upstream API       │
-└────────────┬────────────┘
-             │
-             ▼
-┌─────────────────────────┐
-│     In-Memory Cache     │
-└────────────┬────────────┘
-             │
-             ▼
-┌─────────────────────────┐
-│ User Request (Cache Hit)│
-└─────────────────────────┘
-```
+## Scripts & Testing
 
-### Environment Variables
+| Script                | Description                          |
+| --------------------- | ------------------------------------ |
+| `npm run dev`         | Start the Next.js development server |
+| `npm run build`       | Build the Next.js app                |
+| `npm run pages:build` | Build for Cloudflare Pages           |
+| `npm run test`        | Run Vitest unit/integration tests    |
+| `npm run lint`        | Run ESLint                           |
 
-All values have sensible defaults and can be tuned without a code change or redeploy.
+## Contributing
 
-| Variable                              | Default                            | Description                                                                   |
-| ------------------------------------- | ---------------------------------- | ----------------------------------------------------------------------------- |
-| `PREFETCH_ENABLED`                    | `true`                             | Master switch. Set to `false` to disable all background activity immediately. |
-| `PREFETCH_INTERVAL_MINUTES`           | `30`                               | How often the full refresh cycle runs.                                        |
-| `PREFETCH_CONCURRENCY`                | `2`                                | Maximum simultaneous upstream fetch jobs.                                     |
-| `PREFETCH_DELAY_BETWEEN_JOBS_MS`      | `1000`                             | Minimum delay (ms) between starting each job.                                 |
-| `PREFETCH_JITTER_RANGE_MS`            | `5000`                             | Random offset (ms) added to each job's schedule.                              |
-| `PREFETCH_MAX_REQUESTS_PER_MINUTE`    | `20`                               | Per-minute upstream request budget.                                           |
-| `PREFETCH_MAX_REQUESTS_PER_HOUR`      | `600`                              | Per-hour upstream request budget.                                             |
-| `PREFETCH_CIRCUIT_BREAKER_THRESHOLD`  | `3`                                | Consecutive failures before a job backs off exponentially.                    |
-| `PREFETCH_CACHE_TTL_MINUTES`          | `90`                               | Cache entry lifetime. Should be > `PREFETCH_INTERVAL_MINUTES`.                |
-| `PREFETCH_SERVER_LOAD_THRESHOLD`      | `0.7`                              | CPU load ratio (0–1) above which background jobs pause.                       |
-| `PREFETCH_WARM_ON_STARTUP`            | `true`                             | Run a cache warming pass on server startup.                                   |
-| `PREFETCH_WARM_PRIORITY_CLASSES`      | `gladiator,templar,cleric,chanter` | Classes warmed first on startup.                                              |
-| `PREFETCH_WARM_PRIORITY_LEADERBOARDS` | `nightmare,abyss`                  | Leaderboards warmed first on startup.                                         |
+We welcome contributions! Please read our [Contributing Guidelines](CONTRIBUTING.md) to learn how to propose features, report bugs, and submit pull requests.
 
-### Emergency Disable
+## Security
 
-Set the environment variable and restart (or, for live config, the system checks on every job):
+Please review our [Security Policy](SECURITY.md) for information on supported versions and how to privately report vulnerabilities. Do not file public issues for security exploits.
 
-```bash
-PREFETCH_ENABLED=false
-```
+## Disclaimer
 
-This immediately stops all background fetching. The in-memory cache continues to serve stale data until it expires.
-
-### Status Endpoint
-
-`GET /api/prefetch/status` (requires admin authentication) returns:
-
-```json
-{
-  "enabled": true,
-  "status": "running",
-  "pauseReason": null,
-  "lastCycleStart": 1745092800000,
-  "lastCycleEnd": 1745094600000,
-  "nextCycleEstimate": 1745096400000,
-  "totalCycles": 3,
-  "currentQueueDepth": 0,
-  "cache": {
-    "hits": 142,
-    "misses": 8,
-    "hitRate": 94.7,
-    "size": 56,
-    "entries": {
-      "prefetch:nightmare:gladiator:top100": { "lastFetchedAt": "...", "playerCount": 100 }
-    }
-  },
-  "recentCycles": [{ "type": "scheduled", "succeeded": 54, "failed": 2 }],
-  "recentJobs": [
-    { "jobId": "pf-42-...", "cls": "gladiator", "lbType": "nightmare", "status": "success" }
-  ]
-}
-```
-
-- **status**: `"running"` | `"warming"` | `"paused"` | `"stopped"`
-- **pauseReason**: Why the system paused (e.g. `"CPU load 85% exceeds threshold 70%"`)
-- **cache.hitRate**: Percentage of user requests served from prefetch cache
-- **currentQueueDepth**: Jobs remaining in the current cycle
-- **nextCycleEstimate**: Unix timestamp of the next scheduled cycle
+Daeva is an independent community project and is not affiliated with, maintained, or endorsed by NCSoft.
