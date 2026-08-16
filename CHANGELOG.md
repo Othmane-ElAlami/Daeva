@@ -53,7 +53,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Daeva falls back to cached or historical data when possible.
 - This is the primary reason the project remains in beta and is not yet `1.0.0`.
 
-## [0.9.0-beta] - 2026-04-20
+## 0.9.0-beta - 2026-04-20
 
 ### Added
 
@@ -83,4 +83,3 @@ Notable development prior to the formal 0.9.0-beta release included:
 - UI layout and theme foundation
 
 [0.10.0-beta]: https://github.com/Othmane-ElAlami/Daeva/releases/tag/v0.10.0-beta
-[0.9.0-beta]: https://github.com/Othmane-ElAlami/Daeva/releases/tag/v0.9.0-beta
