@@ -16,7 +16,7 @@ on:
 
 jobs:
   prefetch:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 50
     steps:
       - name: Run prefetch jobs
@@ -42,7 +42,12 @@ jobs:
                 -H "Content-Type: application/json" \
                 -H "Authorization: Bearer ${ADMIN_SECRET}" \
                 -d "{\"cls\":\"${cls}\",\"leaderboard\":\"${lb}\"}" \
-                --max-time 120)
+                --connect-timeout 20 \
+                --max-time 120 \
+                --retry 2 \
+                --retry-all-errors \
+                --retry-delay 2 \
+                --retry-max-time 30)
 
               if [ "$HTTP_CODE" -eq 200 ]; then
                 echo "✓ $cls/$lb — HTTP $HTTP_CODE"
