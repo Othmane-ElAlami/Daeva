@@ -558,13 +558,18 @@ export default function Home() {
       const message = isInternal
         ? "The server is temporarily busy. Please try again with a smaller limit or wait a moment."
         : msg || "An unexpected error occurred. Please try again.";
-      setError(completed.size ? `${message} Showing ${completed.size} completed builds.` : message);
+      setError(
+        completed.size
+          ? `${message} Showing ${completed.size} completed ${completed.size === 1 ? "build" : "builds"}.`
+          : message
+      );
     } finally {
       setLoading(false);
     }
   };
 
   const percent = (count, total) => (total === 0 ? "0.0" : ((count / total) * 100).toFixed(1));
+  const resultIsPartial = sourceMeta?.buildHealth === "partial" && !displayData?.stats.isHistorical;
 
   return (
     <main className="container" style={{ paddingTop: "48px", paddingBottom: "64px" }}>
@@ -1567,7 +1572,11 @@ export default function Home() {
                           flexShrink: 0,
                         }}
                       >
-                        <CheckCircle2 size={16} style={{ color: "#34d399" }} />
+                        {resultIsPartial ? (
+                          <Info size={16} style={{ color: "#fbbf24" }} />
+                        ) : (
+                          <CheckCircle2 size={16} style={{ color: "#34d399" }} />
+                        )}
                       </div>
                       <div>
                         <div
@@ -1585,16 +1594,18 @@ export default function Home() {
                               letterSpacing: "-0.01em",
                             }}
                           >
-                            Analysis Complete
+                            {resultIsPartial ? "Partial Results" : "Analysis Complete"}
                           </span>
                           <span
-                            className="badge-success badge"
+                            className={resultIsPartial ? "badge" : "badge-success badge"}
                             style={{
                               fontSize: "0.58rem",
                               letterSpacing: "0.04em",
+                              color: resultIsPartial ? "#fbbf24" : undefined,
+                              background: resultIsPartial ? "rgba(251,191,36,0.12)" : undefined,
                             }}
                           >
-                            Done
+                            {resultIsPartial ? "Partial" : "Done"}
                           </span>
                         </div>
                         <p
@@ -1611,24 +1622,25 @@ export default function Home() {
                             }}
                           >
                             {displayData.count}
-                          </span>
-                          {" top "}
+                          </span>{" "}
                           <span
                             style={{
                               color: "rgba(255,255,255,0.75)",
                               fontWeight: 600,
                             }}
                           >
-                            {displayData.cls}
+                            {displayData.cls[0].toUpperCase() + displayData.cls.slice(1)}
+                            {displayData.count === 1 ? "" : "s"}
                           </span>
-                          {" players · "}
+                          {" · "}
                           <span
                             style={{
                               color: "rgba(255,255,255,0.75)",
                               fontWeight: 600,
                             }}
                           >
-                            {resultLabel(displayData.lb, displayData.stats.isHistorical)}
+                            {displayData.stats.isHistorical ? "Historical " : ""}
+                            {leaderboardLabel(displayData.lb)}
                           </span>
                         </p>
                       </div>

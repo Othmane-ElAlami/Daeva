@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - Shorten analyzer headers and move source explanations and detailed freshness metadata into collapsible sections. Combat Power and historical game-mode labels remain explicit.
+- Label retained results from an interrupted scan as partial, with a concise class/count/basis summary.
 
 ## 0.11.0-beta - 2026-10-09
 
