@@ -141,25 +141,28 @@ timestamp; they provide no player-level Quick Build.
 
 Scheduled CP prefetch runs every six hours at 03:17, 09:17, 15:17 and 21:17 UTC,
 with one query per region/class (24 populations). A top-100 unfiltered region
-response cannot supply the top 100 of each of eight classes. Region jobs run
-independently; classes run sequentially with delays. Discovery is reused across
+response cannot supply the top 100 of each of eight classes. Region/class jobs
+run with at most three active jobs and delays between batches. Discovery is reused across
 authenticated continuation requests. Only completed jobs publish the full
 snapshot. Retry handling, admin authentication, disabled/upstream-down 503s,
 bounded continuations and failure thresholds remain in place.
 
 A real local top-100 run took about 150 seconds per 970-fetch-budget batch.
-Scheduled requests therefore allow four minutes, with a 90-minute region-job
-timeout. These remain bounded and avoid retrying healthy enrichment just
-because the previous two-minute request timeout expired.
+Scheduled requests allow four minutes, with a 90-minute region/class-job timeout.
+The 120-batch cap accommodates one full build per Free/Bundled-plan invocation;
+continuations must advance and never publish an incomplete prefetch snapshot.
 
 The default fresh TTL is 420 minutes; jobs completed in the last 330 minutes
 are skipped only if the cache contains a complete top-100 sample (or all of a
 smaller available population). Small interactive or partial samples do not
 suppress scheduled warming. This tracks profile lookups between nightly top-500 refreshes
-without the previous 30-minute mode traversal. Daeva retains its conservative
-970-fetch invocation budget and limits enrichment to six concurrent official
-requests. The deployment's existing paid-Worker assumption remains; Free-plan
-limits require a smaller budget. Review cadence/TTL when official modes return.
+without the previous 30-minute mode traversal. Worker routes default to a
+50-subrequest cap with five requests reserved, completing one player at a time.
+Set `WORKER_SUBREQUEST_LIMIT=1000` only when the deployment permits the paid
+budget (970 fetches); that setting retains up to six concurrent official calls.
+D1 has a separate internal-service quota. Requests that cannot complete a
+character cannot return a repeating continuation. Review cadence/TTL when
+official modes return.
 
 ## Attribution and release status
 

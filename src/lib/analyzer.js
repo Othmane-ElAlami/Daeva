@@ -96,6 +96,8 @@ export async function analyze(
     sourceMeta = { ...result.meta, leaderboardType: config.lbType };
   }
   onEvent({ type: "source_health", meta: sourceMeta });
+  const initialProcessedCount = processedPlayers.length;
+  const initialPlayerCount = players.length;
   // Source stickiness: later pages and continuation batches stay with the
   // successful discovery provider, never another leaderboard population.
   let page = sourceMeta.page || sourceMeta.pagesFetched || 1;
@@ -113,7 +115,13 @@ export async function analyze(
     // Process in ranked waves; completion order cannot promote a lower-CP
     // cached character ahead of a higher-CP character still being fetched.
     for (let offset = 0; offset < candidates.length && builds.length < config.limit; ) {
-      const batch = candidates.slice(offset, offset + Math.min(3, config.limit - builds.length));
+      // Complete one character before starting another on 50-subrequest plans.
+      // Parallel item waves otherwise consume the cap before any build can finish.
+      const playerConcurrency = budget.hardLimit <= 50 ? 1 : 3;
+      const batch = candidates.slice(
+        offset,
+        offset + Math.min(playerConcurrency, config.limit - builds.length)
+      );
       const results = await runPool(
         batch.map((player) => async () => {
           try {
@@ -122,7 +130,7 @@ export async function analyze(
             return error;
           }
         }),
-        3,
+        playerConcurrency,
         budget
       );
       for (let i = 0; i < batch.length; i++) {
@@ -193,7 +201,13 @@ export async function analyze(
       break;
     }
   }
-  if (budgetStopped && pending.length) {
+  const madeProgress =
+    processedPlayers.length > initialProcessedCount || pending.length < initialPlayerCount;
+  if (budgetStopped && !madeProgress) {
+    errors.push("The request budget cannot complete another character build.");
+    sourceMeta = { ...sourceMeta, buildHealth: "partial", hasMore: false };
+  }
+  if (budgetStopped && pending.length && madeProgress) {
     // Only complete player caches can be resumed. Incomplete details are
     // returned for review in a final partial result, never a lossy continuation.
     for (const player of processedPlayers) {

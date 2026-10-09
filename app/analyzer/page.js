@@ -473,8 +473,13 @@ export default function Home() {
       let isDone = false;
       let cumulativeProcessed = 0;
       let allProcessedPlayers = [];
+      let batches = 0;
 
       while (!isDone) {
+        if (++batches > 120)
+          throw new Error(
+            "Analysis could not complete within the batch limit. Try a smaller scan."
+          );
         const requestBody = continuationData
           ? { ...forma, runeFilter, continuation: continuationData }
           : { ...forma, runeFilter };

@@ -26,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Missing region in character cache identity; cache-first responses dropping builds/source metadata; duplicated prefetch fetching with incorrect shared function arguments; discovery scope leaking into pagination/error handling.
 - Prevent empty/error/challenge/schema-changed CP responses from masquerading as valid zero-player analyses, and prevent filtered populations from overwriting unfiltered aggregates.
 - Use Worker-compatible manual redirect handling for Combat Power requests while explicitly rejecting unexpected redirects.
+- Default Worker routes to the 50-subrequest cap, complete players before continuing, and prevent continuation loops with no progress. Prefetch uses bounded region/class jobs with at most three active jobs and a 120-batch guard for top-100 populations.
 
 ### Security
 

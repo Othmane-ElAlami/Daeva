@@ -111,6 +111,7 @@ export async function POST(request) {
       region,
       sourceMode: config.sourceMode,
       continuation: body.continuation,
+      env,
     });
 
     if (!result.continuation && result.stats && result.builds.length > 0) {

@@ -8,7 +8,7 @@ import { parseCombatPowerResponse } from "../src/lib/providers/leaderboard/shugo
 import { getLeaderboard } from "../src/lib/providers/leaderboard/index.js";
 import { analyze } from "../src/lib/analyzer.js";
 import { loadCachedBuild } from "../src/lib/character-builds.js";
-import { extractBuild, createBudget } from "../src/lib/scraper-shared.js";
+import { extractBuild, createBudget, createWorkerBudget } from "../src/lib/scraper-shared.js";
 import {
   resultLabel,
   canQuickBuild,
@@ -261,6 +261,59 @@ describe("provider failures and historical populations", () => {
 });
 
 describe("official build enrichment, ranking and continuation", () => {
+  it("completes full 25-item builds across 50-subrequest invocations without repeating discovery", async () => {
+    const officialFetch = mockOfficialPipeline();
+    let calls = 0;
+    const fullEquipment = fixture("global-equipment");
+    const fetch = vi.fn(async (input, options) => {
+      if (++calls > 50) throw new Error("Too many subrequests");
+      const url = new URL(input);
+      if (url.pathname.endsWith("/character/equipment")) return Response.json(fullEquipment);
+      if (url.pathname.endsWith("/character/equipment/item")) {
+        const item = fullEquipment.equipment.equipmentList.find(
+          (item) => String(item.id) === url.searchParams.get("id")
+        );
+        return Response.json({ ...fixture("global-item"), id: item.id, name: item.name });
+      }
+      return officialFetch(input, options);
+    });
+    vi.stubGlobal("fetch", fetch);
+    let continuation;
+    let previous = 0;
+    let result;
+    for (let batch = 0; batch < 4; batch++) {
+      calls = 0;
+      result = await analyze(
+        { ...config, limit: 3, continuation },
+        { db, budget: createWorkerBudget({ WORKER_SUBREQUEST_LIMIT: "50" }) }
+      );
+      expect(calls).toBeLessThan(45);
+      if (!result.continuation) break;
+      expect(result.continuation.processedCount).toBeGreaterThan(previous);
+      previous = result.continuation.processedCount;
+      continuation = result.continuation;
+    }
+    expect(result.continuation).toBeUndefined();
+    expect(result.builds.map((build) => build.rank)).toEqual([1, 2, 3]);
+    expect(result.builds.every((build) => build.equipItems.length === 25)).toBe(true);
+    expect(
+      fetch.mock.calls.filter(([url]) => url.includes("/leaderboard/combat-power"))
+    ).toHaveLength(1);
+  });
+  it("fails explicitly instead of returning a continuation that cannot advance", async () => {
+    const officialFetch = mockOfficialPipeline();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input, options) => {
+        if (!String(input).includes("/leaderboard/combat-power"))
+          throw new Error("Too many subrequests");
+        return officialFetch(input, options);
+      })
+    );
+    await expect(analyze(config, { db, budget: createWorkerBudget() })).rejects.toMatchObject({
+      name: "AllProvidersFailedError",
+    });
+  });
   it("rejects incomplete raw character caches rather than losing item details on resume", async () => {
     await setCachedPlayer(
       db,

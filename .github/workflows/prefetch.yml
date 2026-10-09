@@ -13,21 +13,25 @@ jobs:
     timeout-minutes: 90
     strategy:
       fail-fast: false
+      max-parallel: 3
       matrix:
         region: [GLOBAL, KR, TW]
+        class: [chanter, cleric, sorcerer, spiritmaster, assassin, ranger, templar, gladiator]
     steps:
       - name: Refresh supported discovery populations
         env:
           API_URL: ${{ vars.API_URL }}
           ADMIN_SECRET: ${{ secrets.ADMIN_SECRET }}
           REGION: ${{ matrix.region }}
+          PREFETCH_CLASS: ${{ matrix.class }}
         run: |
           : "${API_URL:?API_URL is not configured}"
           : "${ADMIN_SECRET:?ADMIN_SECRET is not configured}"
           curl -fsS --http1.1 --connect-timeout 20 --max-time 30 --retry 2 \
             "${API_URL%/}/api/leaderboard/config" -o /tmp/discovery_config.json
           MODE=$(jq -er '.sourceMode' /tmp/discovery_config.json)
-          CLASSES=$(jq -r '.classes[]' /tmp/discovery_config.json)
+          jq -e --arg cls "$PREFETCH_CLASS" '.classes | index($cls) != null' /tmp/discovery_config.json >/dev/null
+          CLASSES="$PREFETCH_CLASS"
           if [ "$MODE" = "combat-power" ]; then
             LEADERBOARDS="combat-power"
           else
@@ -47,6 +51,7 @@ jobs:
               jq -n --arg cls "$cls" --arg lb "$lb" --arg region "$REGION" \
                 '{cls:$cls,leaderboard:$lb,region:$region}' > /tmp/prefetch_body.json
               batch=0
+              previous_processed=0
               while true; do
                 batch=$((batch + 1))
                 rm -f /tmp/prefetch_response.json
@@ -72,10 +77,12 @@ jobs:
                 fi
                 jq -r '"  players: \(.playerCount), errors: \(.errorCount), duration: \(.durationMs)ms"' /tmp/prefetch_response.json
                 if jq -e '.continuation != null' /tmp/prefetch_response.json >/dev/null; then
-                  if [ "$batch" -ge 12 ]; then
+                  processed=$(jq -r '.continuation.processedCount' /tmp/prefetch_response.json)
+                  if [ "$batch" -ge 120 ] || [ "$processed" -le "$previous_processed" ]; then
                     echo "✗ Continuation safeguard reached"
                     failed=$((failed + 1)); break
                   fi
+                  previous_processed=$processed
                   jq --arg cls "$cls" --arg lb "$lb" --arg region "$REGION" \
                     '{cls:$cls,leaderboard:$lb,region:$region,continuation:.continuation}' \
                     /tmp/prefetch_response.json > /tmp/prefetch_body.json

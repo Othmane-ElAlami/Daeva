@@ -20,6 +20,7 @@ import {
   subrequestSafetyMargin,
   subrequestBudgetExhausted,
   createBudget,
+  createWorkerBudget,
   fetchJSON,
   fetchWithRetry,
   runPool,
@@ -196,6 +197,14 @@ describe("subrequestBudgetExhausted", () => {
 });
 
 describe("createBudget", () => {
+  it("defaults Worker fetches to the 50-subrequest plan and supports an explicit paid cap", () => {
+    const free = createWorkerBudget({ WORKER_SUBREQUEST_LIMIT: "50" });
+    expect(free.hardLimit).toBe(50);
+    expect(free.remaining).toBe(45);
+    expect(() => free.consume(45)).toThrow(/45\/50/);
+    expect(createWorkerBudget({ WORKER_SUBREQUEST_LIMIT: "1000" }).remaining).toBe(970);
+    expect(() => createWorkerBudget({ WORKER_SUBREQUEST_LIMIT: "invalid" })).toThrow(/must be/);
+  });
   it("starts with 0 used and full remaining", () => {
     const b = createBudget();
     expect(b.used).toBe(0);

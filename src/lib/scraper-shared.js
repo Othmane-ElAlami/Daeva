@@ -115,36 +115,50 @@ export const subrequestHardLimit = 1000;
 export const subrequestSafetyMargin = 30;
 
 export class subrequestBudgetExhausted extends Error {
-  constructor(used) {
-    super(`Subrequest budget exhausted (${used}/${subrequestHardLimit})`);
+  constructor(used, hardLimit = subrequestHardLimit) {
+    super(`Subrequest budget exhausted (${used}/${hardLimit})`);
     this.name = "SubrequestBudgetExhausted";
   }
 }
 
-export function createBudget() {
+export function createBudget({
+  hardLimit = subrequestHardLimit,
+  safetyMargin = subrequestSafetyMargin,
+} = {}) {
   let used = 0;
   let forceExhausted = false;
   return {
+    hardLimit,
     get used() {
       return used;
     },
     get remaining() {
-      return forceExhausted ? 0 : subrequestHardLimit - subrequestSafetyMargin - used;
+      return forceExhausted ? 0 : hardLimit - safetyMargin - used;
     },
     consume(n = 1) {
-      if (forceExhausted) throw new subrequestBudgetExhausted(used);
+      if (forceExhausted) throw new subrequestBudgetExhausted(used, hardLimit);
       used += n;
-      if (used >= subrequestHardLimit - subrequestSafetyMargin) {
-        throw new subrequestBudgetExhausted(used);
+      if (used >= hardLimit - safetyMargin) {
+        throw new subrequestBudgetExhausted(used, hardLimit);
       }
     },
     canAfford(n = 1) {
-      return !forceExhausted && used + n < subrequestHardLimit - subrequestSafetyMargin;
+      return !forceExhausted && used + n < hardLimit - safetyMargin;
     },
     exhaust() {
       forceExhausted = true;
     },
   };
+}
+
+// Use the Free/Bundled plan cap unless a higher deployment limit is configured.
+// D1 has a separate internal-service quota; this budget counts outbound fetches.
+export function createWorkerBudget(env = {}) {
+  const value = env.WORKER_SUBREQUEST_LIMIT ?? process.env.WORKER_SUBREQUEST_LIMIT ?? "50";
+  const hardLimit = Number(value);
+  if (![50, 1000].includes(hardLimit))
+    throw new Error("WORKER_SUBREQUEST_LIMIT must be 50 or 1000.");
+  return createBudget({ hardLimit, safetyMargin: hardLimit === 50 ? 5 : 30 });
 }
 
 // ── Fetch Helpers ────────────────────────────────────────────────────────────

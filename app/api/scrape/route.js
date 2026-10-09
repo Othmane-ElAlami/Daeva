@@ -6,7 +6,7 @@ import { getPrefetchCache, setPrefetchCache } from "@/lib/prefetch/cache";
 import { loadConfig } from "@/lib/prefetch/config";
 import { getSourceMode, isHistoricalOnly, COMBAT_POWER, CP_SOURCE } from "@/lib/discovery-config";
 import { normalizeRegion, normalizeFaction } from "@/lib/regions";
-import { leaderboardTypes, classRankingIds } from "@/lib/scraper-shared";
+import { leaderboardTypes, classRankingIds, createWorkerBudget } from "@/lib/scraper-shared";
 
 export const runtime = "edge";
 
@@ -151,6 +151,7 @@ export async function POST(req) {
         );
         const result = await analyze(config, {
           db,
+          budget: createWorkerBudget(env),
           onEvent: (event) => {
             if (event.type === "player") {
               const build = event.build;
