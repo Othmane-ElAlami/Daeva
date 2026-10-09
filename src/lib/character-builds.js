@@ -1,5 +1,5 @@
-import { getCachedPlayer, setCachedPlayer } from "./db.js";
-import { characterApiUrl } from "./regions.js";
+import { getCachedPlayer, getCachedPlayers, setCachedPlayer } from "./db.js";
+import { characterApiUrl, characterKey } from "./regions.js";
 import {
   fetchJSON,
   makeDirectHeaders,
@@ -47,6 +47,20 @@ function buildFromData(player, equipData, equipDetails, itemLevel, combatPower, 
 
 export async function loadCachedBuild(db, player) {
   const cached = await getCachedPlayer(db, player.characterId, player.serverId, player.region);
+  return buildFromCache(player, cached);
+}
+
+export async function loadCachedBuilds(db, players) {
+  const cached = await getCachedPlayers(db, players);
+  return new Map(
+    players.map((player) => [
+      characterKey(player),
+      buildFromCache(player, cached.get(characterKey(player))),
+    ])
+  );
+}
+
+function buildFromCache(player, cached) {
   const equipment = cached?.equipData?.equipment?.equipmentList?.filter(Boolean);
   if (
     !equipment?.length ||
@@ -74,11 +88,17 @@ export async function loadCachedBuild(db, player) {
 // Official item detail calls cost one subrequest each. Both interactive analysis
 // and scheduled prefetch use the same budget/continuation path instead of dropping
 // arcana, rune or stone data to make a top-100 job fit one invocation.
-export async function fetchCharacterBuild(player, db, budget, { refresh = false } = {}) {
+export async function fetchCharacterBuild(
+  player,
+  db,
+  budget,
+  { refresh = false, cachedBuild } = {}
+) {
   if (player._build) return { build: player._build, warnings: [] };
-  const cached = await loadCachedBuild(db, player);
+  const cached = cachedBuild === undefined ? await loadCachedBuild(db, player) : cachedBuild;
   if (cached && !refresh && Date.now() - cached.buildFetchedAt < 6 * 60 * 60 * 1000)
-    return { build: cached, warnings: [], cached: true };
+    return { build: cached, warnings: [], cached: true, resumable: true };
+  if (!budget.canAfford(3)) throw new subrequestBudgetExhausted(budget.used, budget.hardLimit);
   const [equipData, infoData] = await Promise.all([
     officialJSON(player, "equipment", budget),
     officialJSON(player, "info", budget),
@@ -106,8 +126,9 @@ export async function fetchCharacterBuild(player, db, budget, { refresh = false 
           enchantLevel: String(item.enchantLevel || 0),
           slotPos: String(item.slotPos),
         });
-        if (!detail?.id || !detail.name) throw new Error("Malformed official item details.");
-        return { ...detail, slotPos: item.slotPos };
+        if (!detail?.id || !detail.name || String(detail.id) !== String(item.id))
+          throw new Error("Malformed official item details.");
+        return { ...detail, id: item.id, slotPos: item.slotPos };
       } catch (error) {
         if (error instanceof subrequestBudgetExhausted) return error;
         warnings.push(`${item.name}: item details unavailable`);
@@ -142,5 +163,6 @@ export async function fetchCharacterBuild(player, db, budget, { refresh = false 
   return {
     build: buildFromData(player, equipData, equipDetails, itemLevel, combatPower, fetchedAt),
     warnings,
+    resumable: !!db && !warnings.length && equipDetails.length === equipment.length,
   };
 }

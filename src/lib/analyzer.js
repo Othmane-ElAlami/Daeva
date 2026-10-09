@@ -1,6 +1,6 @@
 import { getLeaderboard } from "./providers/leaderboard/index.js";
 import { AllProvidersFailedError } from "./providers/leaderboard/base.js";
-import { fetchCharacterBuild, loadCachedBuild } from "./character-builds.js";
+import { fetchCharacterBuild, loadCachedBuilds } from "./character-builds.js";
 import { COMBAT_POWER, populationKey, isHistoricalOnly } from "./discovery-config.js";
 import { characterKey, matchesPlayerFilters } from "./regions.js";
 import {
@@ -67,6 +67,8 @@ export async function analyze(
   const seen = new Set();
   let sourceMeta;
   let players;
+  let cachedBuilds;
+  let resumable = true;
   const providerConfig = {
     ...config,
     db,
@@ -83,8 +85,9 @@ export async function analyze(
       throw new Error("Invalid continuation population.");
     sourceMeta = continuation.sourceMeta;
     players = continuation.players;
+    cachedBuilds = await loadCachedBuilds(db, [...continuation.processedPlayers, ...players]);
     for (const player of continuation.processedPlayers) {
-      const build = await loadCachedBuild(db, player);
+      const build = cachedBuilds.get(characterKey(player));
       if (!build) throw new Error("Continuation build cache is no longer available.");
       builds.push(build);
       processedPlayers.push(player);
@@ -94,6 +97,7 @@ export async function analyze(
     const result = await getLeaderboard({ ...providerConfig, limit: 100, maxPages: 1 }, budget);
     players = result.rankings;
     sourceMeta = { ...result.meta, leaderboardType: config.lbType };
+    cachedBuilds = await loadCachedBuilds(db, players);
   }
   onEvent({ type: "source_health", meta: sourceMeta });
   const initialProcessedCount = processedPlayers.length;
@@ -125,13 +129,15 @@ export async function analyze(
       const results = await runPool(
         batch.map((player) => async () => {
           try {
-            return await fetchCharacterBuild(player, db, budget, { refresh });
+            return await fetchCharacterBuild(player, db, budget, {
+              refresh,
+              cachedBuild: cachedBuilds.get(characterKey(player)) || null,
+            });
           } catch (error) {
             return error;
           }
         }),
-        playerConcurrency,
-        budget
+        playerConcurrency
       );
       for (let i = 0; i < batch.length; i++) {
         const result = results[i];
@@ -149,6 +155,7 @@ export async function analyze(
         errors.push(...result.warnings);
         if (!matchesPlayerFilters(result.build, config)) continue;
         builds.push(result.build);
+        resumable &&= result.resumable === true;
         const { _build, _isFromCache, ...identity } = batch[i];
         processedPlayers.push(identity);
         onEvent({
@@ -188,6 +195,7 @@ export async function analyze(
         budget
       );
       players = next.rankings;
+      cachedBuilds = await loadCachedBuilds(db, players);
       sourceMeta = {
         ...sourceMeta,
         ...next.meta,
@@ -210,17 +218,15 @@ export async function analyze(
   if (budgetStopped && pending.length && madeProgress) {
     // Only complete player caches can be resumed. Incomplete details are
     // returned for review in a final partial result, never a lossy continuation.
-    for (const player of processedPlayers) {
-      if (!(await loadCachedBuild(db, player))) {
-        errors.push("The request budget was reached; incomplete builds cannot be resumed safely.");
-        return finish(
-          builds,
-          { ...sourceMeta, buildHealth: "partial", hasMore: false },
-          errors,
-          budget.used,
-          config
-        );
-      }
+    if (!resumable) {
+      errors.push("The request budget was reached; incomplete builds cannot be resumed safely.");
+      return finish(
+        builds,
+        { ...sourceMeta, buildHealth: "partial", hasMore: false },
+        errors,
+        budget.used,
+        config
+      );
     }
     return {
       builds,

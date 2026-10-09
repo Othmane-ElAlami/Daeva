@@ -155,6 +155,7 @@ export async function POST(req) {
           onEvent: (event) => {
             if (event.type === "player") {
               const build = event.build;
+              send(event);
               log.success(
                 "scan",
                 `${build.name} · ${build.serverName} · ${build.region} · CP ${build.combatPower.toLocaleString()} · GS ${build.gearScore}`

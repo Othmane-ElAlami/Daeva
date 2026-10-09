@@ -3,6 +3,8 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { discoveryConfig, COMBAT_POWER } from "@/lib/discovery-config";
+import { runAnalysis } from "@/lib/analysis-stream";
+import { characterKey } from "@/lib/regions";
 import {
   resultLabel,
   leaderboardLabel,
@@ -297,6 +299,7 @@ export default function Home() {
   const [sourceMeta, setSourceMeta] = useState(null);
   const [discovery, setDiscovery] = useState(() => discoveryConfig());
   const [quickTemplate, setQuickTemplate] = useState(null);
+  const [resumeState, setResumeState] = useState(null);
   const [progress, setProgress] = useState({
     current: 0,
     total: 10,
@@ -314,6 +317,7 @@ export default function Home() {
   const logContainerRef = useRef(null);
   const resultsLogContainerRef = useRef(null);
   const serverDropdownRef = useRef(null);
+  const analysisControllerRef = useRef(null);
   const historicalOnly = discovery.leaderboards.find(
     (lb) => lb.id === forma.lbType
   )?.historicalOnly;
@@ -430,6 +434,12 @@ export default function Home() {
   }, [forma.cls, forma.lbType, forma.region]);
 
   useEffect(() => {
+    setResumeState(null);
+  }, [forma.cls, forma.lbType, forma.region, forma.limit, forma.serverId, forma.race, runeFilter]);
+
+  useEffect(() => () => analysisControllerRef.current?.abort(), []);
+
+  useEffect(() => {
     const handleClickOutside = (e) => {
       if (serverDropdownRef.current && !serverDropdownRef.current.contains(e.target)) {
         setServerDropdownOpen(false);
@@ -457,149 +467,98 @@ export default function Home() {
     return null;
   }
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const handleSubmit = async (e, resume = null) => {
+    e?.preventDefault();
+    const config = resume?.config || { ...forma, runeFilter };
+    const completed = new Map((resume?.builds || []).map((build) => [characterKey(build), build]));
+    let latestSource = resume?.sourceMeta || null;
+    const controller = new AbortController();
+    analysisControllerRef.current = controller;
     setLoading(true);
     setError("");
-    setData(null);
-    setRawBuilds(null);
-    setLogs([]);
-    setSourceMeta(null);
+    setResumeState(null);
+    if (!resume) {
+      setData(null);
+      setRawBuilds(null);
+      setLogs([]);
+      setSourceMeta(null);
+    }
     setQuickTemplate(null);
-    setProgress({ current: 0, total: forma.limit, target: "" });
+    setProgress({ current: completed.size, total: config.limit, target: "" });
 
     try {
-      let continuationData = null;
-      let isDone = false;
-      let cumulativeProcessed = 0;
-      let allProcessedPlayers = [];
-      let batches = 0;
-
-      while (!isDone) {
-        if (++batches > 120)
-          throw new Error(
-            "Analysis could not complete within the batch limit. Try a smaller scan."
-          );
-        const requestBody = continuationData
-          ? { ...forma, runeFilter, continuation: continuationData }
-          : { ...forma, runeFilter };
-
-        const res = await fetch("/api/scrape", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(requestBody),
-        });
-
-        if (res.status === 429) {
-          const errData = await res.json();
-          throw new Error(errData.error || "Rate limit exceeded. Please wait before trying again.");
-        }
-        if (!res.ok) {
-          throw new Error("Failed to start analysis");
-        }
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let readerDone = false;
-        let buffer = "";
-        continuationData = null;
-
-        while (!readerDone) {
-          const { value, done: doneReading } = await reader.read();
-          readerDone = doneReading;
-          if (value) {
-            buffer += decoder.decode(value, { stream: true });
-            const parts = buffer.split("\n\n");
-            buffer = parts.pop();
-            for (const part of parts) {
-              if (part.startsWith("data: ")) {
-                try {
-                  const event = JSON.parse(part.slice(6));
-                  if (event.type === "log") {
-                    setLogs((prev) => [
-                      ...prev,
-                      {
-                        text: event.message,
-                        level: event.level || "INFO",
-                        context: event.context || "",
-                        time: event.timestamp
-                          ? new Date(event.timestamp).toLocaleTimeString("en-US", {
-                              hour12: false,
-                              hour: "2-digit",
-                              minute: "2-digit",
-                              second: "2-digit",
-                              fractionalSecondDigits: 3,
-                            })
-                          : new Date().toLocaleTimeString("en-US", {
-                              hour12: false,
-                              hour: "2-digit",
-                              minute: "2-digit",
-                              second: "2-digit",
-                              fractionalSecondDigits: 3,
-                            }),
-                      },
-                    ]);
-                  } else if (event.type === "progress") {
-                    setProgress(event);
-                  } else if (event.type === "source_health") {
-                    setSourceMeta(event.meta);
-                  } else if (event.type === "empty-leaderboard") {
-                    const seasonLabel = event.season ? `Season ${event.season}` : "A new season";
-                    const startLabel = event.seasonStart
-                      ? ` on ${new Date(event.seasonStart).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
-                      : "";
-                    throw new Error(
-                      `${seasonLabel} just started${startLabel} — ${event.leaderboard} rankings aren't available yet. Try Abyss or check back soon.`
-                    );
-                  } else if (event.type === "done") {
-                    setData({
-                      stats: event.stats,
-                      count: event.count,
-                      cls: forma.cls,
-                      lb: event.leaderboardType || event.stats?.leaderboardType || forma.lbType,
-                      builds: event.builds || [],
-                    });
-                    setRawBuilds(event.builds || null);
-                    isDone = true;
-                  } else if (event.type === "continue") {
-                    cumulativeProcessed = event.processedCount;
-                    allProcessedPlayers = event.processedPlayers || [];
-                    continuationData = {
-                      identity: event.identity,
-                      sourceMeta: event.sourceMeta,
-                      players: event.players,
-                      processedCount: cumulativeProcessed,
-                      processedPlayers: allProcessedPlayers,
-                    };
-                  } else if (event.type === "error") {
-                    throw new Error(event.message);
-                  }
-                } catch (e) {
-                  if (e.message && !e.message.includes("Unexpected end of JSON")) {
-                    throw e;
-                  }
-                }
-              }
-            }
+      const result = await runAnalysis(config, {
+        continuation: resume?.continuation,
+        signal: controller.signal,
+        onEvent: (event) => {
+          if (event.type === "log" || event.type === "retry") {
+            setLogs((prev) => [
+              ...prev,
+              {
+                text: event.message,
+                level: event.type === "retry" ? "WARN" : event.level || "INFO",
+                context: event.context || "connection",
+                time: new Date(event.timestamp || Date.now()).toLocaleTimeString("en-US", {
+                  hour12: false,
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  second: "2-digit",
+                  fractionalSecondDigits: 3,
+                }),
+              },
+            ]);
+          } else if (event.type === "progress") {
+            setProgress((prev) => ({ ...event, current: Math.max(prev.current, event.current) }));
+          } else if (event.type === "source_health") {
+            latestSource = event.meta;
+            setSourceMeta(event.meta);
+          } else if (event.type === "player") {
+            completed.set(characterKey(event.build), event.build);
+          } else if (event.type === "empty-leaderboard") {
+            throw new Error(`${event.leaderboard} rankings are not available yet.`);
           }
-        }
-
-        // Stream ended — if no continuation and not done, something went wrong
-        if (!continuationData && !isDone) {
-          throw new Error("Analysis was interrupted. Please try again.");
-        }
-      }
+        },
+      });
+      setData({
+        stats: result.stats,
+        count: result.count,
+        cls: config.cls,
+        lb: result.leaderboardType || result.stats?.leaderboardType || config.lbType,
+        builds: result.builds || [],
+      });
+      setRawBuilds(result.builds || null);
     } catch (err) {
+      if (controller.signal.aborted) return;
+      if (err.continuation) {
+        setResumeState({
+          config,
+          continuation: err.continuation,
+          builds: [...completed.values()],
+          sourceMeta: latestSource,
+        });
+      }
+      if (completed.size) {
+        const builds = [...completed.values()].sort((a, b) => a.rank - b.rank);
+        const partialSource = { ...latestSource, buildHealth: "partial" };
+        setData({
+          stats: { ...clientAggregate(builds), sourceMeta: partialSource },
+          count: builds.length,
+          cls: config.cls,
+          lb: config.lbType,
+          builds,
+        });
+        setRawBuilds(builds);
+        setSourceMeta(partialSource);
+      }
       // Never show raw infrastructure errors to the user
       const msg = err.message || "";
       const isInternal = /subrequest|worker invocation|cloudflare|wrangler|d1_error|sqlite/i.test(
         msg
       );
-      setError(
-        isInternal
-          ? "The server is temporarily busy. Please try again with a smaller limit or wait a moment."
-          : msg || "An unexpected error occurred. Please try again."
-      );
+      const message = isInternal
+        ? "The server is temporarily busy. Please try again with a smaller limit or wait a moment."
+        : msg || "An unexpected error occurred. Please try again.";
+      setError(completed.size ? `${message} Showing ${completed.size} completed builds.` : message);
     } finally {
       setLoading(false);
     }
@@ -628,26 +587,11 @@ export default function Home() {
           style={{ fontSize: "1rem", maxWidth: "400px", margin: "8px auto 0" }}
         >
           {historicalOnly
-            ? "Stored game-mode aggregates · live rankings unavailable"
+            ? "Archived builds by game mode"
             : forma.lbType === COMBAT_POWER
-              ? "Discover top Combat Power builds with official character data"
+              ? "Top builds by Combat Power"
               : "Decode the meta from top-ranked player builds"}
         </p>
-        {forma.lbType === COMBAT_POWER && (
-          <p
-            className="text-muted mt-2"
-            style={{ fontSize: "0.85rem", maxWidth: 680, margin: "12px auto" }}
-          >
-            Player discovery by{" "}
-            <a href="https://shugo.gg/leaderboard" target="_blank" rel="noreferrer">
-              Shugo.GG&apos;s Combat Power leaderboard
-            </a>
-            . This ranks profiles looked up on Shugo by NCSOFT Combat Power.
-            {discovery.sourceMode === COMBAT_POWER
-              ? " Game-mode rankings remain unavailable; their snapshots are historical."
-              : " Combat Power is separate from game-mode rankings."}
-          </p>
-        )}
       </motion.div>
 
       <div className="grid-cols-3">
@@ -694,6 +638,34 @@ export default function Home() {
               </p>
             </div>
           </div>
+
+          <details
+            className="text-muted"
+            style={{ fontSize: "0.8rem", marginBottom: 20, lineHeight: 1.6 }}
+          >
+            <summary style={{ cursor: "pointer" }}>
+              About this data{forma.lbType === COMBAT_POWER ? " · Shugo.GG" : ""}
+            </summary>
+            {forma.lbType === COMBAT_POWER ? (
+              <p style={{ marginTop: 8 }}>
+                Discovery uses{" "}
+                <a href="https://shugo.gg/leaderboard" target="_blank" rel="noreferrer">
+                  Shugo.GG&apos;s Combat Power leaderboard
+                </a>
+                . It ranks profiles looked up on Shugo by NCSOFT Combat Power; build details come
+                from official character APIs. Combat Power is separate from game-mode rankings.
+                {discovery.sourceMode === COMBAT_POWER &&
+                  " Game-mode snapshots are historical while their live rankings are unavailable."}
+              </p>
+            ) : historicalOnly ? (
+              <p style={{ marginTop: 8 }}>
+                Stored game-mode aggregates retain their original population and date. Live
+                mode-specific rankings are unavailable.
+              </p>
+            ) : (
+              <p style={{ marginTop: 8 }}>Builds from the selected game-mode leaderboard.</p>
+            )}
+          </details>
 
           <form onSubmit={handleSubmit} className="flex-col gap-4">
             <div className="input-group">
@@ -749,7 +721,7 @@ export default function Home() {
                   {(discovery.leaderboards || LEADERBOARDS).map((lb) => (
                     <option key={lb.id} value={lb.id}>
                       {lb.label}
-                      {lb.historicalOnly ? " · Historical only (live unavailable)" : ""}
+                      {lb.historicalOnly ? " · Historical" : ""}
                     </option>
                   ))}
                 </select>
@@ -810,7 +782,7 @@ export default function Home() {
               <div className="relative" ref={serverDropdownRef}>
                 <button
                   type="button"
-                  disabled={historicalOnly}
+                  disabled={historicalOnly || loading}
                   onClick={() => {
                     setServerDropdownOpen((o) => !o);
                     setServerSearch("");
@@ -1191,7 +1163,7 @@ export default function Home() {
               <div className="relative">
                 <select
                   value={runeFilter}
-                  disabled={historicalOnly}
+                  disabled={historicalOnly || loading}
                   onChange={(e) => setRuneFilter(e.target.value)}
                   className="appearance-none"
                 >
@@ -1212,10 +1184,11 @@ export default function Home() {
             </div>
 
             <div className="input-group">
-              <label>Scan Limit (max 100)</label>
+              <label htmlFor="analyzer-limit">Scan Limit (max 100)</label>
               <input
+                id="analyzer-limit"
                 type="number"
-                disabled={historicalOnly}
+                disabled={historicalOnly || loading}
                 min="1"
                 max="100"
                 value={forma.limit}
@@ -1271,6 +1244,17 @@ export default function Home() {
               }}
             >
               {error}
+              {resumeState && (
+                <button
+                  type="button"
+                  className="btn-primary"
+                  style={{ marginTop: 12 }}
+                  disabled={loading}
+                  onClick={() => handleSubmit(null, resumeState)}
+                >
+                  Resume Scan
+                </button>
+              )}
               {sourceMeta?.health === "unavailable" && (
                 <p aria-label="Source health" style={{ marginTop: 8 }}>
                   Source: {sourceMeta.source} · Data: {sourceHealthText(sourceMeta)} · Leaderboard
@@ -1710,52 +1694,60 @@ export default function Home() {
                           day: "numeric",
                           year: "numeric",
                         })}{" "}
-                        · Player-level analysis unavailable.
                       </span>
                     </div>
                   )}
 
-                  {/* Source Health Bar */}
+                  {/* Keep the source visible, with freshness details on demand. */}
                   {sourceMeta && (
-                    <div
+                    <details
                       style={{
                         padding: "12px 24px",
                         background: "rgba(0,0,0,0.15)",
                         fontSize: "0.8rem",
-                        display: "grid",
-                        gap: 6,
                       }}
                       aria-label="Source health"
                     >
-                      <span>
-                        Source:{" "}
-                        <strong>
-                          {sourceMeta.source}
-                          {sourceMeta.upstreamSource ? " · " + sourceMeta.upstreamSource : ""}
-                        </strong>
-                      </span>
-                      <span>
-                        Data: {sourceHealthText(sourceMeta)}
-                        {sourceMeta.buildHealth === "partial"
-                          ? " · Some item/build fetches incomplete"
-                          : ""}
-                      </span>
-                      <span>
-                        Leaderboard basis: {sourceMeta.basis} · Region: {sourceMeta.region}
-                      </span>
-                      {sourceMeta.topRefreshedAt && (
+                      <summary style={{ cursor: "pointer" }}>
+                        <strong>{sourceMeta.upstreamSource || sourceMeta.source}</strong> ·{" "}
+                        {sourceMeta.health === "historical"
+                          ? "Historical"
+                          : sourceMeta.health === "unavailable"
+                            ? "Unavailable"
+                            : sourceMeta.health === "stale"
+                              ? "Stale cache"
+                              : sourceMeta.buildHealth === "partial" ||
+                                  sourceMeta.health === "partial"
+                                ? "Partial"
+                                : sourceMeta.source === "Cache"
+                                  ? "Cached"
+                                  : "Recent"}{" "}
+                        · {sourceMeta.region}
+                      </summary>
+                      <div style={{ display: "grid", gap: 6, marginTop: 10 }}>
                         <span>
-                          Shugo top-500 refresh:{" "}
-                          {new Date(sourceMeta.topRefreshedAt).toLocaleString()} · Individual
-                          profile freshness varies.
+                          Data: {sourceHealthText(sourceMeta)}
+                          {sourceMeta.buildHealth === "partial"
+                            ? " · Some item/build fetches incomplete"
+                            : ""}
                         </span>
-                      )}
-                      {sourceMeta.leaderboardType === COMBAT_POWER && (
-                        <a href="https://shugo.gg/leaderboard" target="_blank" rel="noreferrer">
-                          Leaderboard dataset: Shugo.GG
-                        </a>
-                      )}
-                    </div>
+                        <span>
+                          Leaderboard basis: {sourceMeta.basis} · Region: {sourceMeta.region}
+                        </span>
+                        {sourceMeta.topRefreshedAt && (
+                          <span>
+                            Shugo top-500 refresh:{" "}
+                            {new Date(sourceMeta.topRefreshedAt).toLocaleString()} · Individual
+                            profile freshness varies.
+                          </span>
+                        )}
+                        {sourceMeta.leaderboardType === COMBAT_POWER && (
+                          <a href="https://shugo.gg/leaderboard" target="_blank" rel="noreferrer">
+                            Leaderboard dataset: Shugo.GG
+                          </a>
+                        )}
+                      </div>
+                    </details>
                   )}
 
                   {/* Filter Status Bar */}

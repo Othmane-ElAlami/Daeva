@@ -4,6 +4,17 @@ All notable changes to Daeva will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Fixed
+
+- Batch region-aware player-cache reads and reuse each batch's loaded builds, keeping top-100 scans below D1's per-invocation query limit without dropping official item details.
+- Retry interrupted analysis connections from the last completed checkpoint, accept complete SSE results before socket closure, and retain completed builds with a Resume Scan action if retries are exhausted.
+
+### Changed
+
+- Shorten analyzer headers and move source explanations and detailed freshness metadata into collapsible sections. Combat Power and historical game-mode labels remain explicit.
+
 ## 0.11.0-beta - 2026-10-09
 
 ### Added

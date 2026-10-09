@@ -93,6 +93,8 @@ Note: `CLOUDFLARE_API_TOKEN` is used exclusively for CI/CD deployment via GitHub
 
 Worker fetch budgets default to the 50-subrequest Free/Bundled plan cap, with five requests reserved. Set `WORKER_SUBREQUEST_LIMIT=1000` only for a deployment with a sufficient paid-plan limit. Lower-cap invocations complete one player's official item details at a time and resume from complete D1 builds.
 
+Player-cache reads use bounded SQL batches to stay below D1's separate 50-query Free-plan limit. Interrupted browser connections retry the same analysis checkpoint up to three attempts; completed builds remain available with a Resume Scan action if the connection cannot recover. Source explanations and freshness details are available in collapsible analyzer sections.
+
 ### 4. Start the development server
 
 ```bash

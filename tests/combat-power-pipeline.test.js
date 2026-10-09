@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { memoryD1 } from "./helpers/d1.js";
-import { getCachedPlayer, setCachedPlayer } from "../src/lib/db.js";
+import { getCachedPlayer, getCachedPlayers, setCachedPlayer } from "../src/lib/db.js";
+import { characterKey } from "../src/lib/regions.js";
 import { getPrefetchCache, setPrefetchCache } from "../src/lib/prefetch/cache.js";
 import { populationKey, discoveryConfig } from "../src/lib/discovery-config.js";
 import { parseCombatPowerResponse } from "../src/lib/providers/leaderboard/shugo-combat-power.js";
@@ -94,6 +95,14 @@ describe("CP cache identity and SQL behavior", () => {
       await setCachedPlayer(db, "same-id", 1001, region, { region }, details, 1);
     for (const region of ["GLOBAL", "KR", "TW"])
       expect((await getCachedPlayer(db, "same-id", 1001, region)).equipData.region).toBe(region);
+    const identities = ["GLOBAL", "KR", "TW"].map((region) => ({
+      characterId: "same-id",
+      serverId: 1001,
+      region,
+    }));
+    const batch = await getCachedPlayers(db, identities);
+    for (const player of identities)
+      expect(batch.get(characterKey(player)).equipData.region).toBe(player.region);
     expect(db.sqlite.prepare("SELECT COUNT(*) AS n FROM player_cache").get().n).toBe(3);
   });
   it("reuses legacy character data only for its stored region", async () => {
@@ -103,6 +112,45 @@ describe("CP cache identity and SQL behavior", () => {
       .run();
     expect(await getCachedPlayer(db, "old-id", 1001, "TW")).toBeNull();
     expect(await getCachedPlayer(db, "old-id", 1001, "KR")).not.toBeNull();
+    const identities = ["KR", "TW"].map((region) => ({
+      characterId: "old-id",
+      serverId: 1001,
+      region,
+    }));
+    const batch = await getCachedPlayers(db, identities);
+    expect(batch.get(characterKey(identities[0]))).not.toBeNull();
+    expect(batch.get(characterKey(identities[1]))).toBeNull();
+  });
+  it("applies the 24-hour TTL to bulk reads without reviving an expired scoped row from legacy data", async () => {
+    const player = { characterId: "expired", serverId: 1001, region: "GLOBAL" };
+    await setCachedPlayer(
+      db,
+      player.characterId,
+      player.serverId,
+      player.region,
+      equip,
+      details,
+      3353
+    );
+    db.sqlite
+      .prepare("UPDATE player_cache SET fetched_at = ?")
+      .run(Date.now() - 25 * 60 * 60 * 1000);
+    await db
+      .prepare("INSERT INTO player_cache VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .bind(
+        "expired",
+        "1001",
+        "GLOBAL",
+        JSON.stringify(equip),
+        JSON.stringify(details),
+        3353,
+        Date.now()
+      )
+      .run();
+    expect((await getCachedPlayers(db, [player])).get(characterKey(player))).toBeNull();
+    expect(
+      await getCachedPlayer(db, player.characterId, player.serverId, player.region)
+    ).toBeNull();
   });
   it("stores all region/source/type populations without overwriting legacy caches", async () => {
     await setPrefetchCache(db, "chanter", "nightmare", {}, [sampleBuild], 1000);
@@ -261,6 +309,91 @@ describe("provider failures and historical populations", () => {
 });
 
 describe("official build enrichment, ranking and continuation", () => {
+  it("completes 100 fully enriched builds without exceeding Free D1/fetch limits in any batch", async () => {
+    const response = fixture("global");
+    response.entries = Array.from({ length: 100 }, (_, index) => ({
+      ...response.entries[index % response.entries.length],
+      characterId: `sample-top100-${index}`,
+      rank: index + 1,
+      combatPower: 300000 - index,
+    }));
+    Object.assign(response, { limit: 100, total: 100, totalPages: 1, hasMore: false });
+    const fullEquipment = fixture("global-equipment");
+    const fetch = vi.fn(async (input) => {
+      const url = new URL(input);
+      if (url.pathname === "/api/leaderboard/combat-power") return Response.json(response);
+      if (url.pathname.endsWith("/character/equipment")) return Response.json(fullEquipment);
+      if (url.pathname.endsWith("/character/info")) {
+        const info = fixture("global-info");
+        info.profile.characterId = url.searchParams.get("characterId");
+        info.profile.serverId = Number(url.searchParams.get("serverId"));
+        return Response.json(info);
+      }
+      if (url.pathname.endsWith("/character/equipment/item")) {
+        const item = fullEquipment.equipment.equipmentList.find(
+          (entry) => String(entry.id) === url.searchParams.get("id")
+        );
+        return Response.json({ ...fixture("global-item"), id: item.id, name: item.name });
+      }
+      throw new Error(`Unexpected upstream: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetch);
+    const prepare = db.prepare.bind(db);
+    let queries = 0;
+    let maxQueries = 0;
+    vi.spyOn(db, "prepare").mockImplementation((sql) => {
+      if (++queries > 50) throw new Error("D1 Free query limit exceeded");
+      const statement = prepare(sql);
+      const bind = statement.bind.bind(statement);
+      statement.bind = (...args) => {
+        expect(args.length).toBeLessThanOrEqual(100);
+        return bind(...args);
+      };
+      return statement;
+    });
+    let result;
+    let continuation;
+    let batches = 0;
+    do {
+      queries = 0;
+      const budget = createWorkerBudget();
+      result = await analyze({ ...config, limit: 100, continuation }, { db, budget });
+      expect(budget.used).toBeLessThan(50);
+      maxQueries = Math.max(maxQueries, queries);
+      if (result.continuation) {
+        expect(result.continuation.processedCount).toBeGreaterThan(
+          continuation?.processedCount || 0
+        );
+        continuation = result.continuation;
+      }
+      expect(++batches).toBeLessThanOrEqual(100);
+    } while (result.continuation);
+    expect(result.count).toBe(100);
+    expect(result.builds.map((build) => build.rank)).toEqual(
+      Array.from({ length: 100 }, (_, index) => index + 1)
+    );
+    expect(
+      result.builds.every(
+        (build) =>
+          build.equipItems.length === 25 &&
+          build.activeSkills.length === 12 &&
+          build.stigmaSkills.length === 13
+      )
+    ).toBe(true);
+    expect(maxQueries).toBeLessThan(15);
+    expect(canQuickBuild(result.stats, result.builds)).toBe(true);
+    expect(
+      fetch.mock.calls.filter(([url]) => url.includes("/leaderboard/combat-power"))
+    ).toHaveLength(1);
+
+    // A warm population must not issue 100 individual D1 reads either.
+    queries = 0;
+    fetch.mockClear();
+    const warm = await analyze({ ...config, limit: 100 }, { db, budget: createWorkerBudget() });
+    expect(warm.count).toBe(100);
+    expect(queries).toBe(3);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
   it("completes full 25-item builds across 50-subrequest invocations without repeating discovery", async () => {
     const officialFetch = mockOfficialPipeline();
     let calls = 0;
@@ -354,6 +487,24 @@ describe("official build enrichment, ranking and continuation", () => {
     expect(result.sourceMeta.buildHealth).toBe("partial");
     expect(result.errors.join(" ")).toContain("cannot be resumed safely");
     expect(canQuickBuild(result.stats, result.builds)).toBe(true);
+  });
+  it("does not resume or cache a build whose item response has a mismatched identifier", async () => {
+    const officialFetch = mockOfficialPipeline();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input, options) => {
+        if (String(input).includes("equipment/item"))
+          return Response.json({ ...fixture("global-item"), id: "wrong-item" });
+        return officialFetch(input, options);
+      })
+    );
+    const budget = createBudget();
+    budget.consume(950);
+    const result = await analyze(config, { db, budget });
+    expect(result.count).toBeGreaterThan(0);
+    expect(result.continuation).toBeUndefined();
+    expect(result.sourceMeta.buildHealth).toBe("partial");
+    expect(await loadCachedBuild(db, players[0])).toBeNull();
   });
   it("aggregates real CP-shaped players and makes Quick Build usable", async () => {
     const fetch = mockOfficialPipeline();

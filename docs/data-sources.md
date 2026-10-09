@@ -160,7 +160,12 @@ without the previous 30-minute mode traversal. Worker routes default to a
 50-subrequest cap with five requests reserved, completing one player at a time.
 Set `WORKER_SUBREQUEST_LIMIT=1000` only when the deployment permits the paid
 budget (970 fetches); that setting retains up to six concurrent official calls.
-D1 has a separate internal-service quota. Requests that cannot complete a
+D1 has a separate query limit (50 per Free-plan invocation). Region-aware player
+cache reads are grouped into SQL queries of at most 100 bound parameters, and
+loaded builds are reused within a batch. Browser connection failures retry the
+last completed checkpoint up to three attempts. Complete SSE checkpoints are
+accepted before socket closure; exhausted retries retain completed builds and
+offer Resume Scan. Requests that cannot complete a
 character cannot return a repeating continuation. Review cadence/TTL when
 official modes return.
 
