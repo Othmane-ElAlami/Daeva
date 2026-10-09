@@ -1,14 +1,19 @@
 import { readFileSync } from "node:fs";
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { memoryD1 } from "./helpers/d1.js";
-import { getCachedPlayer, getCachedPlayers, setCachedPlayer } from "../src/lib/db.js";
+import {
+  getCachedPlayer,
+  getCachedPlayers,
+  setCachedPlayer,
+  setNormalizedCachedBuild,
+} from "../src/lib/db.js";
 import { characterKey } from "../src/lib/regions.js";
 import { getPrefetchCache, setPrefetchCache } from "../src/lib/prefetch/cache.js";
 import { populationKey, discoveryConfig } from "../src/lib/discovery-config.js";
 import { parseCombatPowerResponse } from "../src/lib/providers/leaderboard/shugo-combat-power.js";
 import { getLeaderboard } from "../src/lib/providers/leaderboard/index.js";
 import { analyze } from "../src/lib/analyzer.js";
-import { loadCachedBuild } from "../src/lib/character-builds.js";
+import { loadCachedBuild, loadCachedBuilds } from "../src/lib/character-builds.js";
 import { extractBuild, createBudget, createWorkerBudget } from "../src/lib/scraper-shared.js";
 import {
   resultLabel,
@@ -152,6 +157,113 @@ describe("CP cache identity and SQL behavior", () => {
       await getCachedPlayer(db, player.characterId, player.serverId, player.region)
     ).toBeNull();
   });
+  it("upgrades raw caches to compact builds without changing official data or freshness", async () => {
+    const player = players[0];
+    await setCachedPlayer(
+      db,
+      player.characterId,
+      player.serverId,
+      player.region,
+      equip,
+      details,
+      3353
+    );
+    const fetchedAt = Date.now() - 3600000;
+    db.sqlite.prepare("UPDATE player_cache SET fetched_at = ?").run(fetchedAt);
+    const upgraded = (await loadCachedBuilds(db, [player], { normalize: true })).get(
+      characterKey(player)
+    );
+    expect(upgraded.buildFetchedAt).toBe(fetchedAt);
+    const compact = (await getCachedPlayers(db, [player])).get(characterKey(player));
+    expect(compact).toMatchObject({
+      equipData: null,
+      equipDetails: null,
+      buildData: upgraded,
+      fetchedAt,
+    });
+    const raw = await getCachedPlayer(db, player.characterId, player.serverId, player.region);
+    expect(raw.equipData.equipment).toEqual(equip.equipment);
+    expect(raw.equipData.skill).toEqual(equip.skill);
+    expect(raw.equipDetails).toEqual(details);
+    expect(await loadCachedBuild(db, player)).toEqual(upgraded);
+    db.sqlite.prepare("UPDATE player_cache SET fetched_at = ?").run(Date.now() - 25 * 3600000);
+    expect((await loadCachedBuilds(db, [player])).get(characterKey(player))).toBeNull();
+  });
+  it("does not overwrite a newer character snapshot during a lazy cache upgrade", async () => {
+    const player = players[0];
+    await setCachedPlayer(
+      db,
+      player.characterId,
+      player.serverId,
+      player.region,
+      equip,
+      details,
+      3353
+    );
+    const row = (await getCachedPlayers(db, [player])).get(characterKey(player));
+    db.sqlite.prepare("UPDATE player_cache SET fetched_at = ?").run(row.fetchedAt + 1);
+    await setNormalizedCachedBuild(db, row.cacheId, player.serverId, sampleBuild, row.fetchedAt);
+    const current = (await getCachedPlayers(db, [player])).get(characterKey(player));
+    expect(current.buildData).toBeNull();
+    expect(current.fetchedAt).toBe(row.fetchedAt + 1);
+  });
+  it("rebases discovery metadata on compact builds while preserving official build details", async () => {
+    const player = players[0];
+    await setCachedPlayer(
+      db,
+      player.characterId,
+      player.serverId,
+      player.region,
+      equip,
+      details,
+      3353,
+      sampleBuild
+    );
+    const updated = { ...player, rank: 9, characterName: "Renamed", combatPower: 300001 };
+    const cached = (await loadCachedBuilds(db, [updated])).get(characterKey(updated));
+    expect(cached).toMatchObject({
+      name: "Renamed",
+      rank: 9,
+      leaderboardCombatPower: 300001,
+      combatPower: 222360,
+      activeSkills: sampleBuild.activeSkills,
+      equipItems: sampleBuild.equipItems,
+    });
+    const legacy = {
+      ...player,
+      source: "Official AION 2",
+      rank: 3,
+      combatPower: null,
+      gearScore: null,
+    };
+    expect(await loadCachedBuild(db, legacy)).toMatchObject({
+      source: "Official AION 2",
+      rank: 3,
+      leaderboardCombatPower: null,
+      leaderboardGearScore: null,
+      combatPower: 222360,
+    });
+    const otherRegion = { ...player, region: "TW" };
+    expect((await loadCachedBuilds(db, [otherRegion])).get(characterKey(otherRegion))).toBeNull();
+  });
+  it.each([{ characterId: "wrong-character" }, { region: "TW" }, { stigmaSkills: null }])(
+    "rejects an invalid compact build instead of losing data on resume: %s",
+    async (invalid) => {
+      const player = players[0];
+      await setCachedPlayer(
+        db,
+        player.characterId,
+        player.serverId,
+        player.region,
+        equip,
+        details,
+        3353,
+        { ...sampleBuild, ...invalid }
+      );
+      expect((await loadCachedBuilds(db, [player])).get(characterKey(player))).toBeNull();
+      expect(await loadCachedBuild(db, player)).toBeNull();
+    }
+  );
   it("stores all region/source/type populations without overwriting legacy caches", async () => {
     await setPrefetchCache(db, "chanter", "nightmare", {}, [sampleBuild], 1000);
     for (const region of ["GLOBAL", "KR", "TW"])
@@ -386,12 +498,33 @@ describe("official build enrichment, ranking and continuation", () => {
       fetch.mock.calls.filter(([url]) => url.includes("/leaderboard/combat-power"))
     ).toHaveLength(1);
 
-    // A warm population must not issue 100 individual D1 reads either.
+    // Warm populations use compact projections and bounded cached-player waves.
+    fetch.mockClear();
+    continuation = undefined;
+    let warm;
+    let warmBatches = 0;
+    do {
+      queries = 0;
+      warm = await analyze(
+        { ...config, limit: 100, continuation },
+        { db, budget: createWorkerBudget() }
+      );
+      expect(queries).toBeLessThanOrEqual(4);
+      if (warm.continuation) {
+        expect(warm.continuation.processedCount).toBe((continuation?.processedCount || 0) + 5);
+        continuation = warm.continuation;
+      }
+      warmBatches++;
+    } while (warm.continuation);
+    expect(warm.count).toBe(100);
+    expect(warmBatches).toBe(20);
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    // Three-player waves crossing a 40-row read boundary still reuse every cache.
     queries = 0;
     fetch.mockClear();
-    const warm = await analyze({ ...config, limit: 100 }, { db, budget: createWorkerBudget() });
-    expect(warm.count).toBe(100);
-    expect(queries).toBe(3);
+    const paid = await analyze({ ...config, limit: 100 }, { db, budget: createBudget() });
+    expect(paid.count).toBe(100);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
   it("completes full 25-item builds across 50-subrequest invocations without repeating discovery", async () => {

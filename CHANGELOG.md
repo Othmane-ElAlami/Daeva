@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Batch region-aware player-cache reads and reuse each batch's loaded builds, keeping top-100 scans below D1's per-invocation query limit without dropping official item details.
+- Reuse versioned normalized build projections and bound cached-player processing on Free-plan Workers, reducing repeated raw equipment parsing in long scans while retaining the original cache timestamps and official data.
 - Retry interrupted analysis connections from the last completed checkpoint, accept complete SSE results before socket closure, and retain completed builds with a Resume Scan action if retries are exhausted.
 
 ### Changed

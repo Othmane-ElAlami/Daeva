@@ -85,7 +85,7 @@ export async function analyze(
       throw new Error("Invalid continuation population.");
     sourceMeta = continuation.sourceMeta;
     players = continuation.players;
-    cachedBuilds = await loadCachedBuilds(db, [...continuation.processedPlayers, ...players]);
+    cachedBuilds = await loadCachedBuilds(db, continuation.processedPlayers);
     for (const player of continuation.processedPlayers) {
       const build = cachedBuilds.get(characterKey(player));
       if (!build) throw new Error("Continuation build cache is no longer available.");
@@ -97,7 +97,7 @@ export async function analyze(
     const result = await getLeaderboard({ ...providerConfig, limit: 100, maxPages: 1 }, budget);
     players = result.rankings;
     sourceMeta = { ...result.meta, leaderboardType: config.lbType };
-    cachedBuilds = await loadCachedBuilds(db, players);
+    cachedBuilds = new Map();
   }
   onEvent({ type: "source_health", meta: sourceMeta });
   const initialProcessedCount = processedPlayers.length;
@@ -109,6 +109,11 @@ export async function analyze(
   let pending = [];
   let budgetStopped = false;
   let consecutiveFailures = 0;
+  let visitedThisRequest = 0;
+  // Cached builds cost CPU even when they need no outbound fetches. Bound raw
+  // cache upgrades/processing on low-limit Workers and resume the same pool.
+  const workLimit = budget.hardLimit <= 50 && sourceMeta.source !== "Cache" ? 5 : Infinity;
+  const cacheGroupSize = budget.hardLimit <= 50 ? 5 : 40;
   while (players.length && builds.length < config.limit) {
     const candidates = players.filter((player) => {
       const key = characterKey(player);
@@ -126,6 +131,18 @@ export async function analyze(
         offset,
         offset + Math.min(playerConcurrency, config.limit - builds.length)
       );
+      if (
+        !refresh &&
+        sourceMeta.source !== "Cache" &&
+        batch.some((player) => !cachedBuilds.has(characterKey(player)))
+      ) {
+        const group = await loadCachedBuilds(
+          db,
+          candidates.slice(offset, offset + cacheGroupSize),
+          { normalize: true }
+        );
+        for (const [key, build] of group) cachedBuilds.set(key, build);
+      }
       const results = await runPool(
         batch.map((player) => async () => {
           try {
@@ -170,6 +187,16 @@ export async function analyze(
         pending.push(...candidates.slice(offset + batch.length));
         break;
       }
+      visitedThisRequest += batch.length;
+      if (
+        visitedThisRequest >= workLimit &&
+        offset + batch.length < candidates.length &&
+        builds.length < config.limit
+      ) {
+        pending.push(...candidates.slice(offset + batch.length));
+        budgetStopped = true;
+        break;
+      }
       if (!builds.length && consecutiveFailures >= 6) break;
       offset += batch.length;
     }
@@ -195,7 +222,7 @@ export async function analyze(
         budget
       );
       players = next.rankings;
-      cachedBuilds = await loadCachedBuilds(db, players);
+      cachedBuilds = new Map();
       sourceMeta = {
         ...sourceMeta,
         ...next.meta,

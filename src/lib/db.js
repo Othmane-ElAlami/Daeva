@@ -8,11 +8,37 @@ export function playerCacheId(characterId, region) {
 function cachedPlayer(row) {
   if (!row || Date.now() - row.fetched_at > CACHE_MAX_AGE_MS) return null;
   return {
-    equipData: JSON.parse(row.equip_data),
-    equipDetails: JSON.parse(row.equip_details),
+    equipData: row.equip_data ? JSON.parse(row.equip_data) : null,
+    equipDetails: row.equip_details ? JSON.parse(row.equip_details) : null,
+    buildData: row.build_data ? JSON.parse(row.build_data) : null,
+    cacheId: row.character_id,
     itemLevel: row.item_level != null ? Number(row.item_level) : null,
     fetchedAt: row.fetched_at,
   };
+}
+
+// Store a compact, versioned projection alongside the original official JSON.
+// Selecting only this projection avoids repeatedly parsing item-detail payloads.
+// Raw data and its timestamp stay intact; no schema migration is needed.
+const cachedBuildColumns = `
+  CASE WHEN json_extract(equip_data, '$._daevaBuildVersion') = 1
+    THEN json_extract(equip_data, '$._daevaBuild') END AS build_data,
+  CASE WHEN json_extract(equip_data, '$._daevaBuildVersion') = 1
+    THEN NULL ELSE equip_data END AS equip_data,
+  CASE WHEN json_extract(equip_data, '$._daevaBuildVersion') = 1
+    THEN NULL ELSE equip_details END AS equip_details,
+  item_level, fetched_at`;
+
+export async function setNormalizedCachedBuild(db, cacheId, serverId, build, fetchedAt) {
+  if (!db || !cacheId) return;
+  await db
+    .prepare(
+      `UPDATE player_cache
+     SET equip_data = json_set(equip_data, '$._daevaBuildVersion', 1, '$._daevaBuild', json(?))
+     WHERE character_id = ? AND server_id = ? AND fetched_at = ?`
+    )
+    .bind(JSON.stringify(build), cacheId, String(serverId), fetchedAt)
+    .run();
 }
 
 // D1 Free permits 50 queries per invocation, independently of the fetch budget.
@@ -26,7 +52,7 @@ export async function getCachedPlayers(db, players) {
     const group = players.slice(offset, offset + 40);
     const { results } = await db
       .prepare(
-        `SELECT character_id, server_id, equip_data, equip_details, item_level, fetched_at
+        `SELECT character_id, server_id, ${cachedBuildColumns}
          FROM player_cache WHERE (character_id, server_id) IN (${group.map(() => "(?, ?)").join(", ")})`
       )
       .bind(...group.flatMap((p) => [playerCacheId(p.characterId, p.region), String(p.serverId)]))
@@ -45,7 +71,7 @@ export async function getCachedPlayers(db, players) {
     const group = missing.slice(offset, offset + 30);
     const { results } = await db
       .prepare(
-        `SELECT character_id, server_id, region, equip_data, equip_details, item_level, fetched_at
+        `SELECT character_id, server_id, region, ${cachedBuildColumns}
          FROM player_cache WHERE (character_id, server_id, region) IN (${group.map(() => "(?, ?, ?)").join(", ")})`
       )
       .bind(
@@ -102,7 +128,8 @@ export async function setCachedPlayer(
   region,
   equipData,
   equipDetails,
-  itemLevel = null
+  itemLevel = null,
+  normalizedBuild = null
 ) {
   if (!db) return;
   await db
@@ -115,7 +142,11 @@ export async function setCachedPlayer(
       playerCacheId(characterId, region),
       String(serverId),
       normalizeRegion(region),
-      JSON.stringify(equipData),
+      JSON.stringify(
+        normalizedBuild
+          ? { ...equipData, _daevaBuildVersion: 1, _daevaBuild: normalizedBuild }
+          : equipData
+      ),
       JSON.stringify(equipDetails),
       itemLevel != null ? itemLevel : null,
       Date.now()

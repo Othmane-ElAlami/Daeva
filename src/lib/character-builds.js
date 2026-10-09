@@ -1,4 +1,9 @@
-import { getCachedPlayer, getCachedPlayers, setCachedPlayer } from "./db.js";
+import {
+  getCachedPlayer,
+  getCachedPlayers,
+  setCachedPlayer,
+  setNormalizedCachedBuild,
+} from "./db.js";
 import { characterApiUrl, characterKey } from "./regions.js";
 import {
   fetchJSON,
@@ -9,6 +14,7 @@ import {
   extractItemLevelFromInfo,
   extractCombatPowerFromInfo,
   extractBuild,
+  buildPlayerMetadata,
   runPool,
   subrequestBudgetExhausted,
 } from "./scraper-shared.js";
@@ -50,17 +56,50 @@ export async function loadCachedBuild(db, player) {
   return buildFromCache(player, cached);
 }
 
-export async function loadCachedBuilds(db, players) {
+export async function loadCachedBuilds(db, players, { normalize = false } = {}) {
   const cached = await getCachedPlayers(db, players);
-  return new Map(
-    players.map((player) => [
-      characterKey(player),
-      buildFromCache(player, cached.get(characterKey(player))),
-    ])
-  );
+  const builds = new Map();
+  for (const player of players) {
+    const key = characterKey(player);
+    const row = cached.get(key);
+    const build = buildFromCache(player, row);
+    builds.set(key, build);
+    if (normalize && build && !row.buildData)
+      await setNormalizedCachedBuild(db, row.cacheId, player.serverId, build, row.fetchedAt);
+  }
+  return builds;
 }
 
 function buildFromCache(player, cached) {
+  const normalized =
+    cached?.buildData ||
+    (cached?.equipData?._daevaBuildVersion === 1 ? cached.equipData._daevaBuild : null);
+  if (normalized) {
+    if (
+      normalized.characterId !== player.characterId ||
+      normalized.region !== player.region ||
+      Number(normalized.serverId) !== Number(player.serverId) ||
+      [
+        "activeSkills",
+        "stigmaSkills",
+        "passiveSkills",
+        "arcanas",
+        "arcanaSets",
+        "equipSubStats",
+        "equipItems",
+        "theostones",
+        "manastones",
+      ].some((key) => !Array.isArray(normalized[key])) ||
+      !normalized.activeSkills?.length ||
+      !normalized.equipItems?.length
+    )
+      return null;
+    return {
+      ...normalized,
+      ...buildPlayerMetadata(player, { factionName: normalized.faction }),
+      buildFetchedAt: cached.fetchedAt,
+    };
+  }
   const equipment = cached?.equipData?.equipment?.equipmentList?.filter(Boolean);
   if (
     !equipment?.length ||
@@ -149,6 +188,7 @@ export async function fetchCharacterBuild(
   // do not promote an incomplete build into the reusable player cache.
   equipData.profile = { ...infoData.profile };
   const fetchedAt = Date.now();
+  const build = buildFromData(player, equipData, equipDetails, itemLevel, combatPower, fetchedAt);
   if (!warnings.length && equipDetails.length === equipment.length) {
     await setCachedPlayer(
       db,
@@ -157,11 +197,12 @@ export async function fetchCharacterBuild(
       player.region,
       equipData,
       equipDetails,
-      itemLevel
+      itemLevel,
+      build
     );
   }
   return {
-    build: buildFromData(player, equipData, equipDetails, itemLevel, combatPower, fetchedAt),
+    build,
     warnings,
     resumable: !!db && !warnings.length && equipDetails.length === equipment.length,
   };

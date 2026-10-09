@@ -344,21 +344,12 @@ export async function fetchItemLevelAndCP(player, headers, budget = null, logger
 
 // ── Build Extraction ─────────────────────────────────────────────────────────
 // itemLevel: the game's own ItemLevel stat from character/info (no fallback formula).
-export function extractBuild(
-  player,
-  itemDetailsMap,
-  equipDetailsList,
-  itemLevel = null,
-  cp = null
-) {
-  const equip = player._equip;
+export function buildPlayerMetadata(player, profile = {}) {
   const serverId = player.serverId;
   const serverName =
     player.serverName || serverNames[serverId] || (serverId ? `Server ${serverId}` : "Unknown");
-  const rawFaction =
-    player.faction || equip?.profile?.factionName || equip?.profile?.raceName || "Unknown";
-
-  const build = {
+  const rawFaction = player.faction || profile.factionName || profile.raceName || "Unknown";
+  return {
     name: player.characterName || "Unknown",
     characterId: player.characterId,
     class: player.class || null,
@@ -374,6 +365,19 @@ export function extractBuild(
     region: player.region || "Unknown",
     faction: rawFaction,
     globalRank: player.globalRank ?? (player.rankScope === "filtered" ? null : player.rank),
+  };
+}
+
+export function extractBuild(
+  player,
+  itemDetailsMap,
+  equipDetailsList,
+  itemLevel = null,
+  cp = null
+) {
+  const equip = player._equip;
+  const build = {
+    ...buildPlayerMetadata(player, equip?.profile),
     gearScore: null,
     combatPower: null,
     activeSkills: [],

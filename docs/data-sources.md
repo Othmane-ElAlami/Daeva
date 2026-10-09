@@ -163,7 +163,13 @@ budget (970 fetches); that setting retains up to six concurrent official calls.
 D1 has a separate query limit (50 per Free-plan invocation). Region-aware player
 cache reads are grouped into SQL queries of at most 100 bound parameters, and
 loaded builds are reused within a batch. Browser connection failures retry the
-last completed checkpoint up to three attempts. Complete SSE checkpoints are
+last completed checkpoint up to three attempts. On low-limit Workers, cached
+players are processed in waves of at most five. Complete character caches retain
+a versioned normalized build alongside the raw official JSON, so continuation
+reads avoid reconstructing every earlier character's equipment and skills.
+Legacy caches are upgraded as they are used, without changing their timestamp
+or region identity and without a database migration. Browser retries use the
+same discovery population. Complete SSE checkpoints are
 accepted before socket closure; exhausted retries retain completed builds and
 offer Resume Scan. Requests that cannot complete a
 character cannot return a repeating continuation. Review cadence/TTL when
