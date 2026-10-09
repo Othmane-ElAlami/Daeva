@@ -153,7 +153,9 @@ async function requestPage(url, budget) {
   try {
     const response = await fetch(url, {
       headers: makeHeaders(`${baseUrl}/leaderboard`),
-      redirect: "error",
+      // The deployed Worker compatibility date rejects redirect: "error".
+      // Manual mode returns 3xx responses for the HTTP guard below to reject.
+      redirect: "manual",
       signal: controller.signal,
     });
     if (!response.ok)

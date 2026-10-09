@@ -92,7 +92,7 @@ describe("Shugo Combat Power public contract", () => {
       page: "1",
     });
     expect(options).toMatchObject({
-      redirect: "error",
+      redirect: "manual",
       headers: { Referer: "https://shugo.gg/leaderboard", Origin: "https://shugo.gg" },
     });
   });
@@ -163,6 +163,23 @@ describe("Shugo Combat Power public contract", () => {
       code: "RESPONSE",
     });
   });
+  it.each([302, 307])(
+    "rejects HTTP %s redirects without following them at the edge",
+    async (status) => {
+      const fetch = vi.fn(async (_url, options) => {
+        if (options.redirect !== "manual")
+          throw new TypeError("Invalid redirect value at the edge");
+        return Response.redirect("https://shugo.gg/login", status);
+      });
+      vi.stubGlobal("fetch", fetch);
+      await expect(getLeaderboard(config, createBudget())).rejects.toMatchObject({
+        name: "ShugoCombatPowerError",
+        code: "HTTP",
+        message: `Combat Power HTTP ${status}.`,
+      });
+      expect(fetch).toHaveBeenCalledTimes(1);
+    }
+  );
   it("preserves typed budget exhaustion without probing other providers", async () => {
     const budget = createBudget();
     budget.exhaust();
