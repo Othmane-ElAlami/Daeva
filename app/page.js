@@ -23,7 +23,7 @@ const FEATURES = [
     Icon: Zap,
     title: "Real-Time Scraping",
     description:
-      "Extract builds from top-ranked players in real-time. Intelligent caching and rate limiting across every server.",
+      "Discover high-Combat-Power players on Shugo.GG and analyze their official character builds.",
   },
   {
     Icon: BarChart3,
@@ -35,7 +35,7 @@ const FEATURES = [
     Icon: Target,
     title: "Build Intelligence",
     description:
-      "Data-driven insights for every class. Compare stigma combos, passives, and gear choices across leaderboards.",
+      "Compare stigma combos, passives and gear choices by Combat Power. Historical game-mode snapshots remain separate.",
   },
 ];
 
@@ -75,6 +75,7 @@ function snapshotToDisplay(snap) {
     : [];
 
   const leaderboardLabels = {
+    "combat-power": "Combat Power",
     nightmare: "Nightmare",
     abyss: "Abyss",
     "arena-solo": "Arena Solo",
@@ -85,7 +86,7 @@ function snapshotToDisplay(snap) {
 
   return {
     className: snap.className.charAt(0).toUpperCase() + snap.className.slice(1),
-    mode: leaderboardLabels[snap.leaderboard] || snap.leaderboard,
+    mode: `Historical ${leaderboardLabels[snap.leaderboard] || snap.leaderboard}${snap.region && snap.region !== "all" ? " · " + snap.region : ""}`,
     usage: `${snap.stigmaSkills[0]?.pct ?? 0}%`,
     totalPlayers: snap.totalPlayers,
     stigmas: snap.stigmaSkills.slice(0, 6).map((s) => ({ name: s.name, icon: "St" })),
@@ -328,7 +329,7 @@ function MetaWidget({ active }) {
     return (
       <div
         className={`cin-widget ${active ? "cin-widget--visible" : ""}`}
-        aria-label="Live meta snapshot preview"
+        aria-label="Historical meta snapshot preview"
       >
         <div className="cin-widget-header">
           <div className="cin-widget-title">
@@ -336,7 +337,7 @@ function MetaWidget({ active }) {
               <div className="cin-sonar-dot" />
               <div className="cin-sonar-ring" />
             </div>
-            LIVE META SNAPSHOT
+            HISTORICAL META SNAPSHOT
           </div>
         </div>
         <div
@@ -375,7 +376,7 @@ function MetaWidget({ active }) {
   return (
     <div
       className={`cin-widget ${active ? "cin-widget--visible" : ""}`}
-      aria-label="Live meta snapshot preview"
+      aria-label="Historical meta snapshot preview"
     >
       <div className="cin-widget-header">
         <div className="cin-widget-title">
@@ -383,7 +384,7 @@ function MetaWidget({ active }) {
             <div className="cin-sonar-dot" />
             <div className="cin-sonar-ring" />
           </div>
-          LIVE META SNAPSHOT
+          HISTORICAL META SNAPSHOT
         </div>
         <span className="cin-widget-mode">
           <ScrambleText
@@ -812,7 +813,7 @@ export default function HomePage() {
             Daeva is an independent, open-source community project and is not affiliated with or
             endorsed by NCSoft. &middot;{" "}
             <Link href="/changelog" className="cin-footer-link">
-              v0.10.0-beta
+              v0.11.0-beta
             </Link>
           </p>
           <p className="cin-footer-tagline">

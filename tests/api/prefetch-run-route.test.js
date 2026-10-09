@@ -2,7 +2,7 @@
 // Tests for app/api/prefetch/run/route.js
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("@cloudflare/next-on-pages", () => ({ getRequestContext: vi.fn() }));
 vi.mock("@/lib/admin-auth", () => ({
@@ -24,7 +24,7 @@ vi.mock("@/lib/scraper-shared", async (importOriginal) => {
 import { getRequestContext } from "@cloudflare/next-on-pages";
 import { validateAdminRequest } from "@/lib/admin-auth";
 import { runPrefetchJob } from "@/lib/prefetch/runner";
-import { setPrefetchCache } from "@/lib/prefetch/cache";
+import { getPrefetchCache, setPrefetchCache } from "@/lib/prefetch/cache";
 import { POST } from "../../app/api/prefetch/run/route.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -52,7 +52,10 @@ const SUCCESS_RESULT = {
   budgetUsed: 50,
 };
 
+afterEach(() => vi.unstubAllEnvs());
+
 beforeEach(() => {
+  vi.stubEnv("LEADERBOARD_SOURCE_MODE", "mode-specific");
   vi.clearAllMocks();
   getRequestContext.mockReturnValue({ env: { DB: makeDb() } });
   validateAdminRequest.mockResolvedValue({ authorized: true });
@@ -150,6 +153,67 @@ describe("POST /api/prefetch/run — happy path", () => {
 });
 
 describe("POST /api/prefetch/run — edge cases", () => {
+  it("skips recently refreshed populations without fetching upstream", async () => {
+    getPrefetchCache.mockResolvedValueOnce({
+      fetchedAt: Date.now(),
+      builds: SUCCESS_RESULT.builds,
+    });
+    const res = await POST(req({ cls: "gladiator", leaderboard: "nightmare" }));
+    expect((await res.json()).skipped).toBe(true);
+    expect(runPrefetchJob).not.toHaveBeenCalled();
+  });
+
+  it("refuses mode-specific jobs during temporary CP mode", async () => {
+    vi.stubEnv("LEADERBOARD_SOURCE_MODE", "combat-power");
+    expect((await POST(req({ cls: "chanter", leaderboard: "nightmare" }))).status).toBe(503);
+    expect(runPrefetchJob).not.toHaveBeenCalled();
+  });
+  it.each([
+    [3, 4000, undefined, false],
+    [100, 4000, undefined, true],
+    [7, 7, undefined, true],
+    [100, 4000, "partial", false],
+  ])(
+    "refresh guard handles %s builds from a %s-player CP pool (%s)",
+    async (count, total, buildHealth, skipped) => {
+      vi.stubEnv("LEADERBOARD_SOURCE_MODE", "combat-power");
+      getPrefetchCache.mockResolvedValueOnce({
+        fetchedAt: Date.now(),
+        source: "Shugo Combat Power",
+        builds: Array.from({ length: count }, () => SUCCESS_RESULT.builds[0]),
+        data: { sourceMeta: { total, buildHealth } },
+      });
+      const body = await (
+        await POST(req({ cls: "chanter", leaderboard: "combat-power", region: "GLOBAL" }))
+      ).json();
+      expect(!!body.skipped).toBe(skipped);
+      expect(runPrefetchJob.mock.calls.length).toBe(skipped ? 0 : 1);
+    }
+  );
+
+  it("stores CP builds under their region and source", async () => {
+    vi.stubEnv("LEADERBOARD_SOURCE_MODE", "combat-power");
+    const res = await POST(req({ cls: "chanter", leaderboard: "combat-power", region: "TW" }));
+    expect(res.status).toBe(200);
+    expect(runPrefetchJob).toHaveBeenCalledWith(
+      "chanter",
+      "combat-power",
+      expect.anything(),
+      expect.objectContaining({ region: "TW", sourceMode: "combat-power" })
+    );
+    expect(setPrefetchCache.mock.calls[0].slice(6)).toEqual(["Shugo Combat Power", "TW"]);
+  });
+
+  it("does not publish or re-stamp a partially continued prefetch", async () => {
+    runPrefetchJob.mockResolvedValueOnce({
+      ...SUCCESS_RESULT,
+      continuation: { processedCount: 1, players: [] },
+    });
+    const body = await (await POST(req({ cls: "chanter", leaderboard: "nightmare" }))).json();
+    expect(body.continuation.processedCount).toBe(1);
+    expect(setPrefetchCache).not.toHaveBeenCalled();
+  });
+
   it("skips cache write when no builds returned", async () => {
     runPrefetchJob.mockResolvedValue({
       builds: [],

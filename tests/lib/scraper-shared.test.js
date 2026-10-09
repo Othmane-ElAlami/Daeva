@@ -38,7 +38,7 @@ describe("Constants", () => {
     expect(baseUrl).toBe("https://shugo.gg");
   });
 
-  it("leaderboardTypes has all 7 types with correct contentType values", () => {
+  it("leaderboardTypes preserves 7 mode-specific types and adds Combat Power", () => {
     const expected = {
       nightmare: 3,
       abyss: 1,
@@ -48,7 +48,8 @@ describe("Constants", () => {
       ascension: 21,
       raid: 20,
     };
-    expect(Object.keys(leaderboardTypes)).toHaveLength(7);
+    expect(Object.keys(leaderboardTypes)).toHaveLength(8);
+    expect(leaderboardTypes["combat-power"]).toEqual({ label: "Combat Power" });
     for (const [key, ct] of Object.entries(expected)) {
       expect(leaderboardTypes[key]).toBeDefined();
       expect(leaderboardTypes[key].contentType).toBe(ct);

@@ -4,9 +4,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ── Constants ────────────────────────────────────────────────────────────────
+import { characterApiUrl } from "./regions.js";
 export const baseUrl = "https://shugo.gg";
 
 export const leaderboardTypes = {
+  "combat-power": { label: "Combat Power" },
   nightmare: { contentType: 3, label: "Nightmare" },
   abyss: { contentType: 1, label: "Abyss" },
   "arena-solo": { contentType: 5, label: "Arena Solo" },
@@ -106,7 +108,8 @@ export function proxyUrl(apiPath) {
 }
 
 // ── Subrequest Budget (Cloudflare Workers) ───────────────────────────────────
-// Cloudflare Workers limit: 1000 subrequests per invocation (paid plan).
+// Daeva's conservative paid-Worker fetch budget. Platform limits may be higher;
+// retain this cap for bounded analysis/prefetch and source request volume.
 // We reserve a safety margin for arcana batches & cleanup fetches.
 export const subrequestHardLimit = 1000;
 export const subrequestSafetyMargin = 30;
@@ -308,12 +311,8 @@ export function extractCombatPowerFromInfo(infoData) {
 export async function fetchItemLevelAndCP(player, headers, budget = null, logger = null) {
   try {
     if (budget && !budget.canAfford()) return null;
-    const apiBase =
-      player.region === "TW" ? "https://tw.ncsoft.com/aion2/api" : "https://aion2.plaync.com/api";
     const infoData = await fetchJSON(
-      proxyUrl(
-        `${apiBase}/character/info?lang=en&characterId=${player.characterId}&serverId=${player.serverId}`
-      ),
+      proxyUrl(characterApiUrl(player, "info")),
       headers,
       "GET",
       null,
@@ -340,16 +339,27 @@ export function extractBuild(
 ) {
   const equip = player._equip;
   const serverId = player.serverId;
-  const serverName = serverNames[serverId] || (serverId ? `Server ${serverId}` : "Unknown");
+  const serverName =
+    player.serverName || serverNames[serverId] || (serverId ? `Server ${serverId}` : "Unknown");
+  const rawFaction =
+    player.faction || equip?.profile?.factionName || equip?.profile?.raceName || "Unknown";
 
   const build = {
     name: player.characterName || "Unknown",
+    characterId: player.characterId,
+    class: player.class || null,
+    source: player.source || null,
+    rank: player.rank ?? null,
+    rankScope: player.rankScope || null,
+    leaderboardCombatPower: player.combatPower ?? null,
+    leaderboardGearScore: player.gearScore ?? null,
+    lastSeen: player.lastSeen ?? null,
     serverId: serverId || null,
     serverName: serverName,
     race: serverId >= 2000 ? "Asmo" : serverId >= 1000 ? "Elyos" : "Unknown",
     region: player.region || "Unknown",
-    faction: player.faction || equip?.profile?.factionName || equip?.profile?.raceName || "Unknown",
-    globalRank: player.globalRank || player.rank,
+    faction: rawFaction,
+    globalRank: player.globalRank ?? (player.rankScope === "filtered" ? null : player.rank),
     gearScore: null,
     combatPower: null,
     activeSkills: [],
@@ -673,6 +683,9 @@ export function aggregate(builds) {
       globalRank: b.globalRank,
       gearScore: b.gearScore,
       combatPower: b.combatPower,
+      rank: b.rank,
+      rankScope: b.rankScope,
+      leaderboardCombatPower: b.leaderboardCombatPower,
     });
   }
 

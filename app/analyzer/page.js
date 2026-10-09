@@ -2,6 +2,15 @@
 
 import { useState, useEffect, useRef, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { discoveryConfig, COMBAT_POWER } from "@/lib/discovery-config";
+import {
+  resultLabel,
+  leaderboardLabel,
+  canQuickBuild,
+  quickBuild,
+  sourceHealthText,
+  stigmaUsagePercent,
+} from "@/lib/analyzer-presentation";
 import {
   Search,
   Loader2,
@@ -30,16 +39,18 @@ const CLASSES = [
 ];
 
 const LEADERBOARDS = [
+  { id: "combat-power", label: "Combat Power" },
   { id: "nightmare", label: "Nightmare" },
   { id: "abyss", label: "Abyss" },
   { id: "transcendence", label: "Transcendence" },
   { id: "arena-solo", label: "Arena Solo" },
   { id: "arena-coop", label: "Arena Coop" },
   { id: "ascension", label: "Ascension" },
+  { id: "raid", label: "Raid" },
 ];
 
 const REGIONS = [
-  { id: "all", label: "All Regions" },
+  { id: "GLOBAL", label: "Global" },
   { id: "KR", label: "Korea" },
   { id: "TW", label: "Taiwan" },
 ];
@@ -238,6 +249,8 @@ function clientAggregate(builds) {
       globalRank: b.globalRank,
       gearScore: b.gearScore,
       combatPower: b.combatPower,
+      rank: b.rank,
+      leaderboardCombatPower: b.leaderboardCombatPower,
     });
   }
   for (const map of [stats.activeSkills, stats.stigmaSkills, stats.passiveSkills]) {
@@ -282,6 +295,8 @@ export default function Home() {
   const [error, setError] = useState("");
   const [logs, setLogs] = useState([]);
   const [sourceMeta, setSourceMeta] = useState(null);
+  const [discovery, setDiscovery] = useState(() => discoveryConfig());
+  const [quickTemplate, setQuickTemplate] = useState(null);
   const [progress, setProgress] = useState({
     current: 0,
     total: 10,
@@ -289,9 +304,9 @@ export default function Home() {
   });
   const [forma, setFormData] = useState({
     cls: "chanter",
-    lbType: "nightmare",
+    lbType: "combat-power",
     limit: 10,
-    region: "all",
+    region: "GLOBAL",
     serverId: "all",
     race: "all",
   });
@@ -299,6 +314,12 @@ export default function Home() {
   const logContainerRef = useRef(null);
   const resultsLogContainerRef = useRef(null);
   const serverDropdownRef = useRef(null);
+  const historicalOnly = discovery.leaderboards.find(
+    (lb) => lb.id === forma.lbType
+  )?.historicalOnly;
+  const regionServers = discovery.servers[forma.region] || [...ELYOS_SERVERS, ...ASMODIAN_SERVERS];
+  const elyosServers = regionServers.filter((server) => Number(server.id) < 2000);
+  const asmodianServers = regionServers.filter((server) => Number(server.id) >= 2000);
 
   // Derive race from a specific server ID
   const raceFromServer = (sid) => {
@@ -312,10 +333,10 @@ export default function Home() {
   // Filtered server list based on selected race
   const filteredServers =
     forma.race === "elyos"
-      ? { elyos: ELYOS_SERVERS, asmodian: [] }
+      ? { elyos: elyosServers, asmodian: [] }
       : forma.race === "asmodians"
-        ? { elyos: [], asmodian: ASMODIAN_SERVERS }
-        : { elyos: ELYOS_SERVERS, asmodian: ASMODIAN_SERVERS };
+        ? { elyos: [], asmodian: asmodianServers }
+        : { elyos: elyosServers, asmodian: asmodianServers };
 
   // Handle race change — reset server if incompatible
   const handleRaceChange = (newRace) => {
@@ -344,6 +365,7 @@ export default function Home() {
   // Compute filtered/displayed data based on race and rune filters
   const displayData = useMemo(() => {
     if (!data) return null;
+    if (data.stats.isHistorical) return data;
     if (!rawBuilds || (raceFilter === "all" && runeFilter === "all")) return data;
 
     let filtered = rawBuilds;
@@ -366,11 +388,12 @@ export default function Home() {
     }
 
     if (filtered.length === 0) {
-      return { ...data, stats: clientAggregate([]), count: 0 };
+      return { ...data, builds: [], stats: clientAggregate([]), count: 0 };
     }
 
     return {
       ...data,
+      builds: filtered,
       stats: clientAggregate(filtered),
       count: filtered.length,
     };
@@ -378,7 +401,33 @@ export default function Home() {
 
   useEffect(() => {
     setMounted(true);
+    fetch("/api/leaderboard/config")
+      .then((response) => {
+        if (!response.ok) throw new Error("Discovery configuration unavailable");
+        return response.json();
+      })
+      .then((config) => {
+        setDiscovery(config);
+        setFormData((form) => ({
+          ...form,
+          lbType: config.defaultLeaderboard,
+          region: config.defaultLeaderboard === COMBAT_POWER ? "GLOBAL" : "all",
+        }));
+      })
+      .catch(() => {
+        /* CP remains the conservative default. */
+      });
   }, []);
+
+  // A new population needs a new result. Do not leave CP builds beneath a
+  // historical-mode heading, or another region's characters beneath its selector.
+  useEffect(() => {
+    setData(null);
+    setRawBuilds(null);
+    setSourceMeta(null);
+    setQuickTemplate(null);
+    setError("");
+  }, [forma.cls, forma.lbType, forma.region]);
 
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -416,6 +465,7 @@ export default function Home() {
     setRawBuilds(null);
     setLogs([]);
     setSourceMeta(null);
+    setQuickTemplate(null);
     setProgress({ current: 0, total: forma.limit, target: "" });
 
     try {
@@ -501,7 +551,8 @@ export default function Home() {
                       stats: event.stats,
                       count: event.count,
                       cls: forma.cls,
-                      lb: forma.lbType,
+                      lb: event.leaderboardType || event.stats?.leaderboardType || forma.lbType,
+                      builds: event.builds || [],
                     });
                     setRawBuilds(event.builds || null);
                     isDone = true;
@@ -509,6 +560,8 @@ export default function Home() {
                     cumulativeProcessed = event.processedCount;
                     allProcessedPlayers = event.processedPlayers || [];
                     continuationData = {
+                      identity: event.identity,
+                      sourceMeta: event.sourceMeta,
                       players: event.players,
                       processedCount: cumulativeProcessed,
                       processedPlayers: allProcessedPlayers,
@@ -558,13 +611,38 @@ export default function Home() {
         transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
         className="text-center mb-8"
       >
-        <h1>Daeva Analyzer</h1>
+        <h1>
+          {historicalOnly
+            ? `Historical ${leaderboardLabel(forma.lbType)}`
+            : forma.lbType === COMBAT_POWER
+              ? "Combat Power Meta"
+              : "Daeva Analyzer"}
+        </h1>
         <p
           className="text-muted mt-2"
           style={{ fontSize: "1rem", maxWidth: "400px", margin: "8px auto 0" }}
         >
-          Decode the meta from top-ranked player builds
+          {historicalOnly
+            ? "Stored game-mode aggregates · live rankings unavailable"
+            : forma.lbType === COMBAT_POWER
+              ? "Discover top Combat Power builds with official character data"
+              : "Decode the meta from top-ranked player builds"}
         </p>
+        {forma.lbType === COMBAT_POWER && (
+          <p
+            className="text-muted mt-2"
+            style={{ fontSize: "0.85rem", maxWidth: 680, margin: "12px auto" }}
+          >
+            Player discovery by{" "}
+            <a href="https://shugo.gg/leaderboard" target="_blank" rel="noreferrer">
+              Shugo.GG&apos;s Combat Power leaderboard
+            </a>
+            . This ranks profiles looked up on Shugo by NCSOFT Combat Power.
+            {discovery.sourceMode === COMBAT_POWER
+              ? " Game-mode rankings remain unavailable; their snapshots are historical."
+              : " Combat Power is separate from game-mode rankings."}
+          </p>
+        )}
       </motion.div>
 
       <div className="grid-cols-3">
@@ -614,9 +692,11 @@ export default function Home() {
 
           <form onSubmit={handleSubmit} className="flex-col gap-4">
             <div className="input-group">
-              <label>Class</label>
+              <label htmlFor="analyzer-class">Class</label>
               <div className="relative">
                 <select
+                  id="analyzer-class"
+                  disabled={loading}
                   value={forma.cls}
                   onChange={(e) => setFormData({ ...forma, cls: e.target.value })}
                   className="appearance-none"
@@ -640,16 +720,31 @@ export default function Home() {
             </div>
 
             <div className="input-group">
-              <label>Leaderboard</label>
+              <label htmlFor="analyzer-leaderboard">Leaderboard</label>
               <div className="relative">
                 <select
                   value={forma.lbType}
-                  onChange={(e) => setFormData({ ...forma, lbType: e.target.value })}
+                  id="analyzer-leaderboard"
+                  disabled={loading}
+                  onChange={(e) => {
+                    const type = e.target.value;
+                    setFormData({
+                      ...forma,
+                      lbType: type,
+                      region: type === COMBAT_POWER ? "GLOBAL" : "all",
+                      serverId: "all",
+                      race: "all",
+                    });
+                    setRaceFilter("all");
+                    setRuneFilter("all");
+                    setServerDropdownOpen(false);
+                  }}
                   className="appearance-none"
                 >
-                  {LEADERBOARDS.map((lb) => (
+                  {(discovery.leaderboards || LEADERBOARDS).map((lb) => (
                     <option key={lb.id} value={lb.id}>
                       {lb.label}
+                      {lb.historicalOnly ? " · Historical only (live unavailable)" : ""}
                     </option>
                   ))}
                 </select>
@@ -666,10 +761,12 @@ export default function Home() {
             </div>
 
             <div className="input-group">
-              <label>Region</label>
+              <label htmlFor="analyzer-region">Region</label>
               <div className="relative">
                 <select
                   value={forma.region}
+                  id="analyzer-region"
+                  disabled={historicalOnly || loading}
                   onChange={(e) =>
                     setFormData({
                       ...forma,
@@ -679,7 +776,13 @@ export default function Home() {
                   }
                   className="appearance-none"
                 >
-                  {REGIONS.map((r) => (
+                  {(forma.lbType === COMBAT_POWER
+                    ? discovery.regions || REGIONS
+                    : [
+                        { id: "all", label: "All Regions (original snapshot)" },
+                        ...REGIONS.filter((r) => r.id !== "GLOBAL"),
+                      ]
+                  ).map((r) => (
                     <option key={r.id} value={r.id}>
                       {r.label}
                     </option>
@@ -702,6 +805,7 @@ export default function Home() {
               <div className="relative" ref={serverDropdownRef}>
                 <button
                   type="button"
+                  disabled={historicalOnly}
                   onClick={() => {
                     setServerDropdownOpen((o) => !o);
                     setServerSearch("");
@@ -731,9 +835,9 @@ export default function Home() {
                   <span>
                     {(() => {
                       if (forma.serverId !== "all") {
-                        const elyos = ELYOS_SERVERS.find((s) => s.id === forma.serverId);
+                        const elyos = elyosServers.find((s) => s.id === forma.serverId);
                         if (elyos) return `🌕 ${elyos.name}`;
-                        const asmo = ASMODIAN_SERVERS.find((s) => s.id === forma.serverId);
+                        const asmo = asmodianServers.find((s) => s.id === forma.serverId);
                         if (asmo) return `🌑 ${asmo.name}`;
                       }
                       if (forma.race === "elyos") return "🌕 Elyos — All Servers";
@@ -1082,6 +1186,7 @@ export default function Home() {
               <div className="relative">
                 <select
                   value={runeFilter}
+                  disabled={historicalOnly}
                   onChange={(e) => setRuneFilter(e.target.value)}
                   className="appearance-none"
                 >
@@ -1105,6 +1210,7 @@ export default function Home() {
               <label>Scan Limit (max 100)</label>
               <input
                 type="number"
+                disabled={historicalOnly}
                 min="1"
                 max="100"
                 value={forma.limit}
@@ -1125,7 +1231,11 @@ export default function Home() {
 
             <button type="submit" disabled={loading} className="btn-primary mt-4">
               {loading ? <Loader2 className="animate-spin" size={18} /> : <Search size={18} />}
-              {loading ? "Scanning..." : "Analyze Builds"}
+              {loading
+                ? "Loading..."
+                : historicalOnly
+                  ? "View Historical Snapshot"
+                  : "Analyze Builds"}
             </button>
             <p
               style={{
@@ -1135,7 +1245,9 @@ export default function Home() {
                 marginTop: "4px",
               }}
             >
-              Scanning may take a moment per player
+              {historicalOnly
+                ? "View stored aggregates with their original mode and date"
+                : "Scanning may take a moment per player"}
             </p>
           </form>
 
@@ -1154,6 +1266,12 @@ export default function Home() {
               }}
             >
               {error}
+              {sourceMeta?.health === "unavailable" && (
+                <p aria-label="Source health" style={{ marginTop: 8 }}>
+                  Source: {sourceMeta.source} · Data: {sourceHealthText(sourceMeta)} · Leaderboard
+                  basis: {sourceMeta.basis} · Region: {sourceMeta.region}
+                </p>
+              )}
             </motion.div>
           )}
         </motion.div>
@@ -1185,10 +1303,12 @@ export default function Home() {
                   <Swords size={28} style={{ color: "var(--text-tertiary)" }} />
                 </div>
                 <h3 style={{ color: "var(--text-secondary)", fontWeight: 600 }}>
-                  Ready to Analyze
+                  {historicalOnly ? "Historical Snapshot" : "Ready to Analyze"}
                 </h3>
                 <p className="text-muted mt-2" style={{ fontSize: "0.85rem", maxWidth: "300px" }}>
-                  Configure your class and leaderboard, then hit analyze to extract top builds.
+                  {historicalOnly
+                    ? "Select a class to view its stored game-mode snapshot."
+                    : "Configure your class and leaderboard, then hit analyze to extract top builds."}
                 </p>
               </motion.div>
             )}
@@ -1240,16 +1360,21 @@ export default function Home() {
                   />
                 </div>
 
-                <h3 style={{ fontSize: "1.1rem" }}>Extracting Build Data</h3>
+                <h3 style={{ fontSize: "1.1rem" }}>
+                  {historicalOnly ? "Loading Historical Snapshot" : "Extracting Build Data"}
+                </h3>
                 <p
                   className="text-muted mt-2 text-center"
                   style={{ maxWidth: "340px", fontSize: "0.85rem" }}
                 >
-                  Analyzing player configurations...
+                  {historicalOnly
+                    ? "Reading stored aggregates..."
+                    : "Analyzing player configurations..."}
                 </p>
 
                 {/* Progress */}
                 <div
+                  hidden={historicalOnly}
                   style={{
                     width: "100%",
                     maxWidth: "380px",
@@ -1310,6 +1435,7 @@ export default function Home() {
 
                 {/* Log Viewer */}
                 <div
+                  hidden={historicalOnly}
                   style={{
                     width: "100%",
                     maxWidth: "480px",
@@ -1513,26 +1639,33 @@ export default function Home() {
                               fontWeight: 600,
                             }}
                           >
-                            {displayData.lb}
+                            {resultLabel(displayData.lb, displayData.stats.isHistorical)}
                           </span>
                         </p>
                       </div>
                     </div>
                     <button
-                      disabled={displayData.stats.isHistorical}
+                      disabled={!canQuickBuild(displayData.stats, displayData.builds)}
+                      onClick={() =>
+                        setQuickTemplate(quickBuild(displayData.stats, displayData.builds))
+                      }
                       style={{
                         display: "flex",
                         alignItems: "center",
                         gap: "6px",
-                        opacity: displayData.stats.isHistorical ? 0.3 : 1,
-                        cursor: displayData.stats.isHistorical ? "not-allowed" : "pointer",
+                        opacity: canQuickBuild(displayData.stats, displayData.builds) ? 1 : 0.3,
+                        cursor: canQuickBuild(displayData.stats, displayData.builds)
+                          ? "pointer"
+                          : "not-allowed",
                         background: "transparent",
                         border: "none",
                         padding: 0,
                         outline: "none",
                       }}
                       title={
-                        displayData.stats.isHistorical ? "Unavailable for historical snapshots" : ""
+                        !canQuickBuild(displayData.stats, displayData.builds)
+                          ? "Requires player-level builds; unavailable for historical aggregates"
+                          : "Open a representative player build"
                       }
                     >
                       <Zap size={13} style={{ color: "#a78bfa", opacity: 0.8 }} />
@@ -1566,7 +1699,7 @@ export default function Home() {
                     >
                       <Info size={16} />
                       <span>
-                        <strong>Historical Snapshot</strong> · Last updated{" "}
+                        <strong>{resultLabel(displayData.lb, true)}</strong> · Last updated{" "}
                         {new Date(displayData.stats.updatedAt).toLocaleDateString("en-US", {
                           month: "short",
                           day: "numeric",
@@ -1581,103 +1714,41 @@ export default function Home() {
                   {sourceMeta && (
                     <div
                       style={{
-                        padding: "8px 24px",
+                        padding: "12px 24px",
                         background: "rgba(0,0,0,0.15)",
-                        borderBottom: "1px solid rgba(255,255,255,0.05)",
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        fontSize: "0.75rem",
+                        fontSize: "0.8rem",
+                        display: "grid",
+                        gap: 6,
                       }}
+                      aria-label="Source health"
                     >
-                      <span style={{ color: "var(--text-muted)" }}>
+                      <span>
                         Source:{" "}
-                        <span style={{ color: "var(--text-primary)", fontWeight: 500 }}>
+                        <strong>
                           {sourceMeta.source}
-                        </span>
+                          {sourceMeta.upstreamSource ? " · " + sourceMeta.upstreamSource : ""}
+                        </strong>
                       </span>
-                      {sourceMeta.health === "stale" ? (
-                        <span
-                          style={{
-                            color: "#f97316",
-                            display: "flex",
-                            alignItems: "center",
-                            gap: "6px",
-                          }}
-                        >
-                          <span
-                            style={{
-                              width: 6,
-                              height: 6,
-                              borderRadius: "50%",
-                              background: "#f97316",
-                            }}
-                          ></span>
-                          Stale Cache &middot; Updated{" "}
-                          {Math.round(sourceMeta.ageMs / (1000 * 60 * 60 * 24))} days ago
+                      <span>
+                        Data: {sourceHealthText(sourceMeta)}
+                        {sourceMeta.buildHealth === "partial"
+                          ? " · Some item/build fetches incomplete"
+                          : ""}
+                      </span>
+                      <span>
+                        Leaderboard basis: {sourceMeta.basis} · Region: {sourceMeta.region}
+                      </span>
+                      {sourceMeta.topRefreshedAt && (
+                        <span>
+                          Shugo top-500 refresh:{" "}
+                          {new Date(sourceMeta.topRefreshedAt).toLocaleString()} · Individual
+                          profile freshness varies.
                         </span>
-                      ) : sourceMeta.ageMs > 0 ? (
-                        <span
-                          style={{
-                            color: "#fbbf24",
-                            display: "flex",
-                            alignItems: "center",
-                            gap: "6px",
-                          }}
-                        >
-                          <span
-                            style={{
-                              width: 6,
-                              height: 6,
-                              borderRadius: "50%",
-                              background: "#fbbf24",
-                            }}
-                          ></span>
-                          Cached Data &middot; Updated{" "}
-                          {sourceMeta.ageMs > 1000 * 60 * 60
-                            ? Math.round(sourceMeta.ageMs / (1000 * 60 * 60)) + "h"
-                            : Math.round(sourceMeta.ageMs / 60000) + "m"}{" "}
-                          ago
-                        </span>
-                      ) : sourceMeta.health === "partial" ? (
-                        <span
-                          style={{
-                            color: "#fbbf24",
-                            display: "flex",
-                            alignItems: "center",
-                            gap: "6px",
-                          }}
-                        >
-                          <span
-                            style={{
-                              width: 6,
-                              height: 6,
-                              borderRadius: "50%",
-                              background: "#fbbf24",
-                            }}
-                          ></span>
-                          Partial Data &middot; {sourceMeta.successfulServers}/
-                          {sourceMeta.expectedServers} servers
-                        </span>
-                      ) : (
-                        <span
-                          style={{
-                            color: "#34d399",
-                            display: "flex",
-                            alignItems: "center",
-                            gap: "6px",
-                          }}
-                        >
-                          <span
-                            style={{
-                              width: 6,
-                              height: 6,
-                              borderRadius: "50%",
-                              background: "#34d399",
-                            }}
-                          ></span>
-                          Live Data
-                        </span>
+                      )}
+                      {sourceMeta.leaderboardType === COMBAT_POWER && (
+                        <a href="https://shugo.gg/leaderboard" target="_blank" rel="noreferrer">
+                          Leaderboard dataset: Shugo.GG
+                        </a>
                       )}
                     </div>
                   )}
@@ -2155,7 +2226,9 @@ export default function Home() {
                           boxShadow: "0 0 8px rgba(6,182,212,0.4)",
                         }}
                       />
-                      Stigma Priority
+                      {displayData.stats.isHistorical
+                        ? "Historical Stigma Usage"
+                        : "Stigma Priority"}
                     </h3>
                     <div
                       className="flex-col custom-scrollbar-slim"
@@ -2167,9 +2240,25 @@ export default function Home() {
                       }}
                     >
                       {Object.entries(displayData.stats.stigmaSkills || {})
-                        .sort((a, b) => b[1].equippedCount - a[1].equippedCount)
+                        .sort(
+                          (a, b) =>
+                            (stigmaUsagePercent(
+                              b[1],
+                              displayData.count,
+                              displayData.stats.isHistorical
+                            ) ?? -1) -
+                            (stigmaUsagePercent(
+                              a[1],
+                              displayData.count,
+                              displayData.stats.isHistorical
+                            ) ?? -1)
+                        )
                         .map(([name, stat], i) => {
-                          const equipPct = percent(stat.equippedCount, displayData.count);
+                          const usage = stigmaUsagePercent(
+                            stat,
+                            displayData.count,
+                            displayData.stats.isHistorical
+                          );
                           return (
                             <div
                               key={name}
@@ -2223,7 +2312,7 @@ export default function Home() {
                                     flexShrink: 0,
                                   }}
                                 >
-                                  {equipPct}%
+                                  {usage == null ? "—" : `${usage.toFixed(1)}%`}
                                 </span>
                               </div>
                             </div>
@@ -3441,7 +3530,9 @@ export default function Home() {
                         Player Credits
                       </h3>
                       <p className="text-muted mb-4" style={{ fontSize: "0.8rem" }}>
-                        Built from data of these top-ranked heroes:
+                        {displayData.lb === COMBAT_POWER
+                          ? `Top ${displayData.count} ${displayData.cls}s by Combat Power on Shugo.GG:`
+                          : "Built from data of these top-ranked heroes:"}
                       </p>
                       <div
                         style={{
@@ -3455,7 +3546,11 @@ export default function Home() {
                         className="custom-scrollbar-slim"
                       >
                         {[...displayData.stats.scannedPlayers]
-                          .sort((a, b) => a.globalRank - b.globalRank)
+                          .sort((a, b) =>
+                            displayData.lb === COMBAT_POWER
+                              ? b.leaderboardCombatPower - a.leaderboardCombatPower
+                              : a.globalRank - b.globalRank
+                          )
                           .map((p, idx) => (
                             <div
                               key={idx}
@@ -3553,7 +3648,9 @@ export default function Home() {
                                   color: "rgba(255,255,255,0.07)",
                                 }}
                               >
-                                #{p.globalRank}
+                                {displayData.lb === COMBAT_POWER
+                                  ? `CP #${p.rank}`
+                                  : `#${p.globalRank}`}
                               </div>
                             </div>
                           ))}
@@ -3565,6 +3662,74 @@ export default function Home() {
           </AnimatePresence>
         </div>
       </div>
+      {quickTemplate && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Quick Build"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 200,
+            background: "rgba(0,0,0,0.8)",
+            display: "grid",
+            placeItems: "center",
+            padding: 24,
+          }}
+        >
+          <div
+            className="glass-panel"
+            style={{ maxWidth: 760, width: "100%", maxHeight: "85vh", overflowY: "auto" }}
+          >
+            <button type="button" onClick={() => setQuickTemplate(null)} style={{ float: "right" }}>
+              Close Quick Build
+            </button>
+            <h2>Quick Build · {leaderboardLabel(displayData.lb)}</h2>
+            <p>
+              Representative player: {quickTemplate.name} · {quickTemplate.region} · CP{" "}
+              {quickTemplate.combatPower?.toLocaleString()} · GS {quickTemplate.gearScore}
+            </p>
+            <p className="text-muted">
+              An observed player template from this analysis. Review skill levels and gear for your
+              character.
+            </p>
+            {[
+              ["Active skills", quickTemplate.activeSkills],
+              ["Stigma / specialty skills", quickTemplate.stigmaSkills],
+              ["Passive skills", quickTemplate.passiveSkills],
+            ].map(([label, skills]) => (
+              <section key={label} style={{ marginTop: 18 }}>
+                <h3>{label}</h3>
+                <p>
+                  {skills.map((skill) => `${skill.name} Lv. ${skill.level}`).join(" · ") ||
+                    "No data"}
+                </p>
+              </section>
+            ))}
+            <section style={{ marginTop: 18 }}>
+              <h3>Equipment / Runes</h3>
+              <ul>
+                {quickTemplate.equipItems.map((item, index) => (
+                  <li key={index}>
+                    {item.categoryName}: {item.itemName} +{item.enchantLevel}
+                  </li>
+                ))}
+              </ul>
+            </section>
+            <section style={{ marginTop: 18 }}>
+              <h3>Arcana</h3>
+              <p>{quickTemplate.arcanaSetCombo}</p>
+              <ul>
+                {quickTemplate.arcanas.map((arcana, index) => (
+                  <li key={index}>
+                    {arcana.name} · {arcana.mainStat || "Details unavailable"}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

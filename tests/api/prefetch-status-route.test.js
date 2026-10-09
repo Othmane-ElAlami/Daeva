@@ -2,7 +2,7 @@
 // Tests for app/api/prefetch/status/route.js
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("@cloudflare/next-on-pages", () => ({ getRequestContext: vi.fn() }));
 vi.mock("@/lib/admin-auth", () => ({
@@ -56,7 +56,10 @@ const FAKE_ENTRIES = [
   },
 ];
 
+afterEach(() => vi.unstubAllEnvs());
+
 beforeEach(() => {
+  vi.stubEnv("LEADERBOARD_SOURCE_MODE", "mode-specific");
   vi.clearAllMocks();
   getRequestContext.mockReturnValue({ env: { DB: makeDb() } });
   validateAdminRequest.mockResolvedValue({ authorized: true });
@@ -75,6 +78,13 @@ describe("GET /api/prefetch/status — auth", () => {
 });
 
 describe("GET /api/prefetch/status — response shape", () => {
+  it("counts only CP region/class populations in temporary mode", async () => {
+    vi.stubEnv("LEADERBOARD_SOURCE_MODE", "combat-power");
+    const body = await (await GET(statusRequest())).json();
+    expect(body.totalCombinations).toBe(24);
+    expect(body.cachedCombinations).toBe(0);
+    expect(body.retainedOtherPopulations).toBe(2);
+  });
   it("returns 200 with required fields", async () => {
     const res = await GET(statusRequest());
     expect(res.status).toBe(200);

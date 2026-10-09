@@ -9,10 +9,60 @@ export const metadata = {
 
 const CHANGELOG = [
   {
+    version: "0.11",
+    label: "Beta 0.11.0",
+    date: "Oct 9, 2026",
+    latest: true,
+    groups: [
+      {
+        type: "new",
+        typeLabel: "New",
+        items: [
+          {
+            title: "Combat Power build discovery",
+            desc: "Temporarily discover high-CP characters through Shugo.GG's public leaderboard across Global, Korea and Taiwan, then fetch builds from official character data. Combat Power is not a game-mode ranking.",
+          },
+          {
+            title: "Representative Quick Build",
+            desc: "Open an observed player's skills, equipment, runes and arcana from a successful Combat Power analysis.",
+          },
+        ],
+      },
+      {
+        type: "improved",
+        typeLabel: "Improved",
+        items: [
+          {
+            title: "Separate historical game-mode views",
+            desc: "Nightmare, Abyss and other mode snapshots keep their original labels and dates. Their aggregate-only views keep Quick Build disabled while live rankings remain unavailable.",
+          },
+          {
+            title: "Clear source and freshness",
+            desc: "Credit Shugo.GG for player discovery and distinguish periodically refreshed Combat Power data, cached builds and historical snapshots.",
+          },
+        ],
+      },
+      {
+        type: "infra",
+        typeLabel: "Infrastructure",
+        items: [
+          {
+            title: "Region-aware caches and prefetch",
+            desc: "Keep Combat Power populations separate from mode-specific data and refresh classes across supported regions every six hours.",
+          },
+          {
+            title: "Next.js security patch",
+            desc: "Update Next.js and its ESLint configuration to 15.5.27, resolving the critical advisories without a major upgrade.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "0.10",
     label: "Beta 0.10.0",
     date: "Aug 16, 2026",
-    latest: true,
+    latest: false,
     groups: [
       {
         type: "new",
@@ -406,7 +456,7 @@ export default function ChangelogPage() {
       <footer className="cl-footer" role="contentinfo">
         <div className="cl-footer-inner">
           <p className="cl-footer-text">Daeva Analyzer &middot; Aion 2 Build Intelligence</p>
-          <span className="cl-footer-version">v0.10.0-beta</span>
+          <span className="cl-footer-version">v0.11.0-beta</span>
         </div>
       </footer>
     </div>

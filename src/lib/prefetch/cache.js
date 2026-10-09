@@ -1,4 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
+import { populationKey, parsePopulationKey } from "../discovery-config.js";
 // Prefetch System — D1-Backed Cache
 // ─────────────────────────────────────────────────────────────────────────────
 // Reads and writes prefetched leaderboard data in the D1 `prefetch_cache`
@@ -13,13 +14,13 @@
  * Returns null on miss. Stale entries (past expiresAt) are still returned
  * when allowStale is true — stale data is always better than no data.
  */
-export async function getPrefetchCache(db, cls, leaderboard, allowStale = true) {
+export async function getPrefetchCache(db, cls, leaderboard, allowStale = true, region = "GLOBAL") {
   try {
     const row = await db
       .prepare(
         "SELECT data, builds, fetched_at, expires_at, source FROM prefetch_cache WHERE class = ? AND leaderboard = ?"
       )
-      .bind(cls, leaderboard)
+      .bind(cls, populationKey(leaderboard, region))
       .first();
     if (!row) return null;
     const now = Date.now();
@@ -47,7 +48,8 @@ export async function setPrefetchCache(
   data,
   builds,
   ttlMs,
-  source = "prefetch"
+  source = "prefetch",
+  region = "GLOBAL"
 ) {
   const now = Date.now();
   await db
@@ -55,7 +57,15 @@ export async function setPrefetchCache(
       `INSERT OR REPLACE INTO prefetch_cache (class, leaderboard, data, builds, fetched_at, expires_at, source)
        VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
-    .bind(cls, leaderboard, JSON.stringify(data), JSON.stringify(builds), now, now + ttlMs, source)
+    .bind(
+      cls,
+      populationKey(leaderboard, region),
+      JSON.stringify(data),
+      JSON.stringify(builds),
+      now,
+      now + ttlMs,
+      source
+    )
     .run();
 }
 
@@ -72,7 +82,8 @@ export async function getAllPrefetchEntries(db) {
     const now = Date.now();
     return results.map((r) => ({
       class: r.class,
-      leaderboard: r.leaderboard,
+      ...parsePopulationKey(r.leaderboard),
+      cacheKey: r.leaderboard,
       fetchedAt: r.fetched_at,
       expiresAt: r.expires_at,
       source: r.source,

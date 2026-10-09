@@ -1,79 +1,96 @@
-# Prefetch Cron - Populate D1 Leaderboard Cache
-#
-# Runs every 30 minutes. Iterates all 8 classes x 7 leaderboards = 56 combos,
-# POSTing to /api/prefetch/run for each one with a 5-second delay between calls.
-#
-# Required repository secrets:
-#   PREFETCH_API_URL  - Base URL of the deployed site (e.g. https://shugo.pages.dev)
-#   ADMIN_SECRET      - Same ADMIN_SECRET configured in the Cloudflare Pages env
-
+# Shugo refreshes the top 500 nightly. Six-hour runs also capture profile
+# lookups between those refreshes; official gear details use continuations.
 name: Prefetch Leaderboard Data
 
 on:
   schedule:
-    - cron: "0,30 * * * *"
+    - cron: "17 3,9,15,21 * * *"
   workflow_dispatch:
 
 jobs:
   prefetch:
     runs-on: ubuntu-24.04
-    timeout-minutes: 50
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        region: [GLOBAL, KR, TW]
     steps:
-      - name: Run prefetch jobs
+      - name: Refresh supported discovery populations
         env:
           API_URL: ${{ vars.API_URL }}
           ADMIN_SECRET: ${{ secrets.ADMIN_SECRET }}
+          REGION: ${{ matrix.region }}
         run: |
           : "${API_URL:?API_URL is not configured}"
           : "${ADMIN_SECRET:?ADMIN_SECRET is not configured}"
-
-          CLASSES="gladiator templar ranger assassin spiritmaster sorcerer cleric chanter"
-          LEADERBOARDS="nightmare abyss arena-solo arena-coop transcendence ascension raid"
-
+          curl -fsS --http1.1 --connect-timeout 20 --max-time 30 --retry 2 \
+            "${API_URL%/}/api/leaderboard/config" -o /tmp/discovery_config.json
+          MODE=$(jq -er '.sourceMode' /tmp/discovery_config.json)
+          CLASSES=$(jq -r '.classes[]' /tmp/discovery_config.json)
+          if [ "$MODE" = "combat-power" ]; then
+            LEADERBOARDS="combat-power"
+          else
+            # Legacy rankings combine regions; run their jobs once.
+            if [ "$REGION" != "GLOBAL" ]; then exit 0; fi
+            REGION="all"
+            LEADERBOARDS=$(jq -r '.leaderboards[] | select(.id != "combat-power") | .id' /tmp/discovery_config.json)
+          fi
           succeeded=0
           failed=0
           skipped=0
-
+          total=0
           for cls in $CLASSES; do
             for lb in $LEADERBOARDS; do
-              echo "::group::$cls / $lb"
-              HTTP_CODE=$(curl -s -o /tmp/prefetch_response.json -w "%{http_code}" \
-                -X POST "${API_URL%/}/api/prefetch/run" \
-                -H "Content-Type: application/json" \
-                -H "Authorization: Bearer ${ADMIN_SECRET}" \
-                -d "{\"cls\":\"${cls}\",\"leaderboard\":\"${lb}\"}" \
-                --connect-timeout 20 \
-                --max-time 120 \
-                --retry 2 \
-                --retry-all-errors \
-                --retry-delay 2 \
-                --retry-max-time 30)
-
-              if [ "$HTTP_CODE" -eq 200 ]; then
-                echo "✓ $cls/$lb — HTTP $HTTP_CODE"
-                jq -r '"  players: \(.playerCount), errors: \(.errorCount), duration: \(.durationMs)ms"' /tmp/prefetch_response.json 2>/dev/null || true
-                succeeded=$((succeeded + 1))
-              elif [ "$HTTP_CODE" -eq 503 ]; then
-                echo "⊘ $cls/$lb — SKIPPED (prefetch disabled / upstream down)"
-                skipped=$((skipped + 1))
-              else
-                echo "✗ $cls/$lb — HTTP $HTTP_CODE"
-                cat /tmp/prefetch_response.json 2>/dev/null || true
-                failed=$((failed + 1))
-              fi
+              total=$((total + 1))
+              echo "::group::$REGION / $cls / $lb"
+              jq -n --arg cls "$cls" --arg lb "$lb" --arg region "$REGION" \
+                '{cls:$cls,leaderboard:$lb,region:$region}' > /tmp/prefetch_body.json
+              batch=0
+              while true; do
+                batch=$((batch + 1))
+                rm -f /tmp/prefetch_response.json
+                CURL_EXIT=0
+                HTTP_CODE=$(curl -sS --http1.1 -o /tmp/prefetch_response.json -w "%{http_code}" \
+                  -X POST "${API_URL%/}/api/prefetch/run" \
+                  -H "Content-Type: application/json" \
+                  -H "Authorization: Bearer ${ADMIN_SECRET}" \
+                  --data-binary @/tmp/prefetch_body.json \
+                  --connect-timeout 20 --max-time 240 --retry 2 \
+                  --retry-all-errors --retry-delay 2) || CURL_EXIT=$?
+                if [ "$CURL_EXIT" -ne 0 ]; then
+                  echo "✗ $cls/$lb — curl error ($CURL_EXIT)"
+                  failed=$((failed + 1)); break
+                elif [ "$HTTP_CODE" = "503" ]; then
+                  echo "⊘ $cls/$lb — SKIPPED (prefetch disabled / upstream down)"
+                  skipped=$((skipped + 1)); break
+                elif [ "$HTTP_CODE" != "200" ]; then
+                  echo "✗ $cls/$lb — HTTP $HTTP_CODE"
+                  cat /tmp/prefetch_response.json 2>/dev/null || true
+                  echo ""
+                  failed=$((failed + 1)); break
+                fi
+                jq -r '"  players: \(.playerCount), errors: \(.errorCount), duration: \(.durationMs)ms"' /tmp/prefetch_response.json
+                if jq -e '.continuation != null' /tmp/prefetch_response.json >/dev/null; then
+                  if [ "$batch" -ge 12 ]; then
+                    echo "✗ Continuation safeguard reached"
+                    failed=$((failed + 1)); break
+                  fi
+                  jq --arg cls "$cls" --arg lb "$lb" --arg region "$REGION" \
+                    '{cls:$cls,leaderboard:$lb,region:$region,continuation:.continuation}' \
+                    /tmp/prefetch_response.json > /tmp/prefetch_body.json
+                  sleep 5
+                else
+                  echo "✓ $REGION/$cls/$lb — complete"
+                  succeeded=$((succeeded + 1)); break
+                fi
+              done
               echo "::endgroup::"
-
-              # Delay between calls to avoid overwhelming upstream APIs
               sleep 5
             done
           done
-
-          echo ""
-          echo "════════════════════════════════════════"
-          echo "  Prefetch complete: $succeeded succeeded, $failed failed, $skipped skipped"
-          echo "════════════════════════════════════════"
-
-          if [ "$failed" -gt 28 ]; then
-            echo "::error::Prefetch job failed ($failed/56)"
+          echo "Prefetch complete: $succeeded succeeded, $failed failed, $skipped skipped"
+          if [ "$failed" -gt "$((total / 2))" ]; then
+            echo "::error::Prefetch job failed ($failed/$total)"
             exit 1
           fi

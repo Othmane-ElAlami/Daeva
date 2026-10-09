@@ -1,0 +1,137 @@
+{
+  "id": 110830105,
+  "name": "Splendent Ebony Dragon Lord Staff",
+  "grade": "Unique",
+  "gradeName": "Unique",
+  "icon": "https://assets.playnccdn.com/static-aion2-gamedata/resources/Icon_WP_ST_0100_T06.png",
+  "level": 102,
+  "levelValue": 15,
+  "enchantLevel": 15,
+  "storable": true,
+  "tradable": false,
+  "tradablePersonal": false,
+  "enchantable": true,
+  "decomposable": true,
+  "maxEnchantLevel": 15,
+  "maxExceedEnchantLevel": 5,
+  "raceName": "Asmodians",
+  "classNames": ["Chanter"],
+  "categoryName": "Staff",
+  "type": "Equip",
+  "equipLevel": 45,
+  "magicStoneSlotCount": 4,
+  "godStoneSlotCount": 1,
+  "costumes": ["Rending Roar (Staff)"],
+  "subStatCount": 5,
+  "subSkillCountMax": 5,
+  "subStatRandom": true,
+  "mainStats": [
+    {
+      "id": "WeaponFixingDamage",
+      "name": "Attack",
+      "minValue": "420",
+      "value": "578",
+      "extra": "174",
+      "exceed": false
+    },
+    {
+      "id": "WeaponAccuracy",
+      "name": "Accuracy",
+      "value": "75",
+      "extra": "0",
+      "exceed": false
+    },
+    {
+      "id": "Critical",
+      "name": "Critical Hit",
+      "value": "100",
+      "extra": "0",
+      "exceed": false
+    },
+    {
+      "id": "Block",
+      "name": "Block",
+      "value": "125",
+      "extra": "0",
+      "exceed": false
+    }
+  ],
+  "soulBindRate": "100",
+  "subStats": [
+    {
+      "id": "STR",
+      "name": "Might",
+      "value": "32"
+    },
+    {
+      "id": "WeaponFixingDamage",
+      "name": "Attack",
+      "value": "51"
+    },
+    {
+      "id": "AmplifyWeaponDamage",
+      "name": "Weapon Damage Boost",
+      "value": "9.6%"
+    },
+    {
+      "id": "CombatSpeed",
+      "name": "Combat Speed",
+      "value": "13%"
+    },
+    {
+      "id": "AmplifyAllDamage",
+      "name": "Damage Boost",
+      "value": "7.3%"
+    },
+    {
+      "id": "AdditionalHitRate",
+      "name": "Multi-hit Chance",
+      "value": "9.6%"
+    }
+  ],
+  "magicStoneStat": [
+    {
+      "id": "CriticalResist",
+      "icon": "https://assets.playnccdn.com/static-aion2-gamedata/resources/Icon_Item_Usable_Enchant_MagicStone_A_c_003.png",
+      "value": "+7",
+      "name": "Critical Hit Resist",
+      "grade": "Rare",
+      "slotPos": 0
+    },
+    {
+      "id": "WeaponFixingDamage",
+      "icon": "https://assets.playnccdn.com/static-aion2-gamedata/resources/Icon_Item_Usable_Enchant_MagicStone_A_c_003.png",
+      "value": "+10",
+      "name": "Attack",
+      "grade": "Unique",
+      "slotPos": 1
+    },
+    {
+      "id": "ArmorDefense",
+      "icon": "https://assets.playnccdn.com/static-aion2-gamedata/resources/Icon_Item_Usable_Enchant_MagicStone_A_c_003.png",
+      "value": "+30",
+      "name": "Defense",
+      "grade": "Rare",
+      "slotPos": 2
+    },
+    {
+      "id": "ArmorDefense",
+      "icon": "https://assets.playnccdn.com/static-aion2-gamedata/resources/Icon_Item_Usable_Enchant_MagicStone_A_c_003.png",
+      "value": "+50",
+      "name": "Defense",
+      "grade": "Legend",
+      "slotPos": 3
+    }
+  ],
+  "godStoneStat": [
+    {
+      "icon": "https://assets.playnccdn.com/static-aion2-gamedata/resources/Icon_Item_Usable_Godstone_WP_r_005.png",
+      "name": "Theostone: Fasimedes's Dignity",
+      "desc": "Has a 3% chance to inflict Stun for 2s on attack\nEffect Activation Cooldown: 5s\nOnly one Theostone's effect applies when identical Theostones are engraved.",
+      "grade": "Legend",
+      "slotPos": 0
+    }
+  ],
+  "sources": ["Crafting"],
+  "favorite": false
+}

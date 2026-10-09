@@ -1,4 +1,5 @@
 import { getRequestContext } from "@cloudflare/next-on-pages";
+import { parsePopulationKey } from "@/lib/discovery-config";
 
 export const runtime = "edge";
 
@@ -15,7 +16,8 @@ export async function GET() {
 
     const snapshots = (results || []).map((row) => ({
       className: row.class,
-      leaderboard: row.leaderboard,
+      ...parsePopulationKey(row.leaderboard),
+      isHistorical: true,
       totalPlayers: row.total_players,
       stigmaSkills: JSON.parse(row.stigma_skills),
       activeSkills: JSON.parse(row.active_skills),

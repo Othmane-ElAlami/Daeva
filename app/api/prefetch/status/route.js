@@ -12,6 +12,8 @@ import { validateAdminRequest, unauthorizedResponse } from "@/lib/admin-auth";
 import { getAllPrefetchEntries } from "@/lib/prefetch/cache";
 import { loadConfig } from "@/lib/prefetch/config";
 import { classes, leaderboardTypes } from "@/lib/scraper-shared";
+import { COMBAT_POWER } from "@/lib/discovery-config";
+import { regions } from "@/lib/regions";
 
 export const runtime = "edge";
 
@@ -22,22 +24,33 @@ export async function GET(request) {
   if (!authorized) return unauthorizedResponse();
 
   try {
-    const config = loadConfig();
+    const config = loadConfig(env);
     const entries = await getAllPrefetchEntries(env.DB);
 
-    const totalCombos = classes.length * Object.keys(leaderboardTypes).length;
-    const freshCount = entries.filter((e) => !e.isExpired).length;
-    const staleCount = entries.filter((e) => e.isExpired).length;
+    const active = entries.filter((entry) =>
+      config.sourceMode === COMBAT_POWER
+        ? entry.leaderboard === COMBAT_POWER
+        : entry.leaderboard !== COMBAT_POWER
+    );
+    const totalCombos =
+      classes.length *
+      (config.sourceMode === COMBAT_POWER
+        ? Object.keys(regions).length
+        : Object.keys(leaderboardTypes).length - 1);
+    const freshCount = active.filter((e) => !e.isExpired).length;
+    const staleCount = active.filter((e) => e.isExpired).length;
 
     return Response.json(
       {
         enabled: config.enabled,
+        sourceMode: config.sourceMode,
         cacheTtlMinutes: config.cacheTtlMinutes,
         totalCombinations: totalCombos,
-        cachedCombinations: entries.length,
+        cachedCombinations: active.length,
+        retainedOtherPopulations: entries.length - active.length,
         freshEntries: freshCount,
         staleEntries: staleCount,
-        coveragePercent: totalCombos > 0 ? +((entries.length / totalCombos) * 100).toFixed(1) : 0,
+        coveragePercent: totalCombos > 0 ? +((active.length / totalCombos) * 100).toFixed(1) : 0,
         entries,
       },
       {

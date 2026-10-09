@@ -2,11 +2,14 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Aion 2 Leaderboard Scraper (shugo.gg) & Build Analyzer (Official API)
 // Fetches top players and analyzes Active, Stigma, Passive skills + Arcanas
-// Usage: node scraper.mjs [--class chanter] [--type nightmare] [--limit 100]
+// Usage: node scraper.mjs --class chanter --type combat-power --region GLOBAL --limit 100
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { writeFileSync } from "fs";
 import { argv } from "process";
+import { analyze } from "./src/lib/analyzer.js";
+import { COMBAT_POWER, getSourceMode } from "./src/lib/discovery-config.js";
+import { normalizeRegion } from "./src/lib/regions.js";
 import { createInterface } from "readline";
 import { getLeaderboard as fetchLeaderboardProviders } from "./src/lib/providers/leaderboard/index.js";
 import { createCliLogger } from "./src/lib/logger.js";
@@ -57,6 +60,7 @@ function ask(question) {
 // ── Resolve config ───────────────────────────────────────────────────────────
 async function resolveConfig() {
   let lbType = getArg("type");
+  if (!lbType && getSourceMode() === COMBAT_POWER) lbType = COMBAT_POWER;
   let cls = getArg("class");
   let limit = getArg("limit");
 
@@ -107,6 +111,8 @@ async function resolveConfig() {
     lbInfo: leaderboardTypes[lbType.toLowerCase()],
     cls: cls.toLowerCase(),
     limit,
+    region: normalizeRegion(getArg("region") || "GLOBAL"),
+    sourceMode: getSourceMode(),
   };
 }
 
@@ -512,6 +518,30 @@ async function main() {
   log.info("main", `Leaderboard: ${config.lbInfo.label}`);
   log.info("main", `Class: ${config.cls}`);
   log.info("main", `Limit: ${config.limit}`);
+
+  if (config.lbType === COMBAT_POWER) {
+    if (!config.region) throw new Error("Use --region GLOBAL, KR or TW.");
+    config.limit = Math.max(1, Math.min(config.limit, 100));
+    let used = 0;
+    // CLI is outside Workers; it can finish official detail calls without D1.
+    const result = await analyze(config, {
+      liveOnly: true,
+      budget: {
+        canAfford: () => true,
+        consume: () => used++,
+        get used() {
+          return used;
+        },
+      },
+    });
+    log.info("source", `Shugo Combat Power · ${config.region} · periodically refreshed`);
+    const report = formatReport(result.stats, config);
+    console.log(report);
+    const filename = `${config.cls}_combat-power_${config.region}_builds.txt`;
+    writeFileSync(filename, report, "utf-8");
+    log.success("main", `Report saved to: ${filename}`);
+    return;
+  }
 
   // 1. Leaderboard
   const players = await fetchLeaderboard(config, headers);

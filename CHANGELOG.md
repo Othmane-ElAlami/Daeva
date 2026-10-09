@@ -4,6 +4,38 @@ All notable changes to Daeva will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.11.0-beta - 2026-10-09
+
+### Added
+
+- Distinct Shugo.GG Combat Power discovery provider with strict JSON/schema validation and upstream class/region/server/faction filters.
+- Combat Power analysis across Global, Korea and Taiwan, preserving discovery CP separately from official profile CP.
+- Shared official character/item build fetching, bounded continuation batches, and a working representative-player Quick Build.
+- Sanitized public response fixtures and provider, cache, historical semantics, region isolation and continuation tests.
+
+### Changed
+
+- Temporarily default to Combat Power while NCSOFT's mode-specific ranking API remains unavailable. Combat Power is explicitly **not** a Nightmare/Abyss/Arena/Raid or other game-mode ranking.
+- Mark old game-mode selections as historical-only, keep their original snapshots separate, and retain the Official/legacy Shugo implementations behind `LEADERBOARD_SOURCE_MODE=mode-specific` for restoration.
+- Credit [Shugo.GG's public leaderboard](https://shugo.gg/leaderboard) in the analyzer and report conservative source/freshness metadata, including the actual top-500 refresh timestamp.
+- Namespace CP full-build/aggregate caches by source, type and region; namespace official character IDs by region without a schema migration.
+- Replace the 30-minute mode traversal with six-hour region/class prefetch, refresh guards and reusable discovery across continuation batches.
+
+### Fixed
+
+- Missing region in character cache identity; cache-first responses dropping builds/source metadata; duplicated prefetch fetching with incorrect shared function arguments; discovery scope leaking into pagination/error handling.
+- Prevent empty/error/challenge/schema-changed CP responses from masquerading as valid zero-player analyses, and prevent filtered populations from overwriting unfiltered aggregates.
+
+### Security
+
+- Update Next.js and its ESLint configuration from `15.5.23` to `15.5.27` within the existing patch line. The direct dependency path `daeva → next` no longer has the critical Windows server RCE ([GHSA-p293-qw3h-jr36](https://github.com/advisories/GHSA-p293-qw3h-jr36)) or AVIF image optimization RCE ([GHSA-2xp9-vwfh-vxw4](https://github.com/advisories/GHSA-2xp9-vwfh-vxw4)).
+- Production dependency audit still reports four high and one moderate finding involving transitive `nanoid`, `postcss`, `sharp` and `source-map-js`. These remain for a separate dependency review; no forced or major upgrade was applied. The audit's suggested Next.js 16 upgrade for nested PostCSS is outside this patch update.
+
+### Release status
+
+- Package and displayed version are `0.11.0-beta`. This remains a beta release using a temporary Combat Power discovery source.
+- The `1.0.0` gate remains unchanged: intended official mode-specific live analysis must return and be validated. This temporary source does not satisfy that gate.
+
 ## [0.10.0-beta] - 2026-08-16
 
 ### Added

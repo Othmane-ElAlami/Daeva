@@ -7,13 +7,13 @@ Open-source AION 2 build and meta analyzer that studies leaderboard data to iden
 
 > **Beta**
 >
-> Daeva is currently in beta. The core analyzer and fallback systems are production-deployed, but the upstream AION 2 leaderboard API is currently unavailable, preventing full live-data validation.
+> Daeva remains in beta. NCSOFT's mode-specific ranking API is unavailable. Daeva temporarily discovers high-Combat-Power characters through [Shugo.GG's public Combat Power leaderboard](https://shugo.gg/leaderboard) and fetches their builds from official character APIs. Combat Power is not a Nightmare, Abyss, Arena, Raid or other game-mode ranking. This temporary source does not satisfy the `1.0.0` gate.
 >
 > See the [Changelog](CHANGELOG.md) for recent updates.
 
 ## What Daeva Does
 
-Daeva helps you understand the meta by analyzing high-ranking players across all leaderboards. It provides data-driven recommendations on:
+Daeva currently analyzes the highest-Combat-Power available characters of a selected class and region. Historical game-mode snapshots remain separately viewable. It provides data-driven recommendations on:
 
 - Top active and passive skills
 - Must-have stigma combinations
@@ -29,23 +29,22 @@ Daeva uses a resilient scraping and aggregation architecture:
 
 `Leaderboard Provider` → `Player Build Fetch` → `Aggregation` → `Analyzer`
 
-Because upstream APIs can be unreliable, Daeva follows a resilience ladder to ensure you always have access to data:
+The temporary discovery strategy is:
 
-1. **Official**: Live data directly from the official AION 2 API.
-2. **Shugo Fallback**: Alternative provider if official APIs are constrained.
-3. **Full-Build D1 Cache**: Cloudflare D1 cache serving instantly from background prefetch.
-4. **Historical Meta Snapshot**: Stored aggregate snapshot if all live data is unavailable.
-5. **Explicit Unavailable State**: If there's truly no data, Daeva tells you, rather than fabricating player builds.
+1. **Shugo Combat Power**: Public CP-ranked characters, with upstream class, region, server and faction filtering.
+2. **Full-build D1 cache**: Fresh or stale snapshots of the same CP region/class population, retained for up to seven days.
+3. **Historical aggregate snapshot**: The same population's stored aggregates, with Quick Build disabled.
+4. **Explicit unavailable state**: No fabricated or silently substituted players.
+
+Build data (equipment, active/stigma/passive skills, arcana, runes, stones, ItemLevel and CP) comes from NCSOFT's character and item APIs. A transport proxy is used only if direct official requests fail. The old Official and mode-specific Shugo providers remain intact. Set `LEADERBOARD_SOURCE_MODE=mode-specific` when official rankings return to restore the original discovery strategy and selectors.
 
 ## Data Freshness
 
-The UI clearly indicates the health of the data source you are viewing:
+Shugo includes characters whose profiles have been opened there. CP updates on profile lookups; the top 500 of each region is refreshed nightly. This is a discovery sample, not a census of every character. Global, Korea and Taiwan run different game versions and are analyzed separately.
 
-- **Live Data**: Full live synchronization.
-- **Partial Data**: Live synchronization with some servers failing.
-- **Cached Data**: Cache under 2 days old.
-- **Stale Cache**: Cache 2–7 days old.
-- **Historical Snapshot**: Cached aggregate data >7 days old, used as an ultimate fallback.
+The analyzer credits **Shugo.GG** and labels the basis **Combat Power**. It shows the known top-500 refresh timestamp and states that individual entry freshness varies. Response `generatedAt` is not treated as the time every score updated. Official profile CP can differ from the stored discovery CP; rank order uses discovery CP. Cache timestamps describe when builds were fetched, not when the whole leaderboard updated.
+
+Historical Nightmare/Abyss/Arena/etc. aggregates keep their original mode and timestamp. They are never merged into current CP results. Historical aggregates cannot provide player-level Quick Build templates. See [the source contract and pipeline audit](docs/data-sources.md).
 
 ## Local Development Setup
 
@@ -66,8 +65,15 @@ npm install
 The app uses a Cloudflare D1 database (`player-cache`) for caching player equipment. To set up the local SQLite database, run this once:
 
 ```bash
-npx wrangler d1 execute player-cache --local --command="CREATE TABLE IF NOT EXISTS player_cache (character_id TEXT NOT NULL, server_id TEXT NOT NULL, region TEXT, equip_data TEXT NOT NULL, equip_details TEXT NOT NULL, fetched_at INTEGER NOT NULL, PRIMARY KEY (character_id, server_id))"
+npx wrangler d1 execute player-cache --local --command="CREATE TABLE IF NOT EXISTS player_cache (character_id TEXT NOT NULL, server_id TEXT NOT NULL, region TEXT, equip_data TEXT NOT NULL, equip_details TEXT NOT NULL, item_level REAL, fetched_at INTEGER NOT NULL, PRIMARY KEY (character_id, server_id))"
+npx wrangler d1 execute player-cache --local --file=migrations/add_prefetch_cache.sql
+npx wrangler d1 execute player-cache --local --file=migrations/add_meta_snapshots.sql
+npx wrangler d1 execute player-cache --local --file=migrations/add_rate_limits.sql
+npx wrangler d1 execute player-cache --local --file=migrations/add_admin_events.sql
+npx wrangler d1 execute player-cache --local --file=migrations/add_login_attempts.sql
 ```
+
+For an existing `player_cache` without `item_level`, apply `migrations/add_item_level.sql` once. CP cache namespaces use the existing schema; no CP migration is needed.
 
 ### 3. Environment Variables
 
@@ -77,6 +83,9 @@ Create `.env.local` for the Next.js app and `.dev.vars` for the Wrangler local e
 # .dev.vars / .env.local
 ADMIN_SECRET=your-secret-here
 API_URL=http://localhost:3000
+LEADERBOARD_SOURCE_MODE=combat-power
+PREFETCH_CACHE_TTL_MINUTES=420
+PREFETCH_MIN_REFRESH_MINUTES=330
 ```
 
 Note: `CLOUDFLARE_API_TOKEN` is used exclusively for CI/CD deployment via GitHub Actions. Never commit it.
@@ -91,9 +100,13 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ## Background Prefetching
 
-Daeva includes a background prefetch system that runs entirely in-process on the Node.js server. On startup, it warms the cache by fetching the top 100 players for every class and leaderboard.
+A GitHub Actions workflow calls the authenticated `POST /api/prefetch/run` endpoint every six hours (03:17, 09:17, 15:17 and 21:17 UTC). It runs 8 classes × 3 supported regions, using direct upstream class filtering. A region-wide top 100 cannot supply the top 100 of each class, so those queries are intentionally distinct.
 
-This is governed by a scheduled workflow that calls the `POST /api/prefetch/run` endpoint (authenticated via `ADMIN_SECRET`) every 30 minutes, storing results in the D1 cache. This ensures instant load times for users. During upstream outages, Daeva gracefully falls back to the latest cached data.
+There is no server-startup prefetch loop. Each region runs its classes sequentially with delays. Official item requests are budgeted, and authenticated continuation batches reuse the original discovery list. A complete job publishes its D1 snapshot; continuation work never overwrites the previous full snapshot. Recently completed jobs are skipped for 330 minutes; cached builds are fresh for 420 minutes and available as stale fallback for up to seven days.
+
+Requests have a four-minute timeout and each region job a 90-minute timeout. Live local enrichment took about 150 seconds per continuation batch, so the previous two-minute timeout would retry healthy work unnecessarily. The 12-batch and failure-threshold safeguards remain.
+
+Six-hour refreshes track profile lookups between Shugo's nightly top-500 checks without the old 30-minute, 56-mode-job traffic. Prefetch can be disabled with `PREFETCH_ENABLED=false`. Source configuration also controls future mode-specific jobs. Reassess cadence/cache TTL when official rankings return.
 
 ## Scripts & Testing
 
@@ -112,6 +125,10 @@ We welcome contributions! Please read our [Contributing Guidelines](CONTRIBUTING
 ## Security
 
 Please review our [Security Policy](SECURITY.md) for information on supported versions and how to privately report vulnerabilities. Do not file public issues for security exploits.
+
+## Data attribution
+
+Player discovery uses [Shugo.GG](https://shugo.gg/leaderboard). Daeva is an independent community project; Shugo.GG does not endorse or maintain it. Official character/build data is provided by NCSOFT.
 
 ## Disclaimer
 

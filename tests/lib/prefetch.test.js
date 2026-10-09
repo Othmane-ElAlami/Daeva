@@ -187,7 +187,7 @@ describe("D1 PrefetchCache — clearPrefetchCache", () => {
 describe("PrefetchConfig", () => {
   it("returns sensible defaults", () => {
     expect(loadConfig().enabled).toBe(true);
-    expect(loadConfig().cacheTtlMinutes).toBe(45);
+    expect(loadConfig().cacheTtlMinutes).toBe(420);
   });
 
   it("reads PREFETCH_ENABLED=false from env", () => {
@@ -211,7 +211,7 @@ describe("PrefetchConfig", () => {
   it("ignores invalid PREFETCH_CACHE_TTL_MINUTES — falls back to default", () => {
     process.env.PREFETCH_CACHE_TTL_MINUTES = "not-a-number";
     try {
-      expect(loadConfig().cacheTtlMinutes).toBe(45);
+      expect(loadConfig().cacheTtlMinutes).toBe(420);
     } finally {
       delete process.env.PREFETCH_CACHE_TTL_MINUTES;
     }
