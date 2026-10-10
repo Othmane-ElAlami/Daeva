@@ -163,11 +163,11 @@ describe("D1 PrefetchCache — getAllPrefetchEntries", () => {
     expect(entries.find((e) => e.class === "gladiator").ageMinutes).toBeCloseTo(10, 0);
   });
 
-  it("returns empty array (not throws) when D1 throws", async () => {
+  it("reports status as unavailable when D1 throws rather than claiming an empty cache", async () => {
     const db = {
       prepare: vi.fn().mockReturnValue({ all: vi.fn().mockRejectedValue(new Error("D1")) }),
     };
-    expect(await getAllPrefetchEntries(db)).toEqual([]);
+    await expect(getAllPrefetchEntries(db)).rejects.toThrow("status is unavailable");
   });
 });
 

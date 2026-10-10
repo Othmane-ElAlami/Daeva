@@ -10,6 +10,10 @@ vi.mock("@/lib/admin-auth", () => ({
   unauthorizedResponse: vi.fn(() => new Response("Unauthorized", { status: 401 })),
 }));
 vi.mock("@/lib/prefetch/runner", () => ({ runPrefetchJob: vi.fn() }));
+vi.mock("@/lib/prefetch/refresh", () => ({
+  claimRefresh: vi.fn(async () => ({ acquired: true, token: "test-lease" })),
+  updateRefresh: vi.fn(async () => {}),
+}));
 vi.mock("@/lib/prefetch/cache", () => ({
   getPrefetchCache: vi.fn(),
   setPrefetchCache: vi.fn(),
@@ -51,6 +55,21 @@ const SUCCESS_RESULT = {
   errors: [],
   budgetUsed: 50,
 };
+const cpBuild = (index, region = "GLOBAL") => ({
+  characterId: `cp-${index}`,
+  serverId: 1001,
+  region,
+  class: "chanter",
+  source: "Shugo Combat Power",
+  rank: index + 1,
+  leaderboardCombatPower: 10000 - index,
+  combatPower: 10000 - index,
+  equipItems: [{ itemName: "Staff" }],
+  activeSkills: [],
+  stigmaSkills: [],
+  passiveSkills: [],
+  arcanas: [],
+});
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -153,6 +172,33 @@ describe("POST /api/prefetch/run — happy path", () => {
 });
 
 describe("POST /api/prefetch/run — edge cases", () => {
+  it.each([
+    [1, 0, undefined],
+    [100, 1, undefined],
+    [100, 0, "partial"],
+    [0, 0, undefined],
+  ])(
+    "rejects an incomplete CP final result (%s builds, %s errors, %s health)",
+    async (count, errors, buildHealth) => {
+      vi.stubEnv("LEADERBOARD_SOURCE_MODE", "combat-power");
+      runPrefetchJob.mockResolvedValueOnce({
+        ...SUCCESS_RESULT,
+        builds: Array.from({ length: count }, (_, index) => cpBuild(index)),
+        stats: { total: count, sourceMeta: { total: 1000, buildHealth } },
+        errors: Array.from({ length: errors }, () => "Item unavailable"),
+      });
+      const response = await POST(
+        req({ cls: "chanter", leaderboard: "combat-power", region: "GLOBAL" })
+      );
+      expect(response.status).toBe(502);
+      expect(await response.json()).toMatchObject({
+        success: false,
+        complete: false,
+        code: "INCOMPLETE_POPULATION",
+      });
+      expect(setPrefetchCache).not.toHaveBeenCalled();
+    }
+  );
   it("skips recently refreshed populations without fetching upstream", async () => {
     getPrefetchCache.mockResolvedValueOnce({
       fetchedAt: Date.now(),
@@ -180,7 +226,7 @@ describe("POST /api/prefetch/run — edge cases", () => {
       getPrefetchCache.mockResolvedValueOnce({
         fetchedAt: Date.now(),
         source: "Shugo Combat Power",
-        builds: Array.from({ length: count }, () => SUCCESS_RESULT.builds[0]),
+        builds: Array.from({ length: count }, (_, index) => cpBuild(index)),
         data: { sourceMeta: { total, buildHealth } },
       });
       const body = await (
@@ -193,6 +239,12 @@ describe("POST /api/prefetch/run — edge cases", () => {
 
   it("stores CP builds under their region and source", async () => {
     vi.stubEnv("LEADERBOARD_SOURCE_MODE", "combat-power");
+    runPrefetchJob.mockResolvedValueOnce({
+      ...SUCCESS_RESULT,
+      builds: [cpBuild(0, "TW")],
+      stats: { total: 1, sourceMeta: { total: 1 } },
+      sourceMeta: { total: 1, source: "Shugo Combat Power" },
+    });
     const res = await POST(req({ cls: "chanter", leaderboard: "combat-power", region: "TW" }));
     expect(res.status).toBe(200);
     expect(runPrefetchJob).toHaveBeenCalledWith(
@@ -201,7 +253,11 @@ describe("POST /api/prefetch/run — edge cases", () => {
       expect.anything(),
       expect.objectContaining({ region: "TW", sourceMode: "combat-power" })
     );
-    expect(setPrefetchCache.mock.calls[0].slice(6)).toEqual(["Shugo Combat Power", "TW"]);
+    expect(setPrefetchCache.mock.calls[0].slice(6)).toEqual([
+      "Shugo Combat Power",
+      "TW",
+      { preparedBy: "scheduled" },
+    ]);
   });
 
   it("does not publish or re-stamp a partially continued prefetch", async () => {
@@ -228,12 +284,12 @@ describe("POST /api/prefetch/run — edge cases", () => {
   });
 
   it("returns 500 and error message when runner throws", async () => {
-    runPrefetchJob.mockRejectedValue(new Error("upstream timeout"));
+    runPrefetchJob.mockRejectedValue(new Error("Upstream Timeout"));
     const res = await POST(req({ cls: "gladiator", leaderboard: "nightmare" }));
     expect(res.status).toBe(500);
     const body = await res.json();
     expect(body.success).toBe(false);
-    expect(body.error).toBe("upstream timeout");
+    expect(body.error).toBe("Upstream Timeout");
     expect(typeof body.durationMs).toBe("number");
   });
 

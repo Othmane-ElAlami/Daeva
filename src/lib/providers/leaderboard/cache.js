@@ -2,9 +2,9 @@ import { getPrefetchCache } from "../../prefetch/cache.js";
 import { COMBAT_POWER, CP_SOURCE } from "../../discovery-config.js";
 import { matchesPlayerFilters } from "../../regions.js";
 import { ProviderError } from "./base.js";
+import { inspectPopulation, MAX_STALE_MS } from "../../prefetch/population.js";
 
 const SOURCE_NAME = "Cache";
-const MAX_STALE_MS = 7 * 24 * 60 * 60 * 1000;
 
 export async function getLeaderboard(config) {
   const { db, cls, lbType, region = "GLOBAL", startPage = 1 } = config;
@@ -17,27 +17,8 @@ export async function getLeaderboard(config) {
   if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > MAX_STALE_MS)
     throw new ProviderError("Cache expired (older than 7 days).", SOURCE_NAME);
   const cp = lbType === COMBAT_POWER;
-  if (
-    cp &&
-    (cached.source !== CP_SOURCE ||
-      cached.builds.some(
-        (build) =>
-          build.region !== region ||
-          build.class !== cls ||
-          !build.characterId ||
-          !build.serverId ||
-          build.source !== CP_SOURCE ||
-          !Number.isFinite(build.leaderboardCombatPower) ||
-          build.leaderboardCombatPower <= 0 ||
-          !Number.isInteger(build.rank) ||
-          build.rank <= 0 ||
-          !Array.isArray(build.equipItems) ||
-          !build.equipItems.length ||
-          ![build.activeSkills, build.stigmaSkills, build.passiveSkills, build.arcanas].every(
-            Array.isArray
-          )
-      ))
-  )
+  const population = inspectPopulation(cached, cls, lbType, region);
+  if (cp && !population.valid)
     throw new ProviderError("Cached Combat Power population metadata does not match.", SOURCE_NAME);
   const builds = cached.builds.filter((build) => matchesPlayerFilters(build, config));
   if (!builds.length) throw new ProviderError("No cached builds match these filters.", SOURCE_NAME);
@@ -74,10 +55,19 @@ export async function getLeaderboard(config) {
       health: cached.isExpired ? "stale" : "complete",
       ageMs,
       fetchedAt: cached.fetchedAt,
+      expiresAt: cached.expiresAt,
+      ...(cp
+        ? {
+            populationComplete: population.complete,
+            buildCount: population.buildCount,
+            expectedCount: population.expectedCount,
+            ...(!population.complete ? { buildHealth: "partial" } : {}),
+          }
+        : {}),
       season: null,
       pagesFetched: 0,
       hasMore: false,
-      dataLabel: cached.isExpired ? "Stale full-build cache" : "Recent full-build cache",
+      dataLabel: `${cached.isExpired ? "Stale" : "Recent"} ${cp && !population.complete ? "build sample" : "full-build cache"}`,
     },
   };
 }

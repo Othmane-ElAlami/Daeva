@@ -29,7 +29,13 @@ Daeva uses a resilient scraping and aggregation architecture:
 
 `Leaderboard Provider` → `Player Build Fetch` → `Aggregation` → `Analyzer`
 
-The temporary discovery strategy is:
+The analyzer first reuses a healthy prefetched Combat Power dataset from D1.
+Fresh data is served directly, and a complete stale dataset remains usable for
+up to seven days while the scheduled job prepares its replacement. A recent
+smaller interactive sample can satisfy a smaller request, but is explicitly
+labeled as an incomplete population.
+
+When no matching usable dataset can satisfy the request, discovery uses:
 
 1. **Shugo Combat Power**: Public CP-ranked characters, with upstream class, region, server and faction filtering.
 2. **Full-build D1 cache**: Fresh or stale snapshots of the same CP region/class population, retained for up to seven days.
@@ -107,7 +113,19 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 A GitHub Actions workflow calls the authenticated `POST /api/prefetch/run` endpoint every six hours (03:17, 09:17, 15:17 and 21:17 UTC). It runs 8 classes × 3 supported regions, using direct upstream class filtering. A region-wide top 100 cannot supply the top 100 of each class, so those queries are intentionally distinct.
 
-There is no server-startup prefetch loop. Region/class jobs run with at most three active jobs and delays between batches. Official item requests are budgeted, and authenticated continuation batches reuse the original discovery list. A complete job publishes its D1 snapshot; continuation work never overwrites the previous full snapshot. Recently completed jobs are skipped for 330 minutes; cached builds are fresh for 420 minutes and available as stale fallback for up to seven days.
+There is no server-startup prefetch loop. Region/class jobs run with at most three active jobs and delays between batches. Official item requests are budgeted, and authenticated continuation batches reuse the original discovery list. Complete official character caches younger than six hours are reused. A complete job publishes its full player builds and aggregates to D1; continuation work and failed/partial refreshes preserve the previous full snapshot. Recently completed jobs are skipped for 330 minutes; datasets are fresh for 420 minutes and remain usable as stale data for up to seven days.
+
+The analyzer consumes these datasets before live discovery or enrichment. Cold
+requests and scheduled refreshes coordinate using a lease in the existing D1
+cache row. Other users wait for the shared result instead of starting duplicate
+enrichment. No extra cache table or migration is required.
+
+The authenticated `GET /api/prefetch/status` reports all 24 populations, build and
+target counts, completeness, last success/attempt, expiry, nominal next scheduled
+run and failures. Coverage counts complete populations, not small samples.
+The workflow verifies successful JSON and explicit completion; upstream 503s,
+empty responses and partial final results fail the job rather than appearing
+as successful warming.
 
 Requests have a four-minute timeout and each region/class job a 90-minute timeout. At most 120 batches are allowed for a top-100 job, accommodating one complete player per invocation on 50-subrequest plans. Continuations must advance, and the interactive analyzer also has a batch cap; a request that cannot complete a build falls back or returns an explicit unavailable state.
 

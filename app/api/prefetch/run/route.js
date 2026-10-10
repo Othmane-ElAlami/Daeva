@@ -21,6 +21,8 @@ import { COMBAT_POWER, CP_SOURCE, isHistoricalOnly } from "@/lib/discovery-confi
 import { normalizeRegion } from "@/lib/regions";
 import { validateContinuation } from "@/lib/analyzer";
 import { saveMetaSnapshot } from "@/lib/meta-snapshots";
+import { inspectPopulation } from "@/lib/prefetch/population";
+import { claimRefresh, updateRefresh } from "@/lib/prefetch/refresh";
 
 export const runtime = "edge";
 
@@ -33,7 +35,10 @@ export async function POST(request) {
   const config = loadConfig(env);
   if (!config.enabled) {
     return Response.json(
-      { error: "Prefetch system is disabled via PREFETCH_ENABLED=false" },
+      {
+        error: "Prefetch system is disabled via PREFETCH_ENABLED=false",
+        code: "PREFETCH_DISABLED",
+      },
       { status: 503 }
     );
   }
@@ -81,22 +86,19 @@ export async function POST(request) {
     return Response.json({ error: "Invalid continuation population." }, { status: 400 });
 
   const startTime = Date.now();
+  let refreshToken = null;
 
   try {
     if (!body.continuation) {
       const cached = await getPrefetchCache(env.DB, cls, leaderboard, false, region);
-      const available = cached?.data?.sourceMeta?.total;
-      const target = Number.isInteger(available) && available > 0 ? Math.min(100, available) : 100;
       const complete =
         leaderboard !== COMBAT_POWER ||
-        (cached?.source === CP_SOURCE &&
-          Array.isArray(cached.builds) &&
-          cached.builds.length >= target &&
-          cached.data?.sourceMeta?.buildHealth !== "partial");
+        inspectPopulation(cached, cls, leaderboard, region).complete;
       // A small interactive sample must not suppress the scheduled top-100 job.
       if (cached && complete && Date.now() - cached.fetchedAt < config.minRefreshMinutes * 60000)
         return Response.json({
           success: true,
+          complete: true,
           skipped: true,
           reason: "Recently refreshed",
           class: cls,
@@ -107,6 +109,18 @@ export async function POST(request) {
           durationMs: Date.now() - startTime,
         });
     }
+    const lease = await claimRefresh(
+      env.DB,
+      analysisConfig,
+      body.continuation?.refreshToken,
+      "scheduled"
+    );
+    if (!lease.acquired)
+      return Response.json(
+        { success: false, inProgress: true, class: cls, leaderboard, region, retryAfterMs: 5000 },
+        { status: 202 }
+      );
+    refreshToken = lease.token;
     const result = await runPrefetchJob(cls, leaderboard, env.DB, {
       region,
       sourceMode: config.sourceMode,
@@ -114,6 +128,44 @@ export async function POST(request) {
       env,
     });
 
+    if (result.continuation) {
+      await updateRefresh(env.DB, analysisConfig, refreshToken, "running", {
+        buildCount: result.builds.length,
+      });
+    } else {
+      const population = inspectPopulation(
+        {
+          data: result.stats,
+          builds: result.builds,
+          source: leaderboard === COMBAT_POWER ? CP_SOURCE : result.sourceMeta?.source,
+        },
+        cls,
+        leaderboard,
+        region
+      );
+      if (leaderboard === COMBAT_POWER && (!population.complete || result.errors.length)) {
+        await updateRefresh(env.DB, analysisConfig, refreshToken, "failed", {
+          buildCount: population.buildCount,
+          error: "Incomplete population; previous dataset retained.",
+        });
+        return Response.json(
+          {
+            success: false,
+            complete: false,
+            code: "INCOMPLETE_POPULATION",
+            class: cls,
+            leaderboard,
+            region,
+            playerCount: population.buildCount,
+            expectedCount: population.expectedCount,
+            errorCount: result.errors.length,
+            error:
+              "Prefetch did not prepare a complete population. The previous dataset is retained.",
+          },
+          { status: 502 }
+        );
+      }
+    }
     if (!result.continuation && result.stats && result.builds.length > 0) {
       const ttlMs = config.cacheTtlMinutes * 60_000;
       await setPrefetchCache(
@@ -124,17 +176,24 @@ export async function POST(request) {
         result.builds,
         ttlMs,
         leaderboard === COMBAT_POWER ? CP_SOURCE : result.sourceMeta?.source || "prefetch",
-        region
+        region,
+        { preparedBy: "scheduled" }
       );
       await saveMetaSnapshot(env.DB, { cls, lbType: leaderboard, region }, result.stats);
+      await updateRefresh(env.DB, analysisConfig, refreshToken, "complete", {
+        buildCount: result.builds.length,
+      });
     }
 
     return Response.json({
       success: true,
+      complete: !result.continuation && result.builds.length > 0,
       class: cls,
       leaderboard,
       region,
-      continuation: result.continuation || null,
+      continuation: result.continuation
+        ? { ...result.continuation, ...(refreshToken ? { refreshToken } : {}) }
+        : null,
       playerCount: result.playerCount ?? result.builds.length,
       errorCount: result.errors.length,
       budgetUsed: result.budgetUsed,
@@ -144,11 +203,16 @@ export async function POST(request) {
     });
   } catch (err) {
     const isUpstreamFailure = err.name === "AllProvidersFailedError";
+    await updateRefresh(env.DB, analysisConfig, refreshToken, "failed", {
+      error: "Upstream preparation failed; previous dataset retained.",
+    }).catch(() => {});
     return Response.json(
       {
         success: false,
         class: cls,
         leaderboard,
+        region,
+        code: isUpstreamFailure ? "UPSTREAM_UNAVAILABLE" : "PREFETCH_FAILED",
         error: err.message,
         durationMs: Date.now() - startTime,
       },

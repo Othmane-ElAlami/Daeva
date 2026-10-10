@@ -134,8 +134,11 @@ No migration is required. Existing TEXT fields carry explicit namespaces:
   character/server/region, class, source, rank, scores and build timestamps.
 - Legacy full-build and historical rows: original mode keys unchanged.
 
-Full snapshots expire according to their TTL and remain usable for at most
-seven days. Cache health describes the stored build snapshot's age, not exact
+Interactive CP analysis checks these full-build rows before live discovery.
+Fresh complete datasets are returned directly; complete stale datasets are
+served for at most seven days and refreshed by the existing schedule. Recent
+healthy smaller samples may satisfy a smaller request, but retain explicit
+incomplete-population metadata. Cache health describes the stored build snapshot's age, not exact
 upstream CP freshness. Historical aggregates retain their original mode and
 timestamp; they provide no player-level Quick Build.
 
@@ -144,8 +147,21 @@ with one query per region/class (24 populations). A top-100 unfiltered region
 response cannot supply the top 100 of each of eight classes. Region/class jobs
 run with at most three active jobs and delays between batches. Discovery is reused across
 authenticated continuation requests. Only completed jobs publish the full
-snapshot. Retry handling, admin authentication, disabled/upstream-down 503s,
-bounded continuations and failure thresholds remain in place.
+snapshot. An explicit completeness record in the existing `data` JSON includes
+the actual build count, target count (100 or a genuinely smaller available
+population), and preparation origin. SQL guards prevent incomplete or malformed
+results from replacing a complete dataset. Healthy official character caches
+younger than six hours are reused during scheduled enrichment.
+
+A refresh lease in that same row coordinates cold interactive requests and
+scheduled jobs, expires after ten minutes without a renewed continuation, and
+never changes the last usable build snapshot or its freshness. Waiting browser
+requests retry for up to ten minutes instead of duplicating enrichment.
+Admin status lists all 24 populations and reports completeness, freshness,
+expiry, nominal next scheduled run, failed attempts and expired leases. It omits
+lease tokens and credentials. Upstream 503s and empty/malformed/incomplete final
+responses now fail the workflow; only an explicit disabled-prefetch response
+is skipped.
 
 A real local top-100 run took about 150 seconds per 970-fetch-budget batch.
 Scheduled requests allow four minutes, with a 90-minute region/class-job timeout.

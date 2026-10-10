@@ -3,6 +3,8 @@ import { AllProvidersFailedError } from "./providers/leaderboard/base.js";
 import { fetchCharacterBuild, loadCachedBuilds } from "./character-builds.js";
 import { COMBAT_POWER, populationKey, isHistoricalOnly } from "./discovery-config.js";
 import { characterKey, matchesPlayerFilters } from "./regions.js";
+import { getPrefetchCache } from "./prefetch/cache.js";
+import { cachedAnalysis } from "./prefetch/population.js";
 import {
   leaderboardTypes,
   classRankingIds,
@@ -61,6 +63,13 @@ export async function analyze(
   config,
   { db = null, onEvent = () => {}, refresh = false, liveOnly = false, budget = createBudget() } = {}
 ) {
+  if (!refresh && !liveOnly && !config.continuation && config.lbType === COMBAT_POWER) {
+    const cached = cachedAnalysis(
+      await getPrefetchCache(db, config.cls, config.lbType, true, config.region),
+      config
+    );
+    if (cached) return cached;
+  }
   const builds = [];
   const processedPlayers = [];
   const errors = [];
@@ -238,6 +247,12 @@ export async function analyze(
   }
   const madeProgress =
     processedPlayers.length > initialProcessedCount || pending.length < initialPlayerCount;
+  if (errors.length)
+    sourceMeta = {
+      ...sourceMeta,
+      buildHealth: "partial",
+      errorCount: (sourceMeta.errorCount || 0) + errors.length,
+    };
   if (budgetStopped && !madeProgress) {
     errors.push("The request budget cannot complete another character build.");
     sourceMeta = { ...sourceMeta, buildHealth: "partial", hasMore: false };

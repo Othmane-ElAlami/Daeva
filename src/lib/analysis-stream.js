@@ -27,7 +27,7 @@ export async function readAnalysisStream(response, onEvent = () => {}) {
       throw new AnalysisError("The connection returned incomplete data.", true);
     }
     if (event.type === "error") throw new AnalysisError(event.message || "Analysis unavailable.");
-    if (event.type === "done" || event.type === "continue") return event;
+    if (["done", "continue", "pending"].includes(event.type)) return event;
     onEvent(event);
     return null;
   }
@@ -105,6 +105,7 @@ export async function runAnalysis(
   } = {}
 ) {
   let checkpoint = continuation;
+  let pendingRequests = 0;
   try {
     for (let batch = 0; batch < 120; batch++) {
       let terminal;
@@ -123,6 +124,16 @@ export async function runAnalysis(
         onEvent(terminal);
         return terminal;
       }
+      if (terminal.type === "pending") {
+        if (++pendingRequests > 200)
+          throw new AnalysisError(
+            "This population is still being prepared. Please try again shortly."
+          );
+        onEvent({ type: "retry", message: terminal.message });
+        await wait(Math.max(1000, Math.min(terminal.retryAfterMs || 3000, 10000)));
+        batch--;
+        continue;
+      }
       if (
         !terminal.identity ||
         !terminal.sourceMeta ||
@@ -138,10 +149,14 @@ export async function runAnalysis(
       )
         throw new AnalysisError("Analysis could not advance. Please try again later.");
       checkpoint = Object.fromEntries(
-        ["identity", "sourceMeta", "players", "processedPlayers", "processedCount"].map((key) => [
-          key,
-          terminal[key],
-        ])
+        [
+          "identity",
+          "sourceMeta",
+          "players",
+          "processedPlayers",
+          "processedCount",
+          "refreshToken",
+        ].map((key) => [key, terminal[key]])
       );
       onEvent(terminal);
     }

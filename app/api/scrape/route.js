@@ -4,6 +4,8 @@ import { analyze, validateContinuation } from "@/lib/analyzer";
 import { historicalSnapshot, saveMetaSnapshot } from "@/lib/meta-snapshots";
 import { getPrefetchCache, setPrefetchCache } from "@/lib/prefetch/cache";
 import { loadConfig } from "@/lib/prefetch/config";
+import { cachedAnalysis } from "@/lib/prefetch/population";
+import { claimRefresh, updateRefresh } from "@/lib/prefetch/refresh";
 import { getSourceMode, isHistoricalOnly, COMBAT_POWER, CP_SOURCE } from "@/lib/discovery-config";
 import { normalizeRegion, normalizeFaction } from "@/lib/regions";
 import { leaderboardTypes, classRankingIds, createWorkerBudget } from "@/lib/scraper-shared";
@@ -113,6 +115,9 @@ export async function POST(req) {
 
   const encoder = new TextEncoder();
   let active = true;
+  let refreshToken = null;
+  const sharedPopulation =
+    config.lbType === COMBAT_POWER && serverId === "all" && race === "all" && runeFilter === "all";
   const stream = new ReadableStream({
     async start(controller) {
       const send = (event) => {
@@ -145,6 +150,35 @@ export async function POST(req) {
             });
           return;
         }
+        if (!config.continuation) {
+          const cached = cachedAnalysis(
+            await getPrefetchCache(db, config.cls, config.lbType, true, region),
+            config
+          );
+          if (cached) {
+            await logScrapeEvent(db, "analysis_done", {
+              cls: config.cls,
+              lbType: config.lbType,
+              region,
+              count: cached.count,
+              source: "Cache",
+            });
+            done(cached);
+            return;
+          }
+        }
+        if (sharedPopulation) {
+          const lease = await claimRefresh(db, config, config.continuation?.refreshToken);
+          if (!lease.acquired) {
+            send({
+              type: "pending",
+              retryAfterMs: 3000,
+              message: "This population is being prepared. Waiting for cached builds…",
+            });
+            return;
+          }
+          refreshToken = lease.token;
+        }
         log.info(
           "leaderboard",
           `Discovering top ${config.limit} ${config.cls} players by ${leaderboardTypes[config.lbType].label} (${region})...`
@@ -164,13 +198,20 @@ export async function POST(req) {
           },
         });
         if (result.continuation) {
+          await updateRefresh(db, config, refreshToken, "running", {
+            buildCount: result.builds.length,
+          });
           await logScrapeEvent(db, "analysis_continue", {
             cls: config.cls,
             lbType: config.lbType,
             region,
             processed: result.builds.length,
           });
-          send({ type: "continue", ...result.continuation });
+          send({
+            type: "continue",
+            ...result.continuation,
+            ...(refreshToken ? { refreshToken } : {}),
+          });
           return;
         }
         if (result.errors.length)
@@ -178,6 +219,7 @@ export async function POST(req) {
             "build",
             `${result.errors.length} character/item fetches were incomplete. Showing ${result.count} available builds.`
           );
+        let cachePublicationFailed = false;
         if (result.sourceMeta.source !== "Cache") {
           try {
             if (
@@ -186,25 +228,42 @@ export async function POST(req) {
               runeFilter === "all" &&
               (config.lbType === COMBAT_POWER || region === "all")
             ) {
-              await saveMetaSnapshot(db, config, result.stats);
-              const existing = await getPrefetchCache(db, config.cls, config.lbType, true, region);
-              if (!existing || existing.builds.length <= result.builds.length) {
-                await setPrefetchCache(
-                  db,
-                  config.cls,
-                  config.lbType,
-                  result.stats,
-                  result.builds,
-                  loadConfig(env).cacheTtlMinutes * 60000,
-                  config.lbType === COMBAT_POWER ? CP_SOURCE : result.sourceMeta.source,
-                  region
-                );
-              }
+              const saved = await setPrefetchCache(
+                db,
+                config.cls,
+                config.lbType,
+                result.stats,
+                result.builds,
+                loadConfig(env).cacheTtlMinutes * 60000,
+                config.lbType === COMBAT_POWER ? CP_SOURCE : result.sourceMeta.source,
+                region
+              );
+              if (config.lbType !== COMBAT_POWER || (saved.stored && saved.complete))
+                await saveMetaSnapshot(db, config, result.stats);
             }
           } catch (error) {
+            cachePublicationFailed = true;
             console.error("[analysis-cache] Save failed:", error.message);
           }
         }
+        await updateRefresh(
+          db,
+          config,
+          refreshToken,
+          cachePublicationFailed || result.sourceMeta.buildHealth === "partial"
+            ? "failed"
+            : result.builds.length >= Math.min(100, result.sourceMeta.total || 100)
+              ? "complete"
+              : "sample",
+          {
+            buildCount: result.count,
+            error: cachePublicationFailed
+              ? "Cache publication failed. Existing cached data is retained."
+              : result.errors.length
+                ? "Some character builds were incomplete."
+                : null,
+          }
+        );
         await logScrapeEvent(db, "analysis_done", {
           cls: config.cls,
           lbType: config.lbType,
@@ -214,6 +273,9 @@ export async function POST(req) {
         });
         done(result);
       } catch (error) {
+        await updateRefresh(db, config, refreshToken, "failed", {
+          error: "Population preparation failed. The previous dataset is retained.",
+        }).catch(() => {});
         if (error.name === "AllProvidersFailedError") {
           let snapshot;
           try {

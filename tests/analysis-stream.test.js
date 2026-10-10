@@ -23,7 +23,7 @@ describe("analysis stream framing", () => {
         pull(controller) {
           if (reads++ === 0)
             controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(done)}\n\n`));
-          else controller.error(new TypeError("network error"));
+          else controller.error(new TypeError("Network Error"));
         },
       })
     );
@@ -49,6 +49,20 @@ describe("analysis stream framing", () => {
 });
 
 describe("analysis connection recovery", () => {
+  it("waits for a shared population without launching a duplicate enrichment or losing its lease", async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(sse({ ...checkpoint(5), refreshToken: "owned-lease" }))
+      .mockResolvedValueOnce(
+        sse({ type: "pending", retryAfterMs: 3000, message: "Preparing cached builds" })
+      )
+      .mockResolvedValueOnce(sse(done));
+    const wait = vi.fn();
+    await expect(runAnalysis(config, { fetcher, wait })).resolves.toEqual(done);
+    expect(JSON.parse(fetcher.mock.calls[1][1].body).continuation.refreshToken).toBe("owned-lease");
+    expect(fetcher.mock.calls[1][1].body).toBe(fetcher.mock.calls[2][1].body);
+    expect(wait).toHaveBeenCalledExactlyOnceWith(3000);
+  });
   it("retries the same continuation after an interrupted batch and retains player progress", async () => {
     const fetcher = vi
       .fn()
@@ -78,7 +92,7 @@ describe("analysis connection recovery", () => {
     }
   );
   it.each([
-    () => Promise.reject(new TypeError("network error")),
+    () => Promise.reject(new TypeError("Network Error")),
     () => Promise.resolve(interrupted()),
     () => Promise.resolve(new Response("data: {broken\n\n")),
   ])("bounds retries and keeps the last checkpoint for Resume Scan", async (failedResponse) => {

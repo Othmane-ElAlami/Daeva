@@ -1,5 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
-import { populationKey, parsePopulationKey } from "../discovery-config.js";
+import { populationKey, parsePopulationKey, COMBAT_POWER } from "../discovery-config.js";
+import { inspectPopulation, populationTarget } from "./population.js";
 // Prefetch System — D1-Backed Cache
 // ─────────────────────────────────────────────────────────────────────────────
 // Reads and writes prefetched leaderboard data in the D1 `prefetch_cache`
@@ -49,24 +50,53 @@ export async function setPrefetchCache(
   builds,
   ttlMs,
   source = "prefetch",
-  region = "GLOBAL"
+  region = "GLOBAL",
+  { preparedBy = "interactive" } = {}
 ) {
+  if (!db) return { stored: false };
   const now = Date.now();
-  await db
+  const cp = leaderboard === COMBAT_POWER;
+  const population = inspectPopulation({ data, builds, source }, cls, leaderboard, region);
+  if (cp && (!population.valid || data?.sourceMeta?.buildHealth === "partial"))
+    return { stored: false, reason: "Incomplete or malformed build data" };
+  const storedData = cp ? { ...data, population: { ...population, preparedBy } } : data;
+  // The SQL guard makes this safe even when two refreshes finish together.
+  // Legacy rows without explicit completeness are evaluated from their count,
+  // discovery total and build health. A partial sample cannot replace a full row.
+  const priorComplete = `CASE WHEN json_valid(prefetch_cache.data) AND json_valid(prefetch_cache.builds)
+    THEN json_array_length(prefetch_cache.builds) >=
+      CASE WHEN json_extract(prefetch_cache.data, '$.sourceMeta.total') BETWEEN 1 AND 99
+        THEN json_extract(prefetch_cache.data, '$.sourceMeta.total') ELSE 100 END
+      AND COALESCE(json_extract(prefetch_cache.data, '$.sourceMeta.buildHealth'), '') != 'partial'
+      AND COALESCE(json_extract(prefetch_cache.data, '$.population.complete'), 1) = 1
+    ELSE 0 END`;
+  const result = await db
     .prepare(
-      `INSERT OR REPLACE INTO prefetch_cache (class, leaderboard, data, builds, fetched_at, expires_at, source)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      cp
+        ? `INSERT INTO prefetch_cache (class, leaderboard, data, builds, fetched_at, expires_at, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(class, leaderboard) DO UPDATE SET
+         data = json_set(excluded.data, '$.refresh', json_extract(prefetch_cache.data, '$.refresh')),
+         builds = excluded.builds, fetched_at = excluded.fetched_at,
+         expires_at = excluded.expires_at, source = excluded.source
+       WHERE ? = 1 OR (NOT (${priorComplete}) AND
+         CASE WHEN json_valid(prefetch_cache.builds) THEN json_array_length(prefetch_cache.builds)
+         ELSE 0 END <= ?)`
+        : `INSERT OR REPLACE INTO prefetch_cache (class, leaderboard, data, builds, fetched_at, expires_at, source)
+          VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       cls,
       populationKey(leaderboard, region),
-      JSON.stringify(data),
+      JSON.stringify(storedData),
       JSON.stringify(builds),
       now,
       now + ttlMs,
-      source
+      source,
+      ...(cp ? [population.complete ? 1 : 0, population.buildCount] : [])
     )
     .run();
+  return { stored: (result.meta?.changes ?? result.changes ?? 1) > 0, ...population };
 }
 
 /**
@@ -76,22 +106,50 @@ export async function getAllPrefetchEntries(db) {
   try {
     const { results } = await db
       .prepare(
-        "SELECT class, leaderboard, fetched_at, expires_at, source FROM prefetch_cache ORDER BY fetched_at DESC"
+        `SELECT class, leaderboard, fetched_at, expires_at, source,
+          json_array_length(builds) AS build_count,
+          json_extract(data, '$.sourceMeta') AS source_meta,
+          json_extract(data, '$.population') AS population,
+          json_extract(data, '$.refresh.status') AS refresh_status,
+          json_extract(data, '$.refresh.origin') AS refresh_origin,
+          json_extract(data, '$.refresh.startedAt') AS refresh_started,
+          json_extract(data, '$.refresh.leaseExpiresAt') AS refresh_expires,
+          json_extract(data, '$.refresh.updatedAt') AS refresh_updated,
+          json_extract(data, '$.refresh.error') AS refresh_error,
+          json_extract(data, '$.refresh.lastSuccessAt') AS last_success
+         FROM prefetch_cache ORDER BY fetched_at DESC`
       )
       .all();
     const now = Date.now();
-    return results.map((r) => ({
-      class: r.class,
-      ...parsePopulationKey(r.leaderboard),
-      cacheKey: r.leaderboard,
-      fetchedAt: r.fetched_at,
-      expiresAt: r.expires_at,
-      source: r.source,
-      isExpired: now > r.expires_at,
-      ageMinutes: Math.round((now - r.fetched_at) / 60_000),
-    }));
+    return results.map((r) => {
+      const meta = JSON.parse(r.source_meta || "{}");
+      const recorded = JSON.parse(r.population || "{}");
+      const expectedCount = populationTarget({ sourceMeta: meta });
+      const complete =
+        recorded.complete ?? (r.build_count >= expectedCount && meta.buildHealth !== "partial");
+      return {
+        class: r.class,
+        ...parsePopulationKey(r.leaderboard),
+        cacheKey: r.leaderboard,
+        fetchedAt: r.fetched_at,
+        expiresAt: r.expires_at,
+        source: r.source,
+        isExpired: now > r.expires_at,
+        ageMinutes: Math.round((now - r.fetched_at) / 60_000),
+        buildCount: r.build_count || 0,
+        expectedCount,
+        complete,
+        preparedBy: recorded.preparedBy || "unknown",
+        lastSuccessfulRun: r.last_success || (complete ? r.fetched_at : null),
+        refreshStatus: r.refresh_status || null,
+        refreshStartedAt: r.refresh_started || null,
+        refreshLeaseExpiresAt: r.refresh_expires || null,
+        lastAttemptAt: r.refresh_updated || r.refresh_started || null,
+        lastError: r.refresh_error || null,
+      };
+    });
   } catch {
-    return [];
+    throw new Error("Prefetch cache status is unavailable.");
   }
 }
 

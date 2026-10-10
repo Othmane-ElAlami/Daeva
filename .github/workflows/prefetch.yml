@@ -52,6 +52,7 @@ jobs:
                 '{cls:$cls,leaderboard:$lb,region:$region}' > /tmp/prefetch_body.json
               batch=0
               previous_processed=0
+              waiting=0
               while true; do
                 batch=$((batch + 1))
                 rm -f /tmp/prefetch_response.json
@@ -66,13 +67,28 @@ jobs:
                 if [ "$CURL_EXIT" -ne 0 ]; then
                   echo "✗ $cls/$lb — curl error ($CURL_EXIT)"
                   failed=$((failed + 1)); break
-                elif [ "$HTTP_CODE" = "503" ]; then
-                  echo "⊘ $cls/$lb — SKIPPED (prefetch disabled / upstream down)"
+                elif [ "$HTTP_CODE" = "202" ] && jq -s -e 'length == 1 and (.[0].inProgress == true)' /tmp/prefetch_response.json >/dev/null; then
+                  waiting=$((waiting + 1))
+                  if [ "$waiting" -ge 360 ]; then
+                    echo "✗ Population preparation wait limit reached"
+                    failed=$((failed + 1)); break
+                  fi
+                  batch=$((batch - 1))
+                  sleep 5; continue
+                elif [ "$HTTP_CODE" = "503" ] && jq -s -e 'length == 1 and (.[0].code == "PREFETCH_DISABLED")' /tmp/prefetch_response.json >/dev/null; then
+                  echo "⊘ $cls/$lb — SKIPPED (prefetch disabled)"
                   skipped=$((skipped + 1)); break
                 elif [ "$HTTP_CODE" != "200" ]; then
                   echo "✗ $cls/$lb — HTTP $HTTP_CODE"
                   cat /tmp/prefetch_response.json 2>/dev/null || true
                   echo ""
+                  failed=$((failed + 1)); break
+                fi
+                # Empty/malformed responses and partial final results are failures,
+                # even if the Worker sent an HTTP 200 header before terminating.
+                if ! jq -s -e 'length == 1 and (.[0] | .success == true and (.skipped == true or .continuation != null or .complete == true))' \
+                  /tmp/prefetch_response.json >/dev/null; then
+                  echo "✗ $cls/$lb — incomplete or malformed prefetch response"
                   failed=$((failed + 1)); break
                 fi
                 jq -r '"  players: \(.playerCount), errors: \(.errorCount), duration: \(.durationMs)ms"' /tmp/prefetch_response.json

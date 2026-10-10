@@ -14,6 +14,7 @@ import { parseCombatPowerResponse } from "../src/lib/providers/leaderboard/shugo
 import { getLeaderboard } from "../src/lib/providers/leaderboard/index.js";
 import { analyze } from "../src/lib/analyzer.js";
 import { loadCachedBuild, loadCachedBuilds } from "../src/lib/character-builds.js";
+import { claimRefresh, updateRefresh } from "../src/lib/prefetch/refresh.js";
 import { extractBuild, createBudget, createWorkerBudget } from "../src/lib/scraper-shared.js";
 import {
   resultLabel,
@@ -26,6 +27,8 @@ import {
 vi.mock("@cloudflare/next-on-pages", () => ({ getRequestContext: vi.fn() }));
 import { getRequestContext } from "@cloudflare/next-on-pages";
 import { POST } from "../app/api/scrape/route.js";
+import { POST as prefetchPOST } from "../app/api/prefetch/run/route.js";
+import { GET as prefetchStatus } from "../app/api/prefetch/status/route.js";
 
 const fixture = (name) =>
   JSON.parse(readFileSync(new URL(`./fixtures/shugo-combat-power/${name}.json`, import.meta.url)));
@@ -350,8 +353,10 @@ describe("provider failures and historical populations", () => {
       expect(done.sourceMeta.health).toBe(stale ? "stale" : "complete");
       expect(done.stats.leaderboardType).toBe("combat-power");
       expect(canQuickBuild(done.stats, done.builds)).toBe(true);
-      expect(global.fetch.mock.calls).toHaveLength(1);
-      expect(global.fetch.mock.calls[0][0]).toContain("/leaderboard/combat-power?");
+      // Fresh healthy samples satisfy a matching small request directly. Stale
+      // incomplete samples remain a fallback after live discovery fails.
+      expect(global.fetch.mock.calls).toHaveLength(stale ? 1 : 0);
+      if (stale) expect(global.fetch.mock.calls[0][0]).toContain("/leaderboard/combat-power?");
     }
   );
   async function seedSnapshot(type) {
@@ -722,6 +727,240 @@ describe("official build enrichment, ranking and continuation", () => {
     const result = await analyze({ ...config, limit: 1 }, { db });
     expect(result.sourceMeta.source).toBe("Cache");
     expect(result.count).toBe(1);
+  });
+});
+
+describe("prefetched populations and refresh safety", () => {
+  function completePipeline(total = players.length) {
+    const official = mockOfficialPipeline();
+    const fetch = vi.fn(async (url) => {
+      if (url.includes("/leaderboard/combat-power")) {
+        const response = fixture("global");
+        return Response.json({
+          ...response,
+          entries: response.entries.slice(0, total),
+          total,
+          totalPages: 1,
+          hasMore: false,
+        });
+      }
+      return official(url);
+    });
+    vi.stubGlobal("fetch", fetch);
+    return fetch;
+  }
+  function prefetchRequest(continuation) {
+    getRequestContext.mockReturnValue({
+      env: { DB: db, ADMIN_SECRET: "prefetch-tests", LEADERBOARD_SOURCE_MODE: "combat-power" },
+    });
+    return new Request("http://test/api/prefetch/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer prefetch-tests" },
+      body: JSON.stringify({
+        cls: "chanter",
+        leaderboard: "combat-power",
+        region: "GLOBAL",
+        continuation,
+      }),
+    });
+  }
+  async function warmPopulation() {
+    let body;
+    do {
+      const response = await prefetchPOST(prefetchRequest(body?.continuation));
+      expect(response.status).toBe(200);
+      body = await response.json();
+    } while (body.continuation);
+    expect(body.complete).toBe(true);
+    return getPrefetchCache(db, "chanter", "combat-power", true, "GLOBAL");
+  }
+  it("scheduled prefetch stores complete enriched builds and repeated interactive requests reuse them directly", async () => {
+    const fetch = completePipeline();
+    const cached = await warmPopulation();
+    expect(cached.data.population).toMatchObject({
+      complete: true,
+      buildCount: 10,
+      expectedCount: 10,
+      preparedBy: "scheduled",
+    });
+    expect(cached.builds[0]).toMatchObject({
+      activeSkills: expect.any(Array),
+      stigmaSkills: expect.any(Array),
+      equipItems: expect.any(Array),
+    });
+    expect(cached.builds[0].stigmaSkills).toHaveLength(13);
+    fetch.mockClear();
+    for (let index = 0; index < 2; index++) {
+      db.sqlite.prepare("DELETE FROM rate_limits").run();
+      const result = await events({ limit: 10 });
+      const done = result.events.find((e) => e.type === "done");
+      expect(done).toMatchObject({
+        count: 10,
+        budgetUsed: 0,
+        sourceMeta: { source: "Cache", populationComplete: true },
+      });
+      expect(done.builds).toEqual(cached.builds);
+      expect(canQuickBuild(done.stats, done.builds)).toBe(true);
+    }
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("serves a stale complete population quickly while preserving its timestamp for scheduled refresh", async () => {
+    const fetch = completePipeline();
+    await warmPopulation();
+    const fetchedAt = Date.now() - 8 * 3600000;
+    db.sqlite
+      .prepare("UPDATE prefetch_cache SET fetched_at = ?, expires_at = ?")
+      .run(fetchedAt, fetchedAt + 7 * 3600000);
+    fetch.mockClear();
+    const done = (await events()).events.find((e) => e.type === "done");
+    expect(done.sourceMeta).toMatchObject({
+      source: "Cache",
+      health: "stale",
+      fetchedAt,
+      refreshDue: true,
+    });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("does not replace a full population with an incomplete sample, malformed builds or failed refresh", async () => {
+    completePipeline();
+    const cached = await warmPopulation();
+    const sample = await setPrefetchCache(
+      db,
+      "chanter",
+      "combat-power",
+      {
+        ...cached.data,
+        population: undefined,
+        sourceMeta: { ...cached.data.sourceMeta, total: 4000 },
+      },
+      cached.builds.slice(0, 1),
+      10000,
+      "Shugo Combat Power",
+      "GLOBAL"
+    );
+    expect(sample.stored).toBe(false);
+    const invalid = await setPrefetchCache(
+      db,
+      "chanter",
+      "combat-power",
+      cached.data,
+      [{ ...cached.builds[0], characterId: "" }],
+      10000,
+      "Shugo Combat Power",
+      "GLOBAL"
+    );
+    expect(invalid.stored).toBe(false);
+    const fetchedAt = Date.now() - 6 * 3600000;
+    db.sqlite.prepare("UPDATE prefetch_cache SET fetched_at = ?").run(fetchedAt);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({}, { status: 503 }))
+    );
+    expect((await prefetchPOST(prefetchRequest())).status).toBe(503);
+    const retained = await getPrefetchCache(db, "chanter", "combat-power", true, "GLOBAL");
+    expect(retained.builds).toEqual(cached.builds);
+    expect(retained.fetchedAt).toBe(fetchedAt);
+    expect(retained.expiresAt).toBe(cached.expiresAt);
+    const status = await (
+      await prefetchStatus(
+        new Request("http://test/api/prefetch/status", {
+          headers: { Authorization: "Bearer prefetch-tests" },
+        })
+      )
+    ).json();
+    expect(status.failedPopulations).toEqual([
+      expect.objectContaining({
+        class: "chanter",
+        region: "GLOBAL",
+        buildCount: 10,
+        complete: true,
+      }),
+    ]);
+    expect(status.populations).toHaveLength(24);
+    expect(JSON.stringify(status)).not.toContain("prefetch-tests");
+    expect(JSON.stringify(status)).not.toContain("owner");
+  });
+  it("coordinates a population in D1 while region and class leases remain independent", async () => {
+    const leases = await Promise.all([claimRefresh(db, config), claimRefresh(db, config)]);
+    expect(leases.filter((lease) => lease.acquired)).toHaveLength(1);
+    const owner = leases.find((lease) => lease.acquired).token;
+    expect((await claimRefresh(db, { ...config, region: "TW" })).acquired).toBe(true);
+    expect((await claimRefresh(db, { ...config, cls: "cleric" })).acquired).toBe(true);
+    expect((await claimRefresh(db, config, owner)).acquired).toBe(true);
+    await updateRefresh(db, config, owner, "failed");
+    expect((await claimRefresh(db, config)).acquired).toBe(true);
+  });
+  it("reports a failed cache publication while retaining the previous full dataset", async () => {
+    completePipeline();
+    const cached = await warmPopulation();
+    const fetchedAt = Date.now() - 8 * 86400000;
+    const expiresAt = fetchedAt + 7 * 3600000;
+    db.sqlite
+      .prepare("UPDATE prefetch_cache SET fetched_at = ?, expires_at = ?")
+      .run(fetchedAt, expiresAt);
+    const prepare = db.prepare;
+    db.prepare = (sql) => {
+      if (sql.includes("builds = excluded.builds")) throw new Error("Cache write failed");
+      return prepare(sql);
+    };
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      let result;
+      let continuation;
+      do {
+        result = await events({ continuation });
+        continuation = result.events.find((e) => e.type === "continue");
+      } while (continuation);
+      const done = result.events.find((e) => e.type === "done");
+      expect(done.count).toBe(10);
+      expect(done.sourceMeta.source).toBe("Shugo Combat Power");
+      const retained = await getPrefetchCache(db, "chanter", "combat-power", true, "GLOBAL");
+      expect(retained.builds).toEqual(cached.builds);
+      expect(retained.fetchedAt).toBe(fetchedAt);
+      expect(retained.expiresAt).toBe(expiresAt);
+      expect(retained.data.refresh).toMatchObject({
+        status: "failed",
+        error: "Cache publication failed. Existing cached data is retained.",
+      });
+    } finally {
+      log.mockRestore();
+    }
+  });
+  it("a concurrent cold request waits for the shared dataset instead of duplicating upstream work", async () => {
+    const official = completePipeline(1);
+    let unblock;
+    let discovered;
+    const gate = new Promise((resolve) => {
+      unblock = resolve;
+    });
+    const started = new Promise((resolve) => {
+      discovered = resolve;
+    });
+    const fetch = vi.fn(async (url) => {
+      if (url.includes("/leaderboard/combat-power")) {
+        discovered();
+        await gate;
+      }
+      return official(url);
+    });
+    vi.stubGlobal("fetch", fetch);
+    const request = (ip) =>
+      new Request("http://test/api/scrape", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "cf-connecting-ip": ip },
+        body: JSON.stringify({ ...config, limit: 1 }),
+      });
+    const first = await POST(request("first-user"));
+    await started;
+    const second = await POST(request("second-user"));
+    expect(await second.text()).toContain('"type":"pending"');
+    expect(fetch).toHaveBeenCalledTimes(1);
+    unblock();
+    expect(await first.text()).toContain('"type":"done"');
+    fetch.mockClear();
+    const third = await POST(request("third-user"));
+    expect(await third.text()).toContain('"source":"Cache"');
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
 

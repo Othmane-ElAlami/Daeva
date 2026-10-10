@@ -17,6 +17,8 @@ export async function runPrefetchJob(cls, lbType, db, options = {}) {
       race: "all",
       runeFilter: "all",
     },
-    { db, refresh: true, liveOnly: true, budget: createWorkerBudget(options.env) }
+    // Discovery is always live. Reuse complete official character caches younger
+    // than six hours, including builds a recent interactive scan already fetched.
+    { db, liveOnly: true, budget: createWorkerBudget(options.env) }
   );
 }
