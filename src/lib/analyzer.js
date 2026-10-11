@@ -142,7 +142,7 @@ export async function analyze(
   const workLimit =
     enrichExternally || (budget.hardLimit <= 50 && sourceMeta.source !== "Cache") ? 5 : Infinity;
   const cacheGroupSize = enrichExternally || budget.hardLimit <= 50 ? 5 : 40;
-  while (players.length && processedPlayers.length < config.limit) {
+  while (processedPlayers.length < config.limit && (players.length || sourceMeta.hasMore)) {
     const candidates = players.filter((player) => {
       const key = characterKey(player);
       if (seen.has(key)) return false;
@@ -264,6 +264,13 @@ export async function analyze(
         ...next.meta,
         pagesFetched: page,
         leaderboardType: config.lbType,
+        ...(config.lbType === COMBAT_POWER
+          ? {
+              discoveryDuplicatesIgnored:
+                (sourceMeta.discoveryDuplicatesIgnored || 0) +
+                (next.meta.discoveryDuplicatesIgnored || 0),
+            }
+          : {}),
       };
     } catch (error) {
       if (error instanceof subrequestBudgetExhausted) throw error;

@@ -161,6 +161,17 @@ removes repeated official-response parsing from Worker CPU-limited requests;
 the analyzer and D1 cache architecture remain the same. No extra service, table
 or migration is required. Manual prefetch retains the original Worker path.
 
+Some Shugo lookup records duplicate a valid character while adding invalid ID
+punctuation, such as a backtick or trailing backslash. The CP parser discards
+such a record only when one unambiguous valid ID in the same response has the
+same official `profileimg.plaync.com` image character/server key and matching
+region, name, class and faction. It keeps the valid source record's ID, score
+and rank. Unmatched/ambiguous malformed identifiers remain typed provider
+failures, and the official profile ID guard stays strict. Continuations can
+fetch the next page after the remaining current page is consumed, filling the
+top 100 with unique valid builds within the existing three-page cap. Source
+and authenticated prefetch status metadata report `discoveryDuplicatesIgnored`.
+
 The API accepts a complete runner build only for the next discovered character,
 with matching region, class, IDs, CP rank/score and a recent original timestamp.
 Uploads populate the existing versioned player cache, preserving every

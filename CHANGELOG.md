@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Ignore corrupt CP lookup duplicates only when a valid entry with the same official profile key and character metadata exists. Preserve the valid entry's ID, CP and rank, and continue bounded pagination to prepare 100 unique builds; standalone malformed IDs remain provider failures.
 - Fetch scheduled CP character/item builds on the GitHub Actions runner using the shared official enrichment code, keeping discovery, authenticated upload validation, cache reuse and complete D1 publication on Cloudflare. Retry transient character failures once without restarting the population; preserve the last usable dataset on unresolved failures.
 - Keep scheduled CP continuation work bounded, check freshness using cache metadata only, and publish aggregates in a separate invocation. Stop unhealthy refreshes early, report cumulative errors and allow one bounded retry using completed character caches.
 - Encode large CP build snapshots losslessly in the existing D1 JSON column, retaining every gear/skill value while reducing repeated field names to fit row limits.

@@ -494,71 +494,98 @@ describe("provider failures and historical populations", () => {
 });
 
 describe("official build enrichment, ranking and continuation", () => {
-  it("runner prefetch uploads 100 complete builds without Worker enrichment and reuses the published population", async () => {
-    const discovery = fixture("global");
-    discovery.entries = Array.from({ length: 100 }, (_, index) => ({
-      ...discovery.entries[0],
-      characterId: `runner-${index}`,
-      rank: index + 1,
-      combatPower: 300000 - index,
-    }));
-    Object.assign(discovery, { total: 100, limit: 100, totalPages: 1, hasMore: false });
-    const upstream = vi.fn(async (url) => {
-      expect(url).toContain("/api/leaderboard/combat-power?");
-      return Response.json(discovery);
-    });
-    vi.stubGlobal("fetch", upstream);
-    getRequestContext.mockReturnValue({
-      env: { DB: db, ADMIN_SECRET: "runner-test", LEADERBOARD_SOURCE_MODE: "combat-power" },
-    });
-    const fetchedAt = Date.now() - 60000;
-    const enrich = vi.fn(async (player) => ({
-      build: { ...sampleBuild, ...buildPlayerMetadata(player), buildFetchedAt: fetchedAt },
-      warnings: [],
-    }));
-    const options = {
-      apiUrl: "http://localhost",
-      secret: "runner-test",
-      cls: "chanter",
-      region: "GLOBAL",
-      request: (url, init) => prefetchPOST(new Request(url, init)),
-      enrich,
-      wait: async () => {},
-      log: () => {},
-    };
-    expect(await runCombatPowerPrefetch(options)).toMatchObject({
-      complete: true,
-      buildCount: 100,
-      enrichedCount: 100,
-      requests: 102,
-    });
-    expect(enrich).toHaveBeenCalledTimes(100);
-    const cached = await getPrefetchCache(db, "chanter", "combat-power", false, "GLOBAL");
-    expect(cached.data.population).toMatchObject({
-      complete: true,
-      buildCount: 100,
-      preparedBy: "scheduled",
-    });
-    expect(cached.builds[0].buildFetchedAt).toBe(fetchedAt);
-    expect(cached.builds.map((build) => build.rank)).toEqual(
-      Array.from({ length: 100 }, (_, i) => i + 1)
-    );
-    expect(canQuickBuild(cached.data, cached.builds)).toBe(true);
-    enrich.mockClear();
-    expect(await runCombatPowerPrefetch(options)).toMatchObject({
-      complete: true,
-      buildCount: 100,
-      enrichedCount: 0,
-      requests: 1,
-    });
-    expect(enrich).not.toHaveBeenCalled();
-    const result = await events({ limit: 100 });
-    expect(result.events.find((event) => event.type === "done")).toMatchObject({
-      count: 100,
-      sourceMeta: { source: "Cache" },
-    });
-    expect(upstream).toHaveBeenCalledOnce();
-  });
+  it.each([false, true])(
+    "runner prefetch uploads 100 unique builds and reuses the population (corrupt duplicate: %s)",
+    async (duplicate) => {
+      const discovery = fixture("global");
+      discovery.entries = Array.from({ length: 100 }, (_, index) => ({
+        ...discovery.entries[0],
+        characterId: `runner-${index}`,
+        rank: index + 1,
+        combatPower: 300000 - index,
+        profileImg: discovery.entries[0].profileImg.replace(
+          "charKey=1000",
+          `charKey=${1000 + index}`
+        ),
+      }));
+      if (duplicate) {
+        discovery.entries.splice(1, 0, { ...discovery.entries[0], characterId: "runner-`0" });
+        discovery.entries.forEach((entry, index) => (entry.rank = index + 1));
+      }
+      const entries = discovery.entries;
+      Object.assign(discovery, {
+        total: entries.length,
+        limit: 100,
+        totalPages: duplicate ? 2 : 1,
+        hasMore: duplicate,
+      });
+      const upstream = vi.fn(async (url) => {
+        expect(url).toContain("/api/leaderboard/combat-power?");
+        const page = Number(new URL(url).searchParams.get("page"));
+        return Response.json({
+          ...discovery,
+          page,
+          hasMore: page === 1 && duplicate,
+          entries: entries.slice((page - 1) * 100, page * 100),
+        });
+      });
+      vi.stubGlobal("fetch", upstream);
+      getRequestContext.mockReturnValue({
+        env: { DB: db, ADMIN_SECRET: "runner-test", LEADERBOARD_SOURCE_MODE: "combat-power" },
+      });
+      const fetchedAt = Date.now() - 60000;
+      const enrich = vi.fn(async (player) => ({
+        build: { ...sampleBuild, ...buildPlayerMetadata(player), buildFetchedAt: fetchedAt },
+        warnings: [],
+      }));
+      const options = {
+        apiUrl: "http://localhost",
+        secret: "runner-test",
+        cls: "chanter",
+        region: "GLOBAL",
+        request: (url, init) => prefetchPOST(new Request(url, init)),
+        enrich,
+        wait: async () => {},
+        log: () => {},
+      };
+      expect(await runCombatPowerPrefetch(options)).toMatchObject({
+        complete: true,
+        buildCount: 100,
+        enrichedCount: 100,
+        requests: 102,
+      });
+      expect(enrich).toHaveBeenCalledTimes(100);
+      const cached = await getPrefetchCache(db, "chanter", "combat-power", false, "GLOBAL");
+      expect(cached.data.population).toMatchObject({
+        complete: true,
+        buildCount: 100,
+        preparedBy: "scheduled",
+      });
+      expect(cached.builds[0].buildFetchedAt).toBe(fetchedAt);
+      expect(cached.builds.map((build) => build.rank)).toEqual(
+        Array.from({ length: 100 }, (_, i) => i + 1 + (duplicate && i > 0 ? 1 : 0))
+      );
+      expect(cached.data.sourceMeta.discoveryDuplicatesIgnored).toBe(duplicate ? 1 : 0);
+      expect((await getAllPrefetchEntries(db))[0].discoveryDuplicatesIgnored).toBe(
+        duplicate ? 1 : 0
+      );
+      expect(canQuickBuild(cached.data, cached.builds)).toBe(true);
+      enrich.mockClear();
+      expect(await runCombatPowerPrefetch(options)).toMatchObject({
+        complete: true,
+        buildCount: 100,
+        enrichedCount: 0,
+        requests: 1,
+      });
+      expect(enrich).not.toHaveBeenCalled();
+      const result = await events({ limit: 100 });
+      expect(result.events.find((event) => event.type === "done")).toMatchObject({
+        count: 100,
+        sourceMeta: { source: "Cache" },
+      });
+      expect(upstream).toHaveBeenCalledTimes(duplicate ? 2 : 1);
+    }
+  );
   it.each(["region", "identity", "timestamp", "details"])(
     "rejects an invalid runner upload (%s) before writing any character cache",
     async (invalid) => {

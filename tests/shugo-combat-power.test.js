@@ -8,6 +8,7 @@ import {
 import { characterApiUrl, normalizeRegion } from "../src/lib/regions.js";
 import { createBudget, subrequestBudgetExhausted } from "../src/lib/scraper-shared.js";
 import { getLeaderboard as selectProvider } from "../src/lib/providers/leaderboard/index.js";
+import { fetchCharacterBuild } from "../src/lib/character-builds.js";
 
 const fixture = (name) =>
   JSON.parse(readFileSync(new URL(`./fixtures/shugo-combat-power/${name}.json`, import.meta.url)));
@@ -24,6 +25,69 @@ afterEach(() => {
 });
 
 describe("Shugo Combat Power public contract", () => {
+  it.each([
+    ["global-malformed-duplicate", "GLOBAL", "templar"],
+    ["tw-malformed-duplicate", "TW", "spiritmaster"],
+  ])("discards only the verified corrupt duplicate in %s", (name, region, cls) => {
+    const data = fixture(name);
+    const result = parseCombatPowerResponse(data, { ...config, region, cls });
+    expect(result.rankings.map((player) => player.characterId)).toEqual([
+      data.entries[0].characterId,
+      data.entries[2].characterId,
+    ]);
+    expect(result.rankings.map((player) => player.rank)).toEqual([
+      data.entries[0].rank,
+      data.entries[2].rank,
+    ]);
+    expect(result.rankings[0].combatPower).toBe(data.entries[0].combatPower);
+    expect(result.meta).toMatchObject({
+      discoveryDuplicatesIgnored: 1,
+      total: data.total,
+      health: "complete",
+    });
+  });
+  it.each(["missing", "name", "profile", "server"])(
+    "rejects a corrupt ID without matching profile evidence (%s)",
+    (invalid) => {
+      const data = fixture("global-malformed-duplicate");
+      if (invalid === "missing") data.entries.shift();
+      if (invalid === "name") data.entries[1].name = "Another Templar";
+      if (invalid === "profile")
+        data.entries[1].profileImg = data.entries[1].profileImg.replace(
+          "profileimg.plaync.com",
+          "example.com"
+        );
+      if (invalid === "server") data.entries[1].serverId = 1503;
+      expect(() => parseCombatPowerResponse(data, { ...config, cls: "templar" })).toThrow(
+        ShugoCombatPowerError
+      );
+    }
+  );
+  it("retains the official ID guard for a corrupt lookup rather than accepting its canonical response", async () => {
+    const data = fixture("global-malformed-duplicate");
+    const info = fixture("global-info");
+    Object.assign(info.profile, {
+      characterId: data.entries[0].characterId,
+      serverId: data.entries[0].serverId,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url) =>
+        Response.json(new URL(url).pathname.endsWith("/info") ? info : fixture("global-equipment"))
+      )
+    );
+    await expect(
+      fetchCharacterBuild(
+        {
+          characterId: data.entries[1].characterId,
+          serverId: data.entries[1].serverId,
+          region: "GLOBAL",
+        },
+        null,
+        createBudget()
+      )
+    ).rejects.toThrow("identifiers do not match");
+  });
   it.each(["GLOBAL", "KR", "TW"])(
     "normalizes captured %s entries without inventing metadata",
     (region) => {

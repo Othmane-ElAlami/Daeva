@@ -1,0 +1,62 @@
+{
+  "region": "TW",
+  "subRegion": null,
+  "sort": "combatPower",
+  "page": 1,
+  "limit": 100,
+  "total": 379,
+  "totalPages": 4,
+  "hasMore": true,
+  "generatedAt": "2026-10-11T21:59:36.703Z",
+  "topRefreshedAt": "2026-10-11T03:39:08.234Z",
+  "entries": [
+    {
+      "rank": 59,
+      "characterId": "sample-TW-spiritmaster-1",
+      "name": "Sample Spiritmaster 1",
+      "serverId": 2016,
+      "serverName": "Kromede",
+      "subRegion": null,
+      "region": "TW",
+      "className": "Spiritmaster",
+      "faction": "asmodian",
+      "level": 50,
+      "gearScore": 6180,
+      "combatPower": 827961,
+      "profileImg": "https://profileimg.plaync.com/game_profile_images/aion2_tw/images?gameServerKey=2016&charKey=1000",
+      "lastSeen": "2026-10-11T18:26:50.003Z"
+    },
+    {
+      "rank": 60,
+      "characterId": "sample-TW-spiritmaster-1\\",
+      "name": "Sample Spiritmaster 1",
+      "serverId": 2016,
+      "serverName": "Kromede",
+      "subRegion": null,
+      "region": "TW",
+      "className": "Spiritmaster",
+      "faction": "asmodian",
+      "level": 50,
+      "gearScore": 6180,
+      "combatPower": 827961,
+      "profileImg": "https://profileimg.plaync.com/game_profile_images/aion2_tw/images?gameServerKey=2016&charKey=1000",
+      "lastSeen": "2026-10-03T05:46:21.179Z"
+    },
+    {
+      "rank": 61,
+      "characterId": "sample-TW-spiritmaster-2",
+      "name": "Sample Spiritmaster 2",
+      "serverId": 1007,
+      "serverName": "Fregion",
+      "subRegion": null,
+      "region": "TW",
+      "className": "Spiritmaster",
+      "faction": "elyos",
+      "level": 50,
+      "gearScore": 6037,
+      "combatPower": 827516,
+      "profileImg": "https://profileimg.plaync.com/game_profile_images/aion2_tw/images?gameServerKey=1007&charKey=1001",
+      "lastSeen": "2026-10-10T10:32:18.387Z"
+    }
+  ]
+}

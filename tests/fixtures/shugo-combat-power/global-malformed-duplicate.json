@@ -1,0 +1,62 @@
+{
+  "region": "GLOBAL",
+  "subRegion": null,
+  "sort": "combatPower",
+  "page": 1,
+  "limit": 100,
+  "total": 5739,
+  "totalPages": 58,
+  "hasMore": true,
+  "generatedAt": "2026-10-11T21:59:33.240Z",
+  "topRefreshedAt": "2026-10-11T03:39:08.234Z",
+  "entries": [
+    {
+      "rank": 1,
+      "characterId": "sample-GLOBAL-templar-1",
+      "name": "Sample Templar 1",
+      "serverId": 1502,
+      "serverName": "Nezekan",
+      "subRegion": "as",
+      "region": "GLOBAL",
+      "className": "Templar",
+      "faction": "elyos",
+      "level": 45,
+      "gearScore": 3436,
+      "combatPower": 220933,
+      "profileImg": "https://profileimg.plaync.com/game_profile_images/aion2global/images?gameServerKey=1502&charKey=1000",
+      "lastSeen": "2026-10-11T21:49:45.761Z"
+    },
+    {
+      "rank": 2,
+      "characterId": "sample-GLOBAL-`templar-1",
+      "name": "Sample Templar 1",
+      "serverId": 1502,
+      "serverName": "Nezekan",
+      "subRegion": "as",
+      "region": "GLOBAL",
+      "className": "Templar",
+      "faction": "elyos",
+      "level": 45,
+      "gearScore": 3402,
+      "combatPower": 214496,
+      "profileImg": "https://profileimg.plaync.com/game_profile_images/aion2global/images?gameServerKey=1502&charKey=1000",
+      "lastSeen": "2026-10-11T15:38:55.790Z"
+    },
+    {
+      "rank": 3,
+      "characterId": "sample-GLOBAL-templar-2",
+      "name": "Sample Templar 2",
+      "serverId": 2301,
+      "serverName": "Israphel",
+      "subRegion": "eu",
+      "region": "GLOBAL",
+      "className": "Templar",
+      "faction": "asmodian",
+      "level": 45,
+      "gearScore": 2957,
+      "combatPower": 174181,
+      "profileImg": "https://profileimg.plaync.com/game_profile_images/aion2global/images?gameServerKey=2301&charKey=1001",
+      "lastSeen": "2026-10-11T21:51:49.211Z"
+    }
+  ]
+}

@@ -22,6 +22,38 @@ function timestamp(value) {
   return value;
 }
 
+const validCharacterId = (id) => /^[A-Za-z0-9_+\/-]+={0,2}$/.test(id);
+
+function officialProfileKey(player) {
+  try {
+    const image = new URL(player.profileImage);
+    const paths = {
+      GLOBAL: "/game_profile_images/aion2global/images",
+      KR: "/game_profile_images/aion2/images",
+      TW: "/game_profile_images/aion2_tw/images",
+    };
+    const charKey = image.searchParams.get("charKey");
+    if (
+      image.protocol !== "https:" ||
+      image.hostname !== "profileimg.plaync.com" ||
+      image.pathname !== paths[player.region] ||
+      image.searchParams.get("gameServerKey") !== String(player.serverId) ||
+      !/^[1-9]\d*$/.test(charKey || "")
+    )
+      return null;
+    return JSON.stringify([
+      player.region,
+      player.serverId,
+      charKey,
+      player.characterName,
+      player.class,
+      player.faction,
+    ]);
+  } catch {
+    return null;
+  }
+}
+
 export function parseCombatPowerResponse(data, config) {
   const region = normalizeRegion(data?.region);
   if (
@@ -51,7 +83,7 @@ export function parseCombatPowerResponse(data, config) {
     config.cls || factionFilter || (config.serverId && config.serverId !== "all")
       ? "filtered"
       : "region";
-  const rankings = data.entries.map((entry) => {
+  const entries = data.entries.map((entry) => {
     if (
       typeof entry.characterId !== "string" ||
       !entry.characterId.trim() ||
@@ -119,6 +151,31 @@ export function parseCombatPowerResponse(data, config) {
       source: CP_SOURCE,
     };
   });
+  // Shugo can retain duplicate lookup records with corrupt ID punctuation.
+  // Discard one only when an unambiguous valid record for the same official
+  // profile image key and character metadata is present in this response.
+  // Keep that record's actual ID, CP and rank; never repair an ID string.
+  const canonical = new Map();
+  const hasMalformedId = entries.some((player) => !validCharacterId(player.characterId));
+  if (hasMalformedId) {
+    for (const player of entries) {
+      const key = officialProfileKey(player);
+      if (!key || !validCharacterId(player.characterId)) continue;
+      if (!canonical.has(key)) canonical.set(key, new Set());
+      canonical.get(key).add(player.characterId);
+    }
+  }
+  let discoveryDuplicatesIgnored = 0;
+  const rankings = hasMalformedId
+    ? entries.filter((player) => {
+        if (validCharacterId(player.characterId)) return true;
+        const matches = canonical.get(officialProfileKey(player));
+        if (!matches || matches.size !== 1)
+          fail("Malformed Combat Power character identifier without a verified duplicate.");
+        discoveryDuplicatesIgnored++;
+        return false;
+      })
+    : entries;
   rankings.sort((a, b) => b.combatPower - a.combatPower || a.rank - b.rank);
   return {
     rankings,
@@ -142,6 +199,7 @@ export function parseCombatPowerResponse(data, config) {
       pageSize: data.limit,
       pagesFetched: 1,
       rankScope,
+      discoveryDuplicatesIgnored,
     },
   };
 }
@@ -188,6 +246,7 @@ export async function getLeaderboard(config, budget) {
   const rankings = [];
   const seen = new Set();
   let meta;
+  let discoveryDuplicatesIgnored = 0;
   for (let page = startPage; page < startPage + pageCount; page++) {
     const params = new URLSearchParams({
       region,
@@ -202,7 +261,8 @@ export async function getLeaderboard(config, budget) {
     if (faction) params.set("faction", faction);
     const data = await requestPage(`${baseUrl}/api/leaderboard/combat-power?${params}`, budget);
     const result = parseCombatPowerResponse(data, { ...config, region, startPage: page });
-    meta = { ...result.meta, pagesFetched: page - startPage + 1 };
+    discoveryDuplicatesIgnored += result.meta.discoveryDuplicatesIgnored;
+    meta = { ...result.meta, discoveryDuplicatesIgnored, pagesFetched: page - startPage + 1 };
     for (const player of result.rankings) {
       const key = characterKey(player);
       if (seen.has(key)) fail("Combat Power pagination returned duplicate characters.");

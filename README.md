@@ -138,6 +138,14 @@ last usable population. Authentication secrets are never included in results.
 
 Each region/class job has a 90-minute timeout. CP runner jobs allow at most 125 API batches, covering up to 100 complete build uploads and a separate publication request. API calls have a one-minute timeout and bounded retries; another refresh's lease is polled for at most 30 minutes. The legacy/manual Worker enrichment path retains its fetch budget, and interactive analysis retains its continuation safeguards. An unresolved refresh never publishes a partial population.
 
+Shugo may retain corrupt duplicate lookup records. Daeva discards one only when
+a valid entry with the same official profile-image character key, region,
+server, name, class and faction is present. Its valid ID, CP and upstream rank
+remain unchanged. Bounded pagination fills the population with unique builds,
+and `discoveryDuplicatesIgnored` records the count in source/status metadata.
+Unmatched malformed IDs still fail discovery; official profile IDs are checked
+when builds are fetched.
+
 Six-hour refreshes track profile lookups between Shugo's nightly top-500 checks without the old 30-minute, 56-mode-job traffic. Prefetch can be disabled with `PREFETCH_ENABLED=false`. Source configuration also controls future mode-specific jobs. Reassess cadence/cache TTL when official rankings return.
 
 ## Scripts & Testing
