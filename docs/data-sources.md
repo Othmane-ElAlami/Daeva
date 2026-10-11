@@ -145,13 +145,30 @@ timestamp; they provide no player-level Quick Build.
 Scheduled CP prefetch runs every six hours at 03:17, 09:17, 15:17 and 21:17 UTC,
 with one query per region/class (24 populations). A top-100 unfiltered region
 response cannot supply the top 100 of each of eight classes. Region/class jobs
-run with at most three active jobs and delays between batches. Discovery is reused across
+run with at most three active jobs. Discovery is reused across
 authenticated continuation requests. Only completed jobs publish the full
 snapshot. An explicit completeness record in the existing `data` JSON includes
 the actual build count, target count (100 or a genuinely smaller available
 population), and preparation origin. SQL guards prevent incomplete or malformed
 results from replacing a complete dataset. Healthy official character caches
 younger than six hours are reused during scheduled enrichment.
+
+The scheduled CP workflow performs missing official enrichment on the GitHub
+Actions runner using `scripts/prefetch-combat-power.mjs` and the shared
+`fetchCharacterBuild` implementation. Worker invocations perform discovery,
+bounded cache reads, authenticated build admission and final publication. This
+removes repeated official-response parsing from Worker CPU-limited requests;
+the analyzer and D1 cache architecture remain the same. No extra service, table
+or migration is required. Manual prefetch retains the original Worker path.
+
+The API accepts a complete runner build only for the next discovered character,
+with matching region, class, IDs, CP rank/score and a recent original timestamp.
+Uploads populate the existing versioned player cache, preserving every
+normalized equipment/skill/arcana/rune/stone field. Only the complete final
+population replaces the full-build snapshot. One retry per failed character
+handles transient official responses without restarting discovery or refetching
+earlier builds; unresolved mismatches remain failures. API requests also have
+bounded retries, progress guards and a 125-batch limit.
 
 A refresh lease in that same row coordinates cold interactive requests and
 scheduled jobs, expires after ten minutes without a renewed continuation, and

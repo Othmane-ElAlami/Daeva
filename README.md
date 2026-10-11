@@ -113,7 +113,7 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 A GitHub Actions workflow calls the authenticated `POST /api/prefetch/run` endpoint every six hours (03:17, 09:17, 15:17 and 21:17 UTC). It runs 8 classes × 3 supported regions, using direct upstream class filtering. A region-wide top 100 cannot supply the top 100 of each class, so those queries are intentionally distinct.
 
-There is no server-startup prefetch loop. Region/class jobs run with at most three active jobs and delays between batches. Official item requests are budgeted, and authenticated continuation batches reuse the original discovery list. Complete official character caches younger than six hours are reused. A complete job publishes its full player builds and aggregates to D1; continuation work and failed/partial refreshes preserve the previous full snapshot. Recently completed jobs are skipped for 330 minutes; datasets are fresh for 420 minutes and remain usable as stale data for up to seven days.
+There is no server-startup prefetch loop. Region/class jobs run with at most three active jobs. The authenticated API owns Shugo discovery, cache reuse, refresh leases and publication. `scripts/prefetch-combat-power.mjs` fetches missing official character/item builds on the GitHub Actions runner, avoiding Worker CPU limits during enrichment. It uses the same build-fetching code as interactive analysis, with two concurrent item requests per character and one character at a time per job. Complete official character caches younger than six hours are reused. A complete job publishes its full player builds and aggregates to D1; continuation work and failed/partial refreshes preserve the previous full snapshot. Recently completed jobs are skipped for 330 minutes; datasets are fresh for 420 minutes and remain usable as stale data for up to seven days.
 
 The analyzer consumes these datasets before live discovery or enrichment. Cold
 requests and scheduled refreshes coordinate using a lease in the existing D1
@@ -130,11 +130,13 @@ as successful warming.
 Scheduled continuation batches carry completed character identities without
 reloading the entire build population. A separate final invocation restores,
 aggregates and publishes the complete dataset; freshness checks read only cache
-metadata. Unresolved build failures stop the refresh immediately. The workflow
-allows one population retry using already completed character caches, within
-the existing batch and job limits.
+metadata. Runner uploads must match the next discovered character's region,
+class, identifiers, rank and leaderboard CP, and retain their actual build-fetch
+timestamp. Missing/mismatched official profiles and incomplete item details are
+retried once per character; unresolved failures stop the refresh and retain the
+last usable population. Authentication secrets are never included in results.
 
-Requests have a four-minute timeout and each region/class job a 90-minute timeout. At most 120 batches are allowed for a top-100 job, accommodating one complete player per invocation on 50-subrequest plans. Continuations must advance, and the interactive analyzer also has a batch cap; a request that cannot complete a build falls back or returns an explicit unavailable state.
+Each region/class job has a 90-minute timeout. CP runner jobs allow at most 125 API batches, covering up to 100 complete build uploads and a separate publication request. API calls have a one-minute timeout and bounded retries; another refresh's lease is polled for at most 30 minutes. The legacy/manual Worker enrichment path retains its fetch budget, and interactive analysis retains its continuation safeguards. An unresolved refresh never publishes a partial population.
 
 Six-hour refreshes track profile lookups between Shugo's nightly top-500 checks without the old 30-minute, 56-mode-job traffic. Prefetch can be disabled with `PREFETCH_ENABLED=false`. Source configuration also controls future mode-specific jobs. Reassess cadence/cache TTL when official rankings return.
 

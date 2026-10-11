@@ -135,7 +135,7 @@ export async function fetchCharacterBuild(
 ) {
   if (player._build) return { build: player._build, warnings: [] };
   const cached = cachedBuild === undefined ? await loadCachedBuild(db, player) : cachedBuild;
-  if (cached && !refresh && Date.now() - cached.buildFetchedAt < 6 * 60 * 60 * 1000)
+  if (!refresh && isFreshBuild(cached))
     return { build: cached, warnings: [], cached: true, resumable: true };
   if (!budget.canAfford(3)) throw new subrequestBudgetExhausted(budget.used, budget.hardLimit);
   const [equipData, infoData] = await Promise.all([
@@ -206,4 +206,9 @@ export async function fetchCharacterBuild(
     warnings,
     resumable: !!db && !warnings.length && equipDetails.length === equipment.length,
   };
+}
+
+export function isFreshBuild(build) {
+  const age = Date.now() - build?.buildFetchedAt;
+  return !!build && Number.isFinite(age) && age >= 0 && age < 6 * 60 * 60 * 1000;
 }

@@ -22,6 +22,7 @@ import { claimRefresh, updateRefresh } from "../src/lib/prefetch/refresh.js";
 import { runPrefetchJob } from "../src/lib/prefetch/runner.js";
 import {
   extractBuild,
+  buildPlayerMetadata,
   aggregate,
   createBudget,
   createWorkerBudget,
@@ -39,6 +40,7 @@ import { getRequestContext } from "@cloudflare/next-on-pages";
 import { POST } from "../app/api/scrape/route.js";
 import { POST as prefetchPOST } from "../app/api/prefetch/run/route.js";
 import { GET as prefetchStatus } from "../app/api/prefetch/status/route.js";
+import { runCombatPowerPrefetch } from "../scripts/prefetch-combat-power.mjs";
 
 const fixture = (name) =>
   JSON.parse(readFileSync(new URL(`./fixtures/shugo-combat-power/${name}.json`, import.meta.url)));
@@ -492,6 +494,152 @@ describe("provider failures and historical populations", () => {
 });
 
 describe("official build enrichment, ranking and continuation", () => {
+  it("runner prefetch uploads 100 complete builds without Worker enrichment and reuses the published population", async () => {
+    const discovery = fixture("global");
+    discovery.entries = Array.from({ length: 100 }, (_, index) => ({
+      ...discovery.entries[0],
+      characterId: `runner-${index}`,
+      rank: index + 1,
+      combatPower: 300000 - index,
+    }));
+    Object.assign(discovery, { total: 100, limit: 100, totalPages: 1, hasMore: false });
+    const upstream = vi.fn(async (url) => {
+      expect(url).toContain("/api/leaderboard/combat-power?");
+      return Response.json(discovery);
+    });
+    vi.stubGlobal("fetch", upstream);
+    getRequestContext.mockReturnValue({
+      env: { DB: db, ADMIN_SECRET: "runner-test", LEADERBOARD_SOURCE_MODE: "combat-power" },
+    });
+    const fetchedAt = Date.now() - 60000;
+    const enrich = vi.fn(async (player) => ({
+      build: { ...sampleBuild, ...buildPlayerMetadata(player), buildFetchedAt: fetchedAt },
+      warnings: [],
+    }));
+    const options = {
+      apiUrl: "http://localhost",
+      secret: "runner-test",
+      cls: "chanter",
+      region: "GLOBAL",
+      request: (url, init) => prefetchPOST(new Request(url, init)),
+      enrich,
+      wait: async () => {},
+      log: () => {},
+    };
+    expect(await runCombatPowerPrefetch(options)).toMatchObject({
+      complete: true,
+      buildCount: 100,
+      enrichedCount: 100,
+      requests: 102,
+    });
+    expect(enrich).toHaveBeenCalledTimes(100);
+    const cached = await getPrefetchCache(db, "chanter", "combat-power", false, "GLOBAL");
+    expect(cached.data.population).toMatchObject({
+      complete: true,
+      buildCount: 100,
+      preparedBy: "scheduled",
+    });
+    expect(cached.builds[0].buildFetchedAt).toBe(fetchedAt);
+    expect(cached.builds.map((build) => build.rank)).toEqual(
+      Array.from({ length: 100 }, (_, i) => i + 1)
+    );
+    expect(canQuickBuild(cached.data, cached.builds)).toBe(true);
+    enrich.mockClear();
+    expect(await runCombatPowerPrefetch(options)).toMatchObject({
+      complete: true,
+      buildCount: 100,
+      enrichedCount: 0,
+      requests: 1,
+    });
+    expect(enrich).not.toHaveBeenCalled();
+    const result = await events({ limit: 100 });
+    expect(result.events.find((event) => event.type === "done")).toMatchObject({
+      count: 100,
+      sourceMeta: { source: "Cache" },
+    });
+    expect(upstream).toHaveBeenCalledOnce();
+  });
+  it.each(["region", "identity", "timestamp", "details"])(
+    "rejects an invalid runner upload (%s) before writing any character cache",
+    async (invalid) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => Response.json(fixture("global")))
+      );
+      getRequestContext.mockReturnValue({
+        env: { DB: db, ADMIN_SECRET: "runner-test", LEADERBOARD_SOURCE_MODE: "combat-power" },
+      });
+      const base = {
+        cls: "chanter",
+        leaderboard: "combat-power",
+        region: "GLOBAL",
+        execution: "runner",
+      };
+      const post = (body) =>
+        prefetchPOST(
+          new Request("http://localhost/api/prefetch/run", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: "Bearer runner-test" },
+            body: JSON.stringify(body),
+          })
+        );
+      const prepared = await (await post(base)).json();
+      const build = {
+        ...sampleBuild,
+        ...buildPlayerMetadata(prepared.enrichPlayer),
+        buildFetchedAt: Date.now(),
+      };
+      if (invalid === "region") build.region = "TW";
+      if (invalid === "identity") build.characterId = "other-character";
+      if (invalid === "timestamp") build.buildFetchedAt -= 11 * 60000;
+      if (invalid === "details") build.arcanas = null;
+      expect(
+        (await post({ ...base, continuation: prepared.continuation, enrichedBuild: build })).status
+      ).toBe(400);
+      expect(db.sqlite.prepare("SELECT COUNT(*) AS count FROM player_cache").get().count).toBe(0);
+    }
+  );
+  it("runner build failure releases the lease and preserves the last complete dataset", async () => {
+    await setPrefetchCache(
+      db,
+      "chanter",
+      "combat-power",
+      { sourceMeta: { total: 1 } },
+      [sampleBuild],
+      -1,
+      "Shugo Combat Power",
+      "GLOBAL"
+    );
+    const before = await getPrefetchCache(db, "chanter", "combat-power", true, "GLOBAL");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(fixture("global")))
+    );
+    getRequestContext.mockReturnValue({
+      env: { DB: db, ADMIN_SECRET: "runner-test", LEADERBOARD_SOURCE_MODE: "combat-power" },
+    });
+    const enrich = vi.fn(async () => {
+      throw new Error("Official profile identifiers do not match discovery.");
+    });
+    await expect(
+      runCombatPowerPrefetch({
+        apiUrl: "http://localhost",
+        secret: "runner-test",
+        cls: "chanter",
+        region: "GLOBAL",
+        request: (url, init) => prefetchPOST(new Request(url, init)),
+        enrich,
+        wait: async () => {},
+        log: () => {},
+      })
+    ).rejects.toThrow("identifiers do not match");
+    expect(enrich).toHaveBeenCalledTimes(2);
+    const after = await getPrefetchCache(db, "chanter", "combat-power", true, "GLOBAL");
+    expect(after.builds).toEqual(before.builds);
+    expect(after.fetchedAt).toBe(before.fetchedAt);
+    expect(after.expiresAt).toBe(before.expiresAt);
+    expect(after.data.refresh).toMatchObject({ status: "failed", leaseExpiresAt: 0 });
+  });
   it("completes 100 fully enriched builds without exceeding Free D1/fetch limits in any batch", async () => {
     const response = fixture("global");
     response.entries = Array.from({ length: 100 }, (_, index) => ({

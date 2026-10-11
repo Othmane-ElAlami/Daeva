@@ -18,6 +18,10 @@ jobs:
         region: [GLOBAL, KR, TW]
         class: [chanter, cleric, sorcerer, spiritmaster, assassin, ranger, templar, gladiator]
     steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "25"
       - name: Refresh supported discovery populations
         env:
           API_URL: ${{ vars.API_URL }}
@@ -33,7 +37,10 @@ jobs:
           jq -e --arg cls "$PREFETCH_CLASS" '.classes | index($cls) != null' /tmp/discovery_config.json >/dev/null
           CLASSES="$PREFETCH_CLASS"
           if [ "$MODE" = "combat-power" ]; then
-            LEADERBOARDS="combat-power"
+            # Fetch official builds on this runner; the API retains discovery,
+            # leases, cache validation and D1 publication. No npm install needed.
+            node scripts/prefetch-combat-power.mjs
+            exit 0
           else
             # Legacy rankings combine regions; run their jobs once.
             if [ "$REGION" != "GLOBAL" ]; then exit 0; fi

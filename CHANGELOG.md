@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fetch scheduled CP character/item builds on the GitHub Actions runner using the shared official enrichment code, keeping discovery, authenticated upload validation, cache reuse and complete D1 publication on Cloudflare. Retry transient character failures once without restarting the population; preserve the last usable dataset on unresolved failures.
 - Keep scheduled CP continuation work bounded, check freshness using cache metadata only, and publish aggregates in a separate invocation. Stop unhealthy refreshes early, report cumulative errors and allow one bounded retry using completed character caches.
 - Encode large CP build snapshots losslessly in the existing D1 JSON column, retaining every gear/skill value while reducing repeated field names to fit row limits.
 - Serve healthy Combat Power D1 datasets before live discovery/enrichment, coordinate concurrent cold requests in the existing cache row, and preserve complete populations when refreshes fail or return partial data.

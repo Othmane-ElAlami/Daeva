@@ -23,6 +23,7 @@ import { validateContinuation } from "@/lib/analyzer";
 import { saveMetaSnapshot } from "@/lib/meta-snapshots";
 import { inspectPopulation, populationTarget } from "@/lib/prefetch/population";
 import { claimRefresh, updateRefresh } from "@/lib/prefetch/refresh";
+import { validRunnerBuild, acceptRunnerBuild } from "@/lib/prefetch/handoff";
 
 export const runtime = "edge";
 
@@ -84,6 +85,25 @@ export async function POST(request) {
   };
   if (body.continuation && !validateContinuation(body.continuation, analysisConfig))
     return Response.json({ error: "Invalid continuation population." }, { status: 400 });
+  const external = body.execution === "runner";
+  if (external && (leaderboard !== COMBAT_POWER || !env.DB))
+    return Response.json(
+      { error: "Runner execution requires a Combat Power D1 population." },
+      { status: 400 }
+    );
+  if (
+    body.enrichedBuild &&
+    (!external || !validRunnerBuild(body.enrichedBuild, body.continuation, analysisConfig))
+  )
+    return Response.json(
+      { error: "Enriched build does not match the pending population." },
+      { status: 400 }
+    );
+  if (body.failed && (!external || !body.continuation))
+    return Response.json(
+      { error: "A runner failure requires its pending continuation." },
+      { status: 400 }
+    );
 
   const startTime = Date.now();
   let refreshToken = null;
@@ -129,10 +149,21 @@ export async function POST(request) {
         { status: 202 }
       );
     refreshToken = lease.token;
+    if (body.failed) {
+      await updateRefresh(env.DB, analysisConfig, refreshToken, "failed", {
+        buildCount: body.continuation.processedCount,
+        error: "Scheduled official build enrichment failed; previous dataset retained.",
+      });
+      return Response.json({ success: false, code: "ENRICHMENT_FAILED" }, { status: 502 });
+    }
+    const continuation = body.enrichedBuild
+      ? await acceptRunnerBuild(env.DB, body.enrichedBuild, body.continuation)
+      : body.continuation;
     const result = await runPrefetchJob(cls, leaderboard, env.DB, {
       region,
       sourceMode: config.sourceMode,
-      continuation: body.continuation,
+      continuation,
+      execution: external ? "runner" : undefined,
       env,
     });
 
@@ -215,6 +246,7 @@ export async function POST(request) {
       durationMs: Date.now() - startTime,
       errors: result.errors.slice(0, 10),
       sourceMeta: result.sourceMeta,
+      ...(result.enrichPlayer ? { enrichPlayer: result.enrichPlayer } : {}),
     });
   } catch (err) {
     const isUpstreamFailure = err.name === "AllProvidersFailedError";

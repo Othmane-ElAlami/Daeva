@@ -1,6 +1,6 @@
 import { getLeaderboard } from "./providers/leaderboard/index.js";
 import { AllProvidersFailedError } from "./providers/leaderboard/base.js";
-import { fetchCharacterBuild, loadCachedBuilds } from "./character-builds.js";
+import { fetchCharacterBuild, loadCachedBuilds, isFreshBuild } from "./character-builds.js";
 import { COMBAT_POWER, populationKey, isHistoricalOnly } from "./discovery-config.js";
 import { characterKey, matchesPlayerFilters } from "./regions.js";
 import { getPrefetchCache } from "./prefetch/cache.js";
@@ -69,6 +69,7 @@ export async function analyze(
     refresh = false,
     liveOnly = false,
     checkpointOnly = false,
+    enrichExternally = false,
     budget = createBudget(),
   } = {}
 ) {
@@ -135,10 +136,12 @@ export async function analyze(
   let budgetStopped = false;
   let consecutiveFailures = 0;
   let visitedThisRequest = 0;
+  let enrichPlayer = null;
   // Cached builds cost CPU even when they need no outbound fetches. Bound raw
   // cache upgrades/processing on low-limit Workers and resume the same pool.
-  const workLimit = budget.hardLimit <= 50 && sourceMeta.source !== "Cache" ? 5 : Infinity;
-  const cacheGroupSize = budget.hardLimit <= 50 ? 5 : 40;
+  const workLimit =
+    enrichExternally || (budget.hardLimit <= 50 && sourceMeta.source !== "Cache") ? 5 : Infinity;
+  const cacheGroupSize = enrichExternally || budget.hardLimit <= 50 ? 5 : 40;
   while (players.length && processedPlayers.length < config.limit) {
     const candidates = players.filter((player) => {
       const key = characterKey(player);
@@ -151,7 +154,7 @@ export async function analyze(
     for (let offset = 0; offset < candidates.length && processedPlayers.length < config.limit; ) {
       // Complete one character before starting another on 50-subrequest plans.
       // Parallel item waves otherwise consume the cap before any build can finish.
-      const playerConcurrency = budget.hardLimit <= 50 ? 1 : 3;
+      const playerConcurrency = enrichExternally || budget.hardLimit <= 50 ? 1 : 3;
       const batch = candidates.slice(
         offset,
         offset + Math.min(playerConcurrency, config.limit - processedPlayers.length)
@@ -167,6 +170,14 @@ export async function analyze(
           { normalize: true }
         );
         for (const [key, build] of group) cachedBuilds.set(key, build);
+      }
+      // The authenticated scheduled runner performs official enrichment outside
+      // the Worker. Keep the ranked pool and all cache/publication rules here.
+      if (enrichExternally && !isFreshBuild(cachedBuilds.get(characterKey(batch[0])))) {
+        enrichPlayer = batch[0];
+        pending.push(...candidates.slice(offset));
+        budgetStopped = true;
+        break;
       }
       const results = await runPool(
         batch.map((player) => async () => {
@@ -269,11 +280,11 @@ export async function analyze(
       buildHealth: "partial",
       errorCount: (sourceMeta.errorCount || 0) + errors.length,
     };
-  if (budgetStopped && !madeProgress) {
+  if (budgetStopped && !madeProgress && !enrichPlayer) {
     errors.push("The request budget cannot complete another character build.");
     sourceMeta = { ...sourceMeta, buildHealth: "partial", hasMore: false };
   }
-  if (budgetStopped && pending.length && madeProgress) {
+  if (budgetStopped && pending.length && (madeProgress || enrichPlayer)) {
     // Only complete player caches can be resumed. Incomplete details are
     // returned for review in a final partial result, never a lossy continuation.
     if (!resumable) {
@@ -292,6 +303,7 @@ export async function analyze(
       errors,
       budgetUsed: budget.used,
       sourceMeta,
+      ...(enrichPlayer ? { enrichPlayer } : {}),
       continuation: {
         identity: analysisIdentity(config),
         sourceMeta: { ...sourceMeta, page },

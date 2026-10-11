@@ -23,6 +23,7 @@ export async function runPrefetchJob(cls, lbType, db, options = {}) {
       db,
       liveOnly: true,
       checkpointOnly: lbType === COMBAT_POWER && !!db,
+      enrichExternally: lbType === COMBAT_POWER && options.execution === "runner",
       budget: createWorkerBudget(options.env),
     }
   );

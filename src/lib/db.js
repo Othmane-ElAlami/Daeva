@@ -129,7 +129,8 @@ export async function setCachedPlayer(
   equipData,
   equipDetails,
   itemLevel = null,
-  normalizedBuild = null
+  normalizedBuild = null,
+  fetchedAt = Date.now()
 ) {
   if (!db) return;
   await db
@@ -149,7 +150,7 @@ export async function setCachedPlayer(
       ),
       JSON.stringify(equipDetails),
       itemLevel != null ? itemLevel : null,
-      Date.now()
+      fetchedAt
     )
     .run();
 }
