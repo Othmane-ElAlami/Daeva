@@ -11,6 +11,7 @@ import {
   clearPrefetchCache,
 } from "../../src/lib/prefetch/cache.js";
 import { loadConfig } from "../../src/lib/prefetch/config.js";
+import { encodeBuilds, decodeBuilds } from "../../src/lib/prefetch/build-codec.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared D1 mock factory
@@ -94,6 +95,24 @@ describe("D1 PrefetchCache — getPrefetchCache", () => {
     expect(await getPrefetchCache(db, "gladiator", "nightmare")).toBeNull();
   });
 
+  it("rejects a corrupt encoded build record instead of serving an empty dataset", async () => {
+    const db = makeDb({
+      firstRow: {
+        data: "{}",
+        builds: JSON.stringify({
+          encoding: "object-table-v1",
+          buildCount: 1,
+          schemas: [["name"]],
+          builds: [{ $o: [9, "A"] }],
+        }),
+        fetched_at: Date.now(),
+        expires_at: Date.now() + 10000,
+        source: "Shugo Combat Power",
+      },
+    });
+    expect(await getPrefetchCache(db, "chanter", "combat-power", true, "GLOBAL")).toBeNull();
+  });
+
   it("queries with correct class and leaderboard parameters", async () => {
     const db = makeDb({ firstRow: null });
     await getPrefetchCache(db, "templar", "pvp");
@@ -102,6 +121,12 @@ describe("D1 PrefetchCache — getPrefetchCache", () => {
 });
 
 describe("D1 PrefetchCache — setPrefetchCache", () => {
+  it("keeps ordinary JSON semantics when encoding optional fields and nested values", () => {
+    const input = [{ optional: undefined, values: [undefined, null, 0], fetchedAt: new Date(0) }];
+    const encoded = encodeBuilds(input, "x".repeat(1800001));
+    expect(JSON.parse(encoded).encoding).toBe("object-table-v1");
+    expect(decodeBuilds(encoded)).toEqual(JSON.parse(JSON.stringify(input)));
+  });
   it("calls INSERT OR REPLACE with serialized JSON", async () => {
     const db = makeDb();
     const data = { total: 42 };

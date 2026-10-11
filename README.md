@@ -127,6 +127,13 @@ The workflow verifies successful JSON and explicit completion; upstream 503s,
 empty responses and partial final results fail the job rather than appearing
 as successful warming.
 
+Scheduled continuation batches carry completed character identities without
+reloading the entire build population. A separate final invocation restores,
+aggregates and publishes the complete dataset; freshness checks read only cache
+metadata. Unresolved build failures stop the refresh immediately. The workflow
+allows one population retry using already completed character caches, within
+the existing batch and job limits.
+
 Requests have a four-minute timeout and each region/class job a 90-minute timeout. At most 120 batches are allowed for a top-100 job, accommodating one complete player per invocation on 50-subrequest plans. Continuations must advance, and the interactive analyzer also has a batch cap; a request that cannot complete a build falls back or returns an explicit unavailable state.
 
 Six-hour refreshes track profile lookups between Shugo's nightly top-500 checks without the old 30-minute, 56-mode-job traffic. Prefetch can be disabled with `PREFETCH_ENABLED=false`. Source configuration also controls future mode-specific jobs. Reassess cadence/cache TTL when official rankings return.

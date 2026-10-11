@@ -173,6 +173,31 @@ describe("POST /api/prefetch/run — happy path", () => {
 
 describe("POST /api/prefetch/run — edge cases", () => {
   it.each([
+    [["Character fetch failed"], 1],
+    [[], 2],
+  ])("rejects unresolved errors before another continuation (%s)", async (errors, errorCount) => {
+    vi.stubEnv("LEADERBOARD_SOURCE_MODE", "combat-power");
+    runPrefetchJob.mockResolvedValueOnce({
+      ...SUCCESS_RESULT,
+      builds: [cpBuild(0)],
+      stats: undefined,
+      errors,
+      sourceMeta: { total: 4000, buildHealth: "partial", errorCount },
+      continuation: { processedCount: 14, players: [] },
+    });
+    const response = await POST(
+      req({ cls: "chanter", leaderboard: "combat-power", region: "GLOBAL" })
+    );
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({
+      code: "INCOMPLETE_POPULATION",
+      playerCount: 14,
+      errorCount,
+      retryable: true,
+    });
+    expect(setPrefetchCache).not.toHaveBeenCalled();
+  });
+  it.each([
     [1, 0, undefined],
     [100, 1, undefined],
     [100, 0, "partial"],

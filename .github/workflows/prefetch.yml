@@ -53,6 +53,7 @@ jobs:
               batch=0
               previous_processed=0
               waiting=0
+              refresh_retries=0
               while true; do
                 batch=$((batch + 1))
                 rm -f /tmp/prefetch_response.json
@@ -79,6 +80,16 @@ jobs:
                   echo "⊘ $cls/$lb — SKIPPED (prefetch disabled)"
                   skipped=$((skipped + 1)); break
                 elif [ "$HTTP_CODE" != "200" ]; then
+                  if [ "$HTTP_CODE" = "502" ] && [ "$refresh_retries" -lt 1 ] && \
+                    jq -s -e 'length == 1 and (.[0] | .code == "INCOMPLETE_POPULATION" and .retryable == true)' \
+                      /tmp/prefetch_response.json >/dev/null; then
+                    refresh_retries=$((refresh_retries + 1))
+                    echo "↻ Retrying population after a build failure; completed character caches are reused"
+                    jq -n --arg cls "$cls" --arg lb "$lb" --arg region "$REGION" \
+                      '{cls:$cls,leaderboard:$lb,region:$region}' > /tmp/prefetch_body.json
+                    previous_processed=0
+                    sleep 15; continue
+                  fi
                   echo "✗ $cls/$lb — HTTP $HTTP_CODE"
                   cat /tmp/prefetch_response.json 2>/dev/null || true
                   echo ""

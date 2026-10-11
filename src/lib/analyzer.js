@@ -39,7 +39,9 @@ export function validateContinuation(value, config) {
   if (
     value.players.length > 300 ||
     value.processedPlayers.length > config.limit ||
-    value.processedCount !== value.processedPlayers.length
+    value.processedCount !== value.processedPlayers.length ||
+    (value.phase !== undefined && value.phase !== "publish") ||
+    (value.phase === "publish" && (value.players.length !== 0 || value.processedCount === 0))
   )
     return false;
   const players = [...value.players, ...value.processedPlayers];
@@ -61,7 +63,14 @@ export function validateContinuation(value, config) {
 
 export async function analyze(
   config,
-  { db = null, onEvent = () => {}, refresh = false, liveOnly = false, budget = createBudget() } = {}
+  {
+    db = null,
+    onEvent = () => {},
+    refresh = false,
+    liveOnly = false,
+    checkpointOnly = false,
+    budget = createBudget(),
+  } = {}
 ) {
   if (!refresh && !liveOnly && !config.continuation && config.lbType === COMBAT_POWER) {
     const cached = cachedAnalysis(
@@ -94,11 +103,18 @@ export async function analyze(
       throw new Error("Invalid continuation population.");
     sourceMeta = continuation.sourceMeta;
     players = continuation.players;
-    cachedBuilds = await loadCachedBuilds(db, continuation.processedPlayers);
+    // Scheduled batches retain identities only. Re-reading and parsing the
+    // entire completed prefix on every invocation grows CPU work quadratically.
+    const restoreBuilds = !checkpointOnly || continuation.phase === "publish";
+    cachedBuilds = restoreBuilds
+      ? await loadCachedBuilds(db, continuation.processedPlayers)
+      : new Map();
     for (const player of continuation.processedPlayers) {
-      const build = cachedBuilds.get(characterKey(player));
-      if (!build) throw new Error("Continuation build cache is no longer available.");
-      builds.push(build);
+      if (restoreBuilds) {
+        const build = cachedBuilds.get(characterKey(player));
+        if (!build) throw new Error("Continuation build cache is no longer available.");
+        builds.push(build);
+      }
       processedPlayers.push(player);
       seen.add(characterKey(player));
     }
@@ -123,7 +139,7 @@ export async function analyze(
   // cache upgrades/processing on low-limit Workers and resume the same pool.
   const workLimit = budget.hardLimit <= 50 && sourceMeta.source !== "Cache" ? 5 : Infinity;
   const cacheGroupSize = budget.hardLimit <= 50 ? 5 : 40;
-  while (players.length && builds.length < config.limit) {
+  while (players.length && processedPlayers.length < config.limit) {
     const candidates = players.filter((player) => {
       const key = characterKey(player);
       if (seen.has(key)) return false;
@@ -132,13 +148,13 @@ export async function analyze(
     });
     // Process in ranked waves; completion order cannot promote a lower-CP
     // cached character ahead of a higher-CP character still being fetched.
-    for (let offset = 0; offset < candidates.length && builds.length < config.limit; ) {
+    for (let offset = 0; offset < candidates.length && processedPlayers.length < config.limit; ) {
       // Complete one character before starting another on 50-subrequest plans.
       // Parallel item waves otherwise consume the cap before any build can finish.
       const playerConcurrency = budget.hardLimit <= 50 ? 1 : 3;
       const batch = candidates.slice(
         offset,
-        offset + Math.min(playerConcurrency, config.limit - builds.length)
+        offset + Math.min(playerConcurrency, config.limit - processedPlayers.length)
       );
       if (
         !refresh &&
@@ -186,7 +202,7 @@ export async function analyze(
         processedPlayers.push(identity);
         onEvent({
           type: "progress",
-          current: builds.length,
+          current: processedPlayers.length,
           total: config.limit,
           target: batch[i].characterName,
         });
@@ -200,19 +216,19 @@ export async function analyze(
       if (
         visitedThisRequest >= workLimit &&
         offset + batch.length < candidates.length &&
-        builds.length < config.limit
+        processedPlayers.length < config.limit
       ) {
         pending.push(...candidates.slice(offset + batch.length));
         budgetStopped = true;
         break;
       }
-      if (!builds.length && consecutiveFailures >= 6) break;
+      if (!processedPlayers.length && consecutiveFailures >= 6) break;
       offset += batch.length;
     }
     if (
       budgetStopped ||
-      (!builds.length && consecutiveFailures >= 6) ||
-      builds.length >= config.limit ||
+      (!processedPlayers.length && consecutiveFailures >= 6) ||
+      processedPlayers.length >= config.limit ||
       !sourceMeta.hasMore ||
       page >= maxPages ||
       sourceMeta.source === "Cache"
@@ -272,6 +288,7 @@ export async function analyze(
     }
     return {
       builds,
+      playerCount: processedPlayers.length,
       errors,
       budgetUsed: budget.used,
       sourceMeta,
@@ -281,6 +298,25 @@ export async function analyze(
         players: pending,
         processedPlayers,
         processedCount: processedPlayers.length,
+      },
+    };
+  }
+  if (checkpointOnly && processedPlayers.length && continuation?.phase !== "publish") {
+    // Publication gets a separate invocation with no character enrichment.
+    // Only that final phase loads and aggregates the full completed population.
+    return {
+      builds,
+      playerCount: processedPlayers.length,
+      errors,
+      budgetUsed: budget.used,
+      sourceMeta,
+      continuation: {
+        identity: analysisIdentity(config),
+        sourceMeta: { ...sourceMeta, page },
+        players: [],
+        processedPlayers,
+        processedCount: processedPlayers.length,
+        phase: "publish",
       },
     };
   }

@@ -19,6 +19,11 @@ export async function runPrefetchJob(cls, lbType, db, options = {}) {
     },
     // Discovery is always live. Reuse complete official character caches younger
     // than six hours, including builds a recent interactive scan already fetched.
-    { db, liveOnly: true, budget: createWorkerBudget(options.env) }
+    {
+      db,
+      liveOnly: true,
+      checkpointOnly: lbType === COMBAT_POWER && !!db,
+      budget: createWorkerBudget(options.env),
+    }
   );
 }

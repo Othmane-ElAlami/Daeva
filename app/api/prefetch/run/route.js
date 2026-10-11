@@ -21,7 +21,7 @@ import { COMBAT_POWER, CP_SOURCE, isHistoricalOnly } from "@/lib/discovery-confi
 import { normalizeRegion } from "@/lib/regions";
 import { validateContinuation } from "@/lib/analyzer";
 import { saveMetaSnapshot } from "@/lib/meta-snapshots";
-import { inspectPopulation } from "@/lib/prefetch/population";
+import { inspectPopulation, populationTarget } from "@/lib/prefetch/population";
 import { claimRefresh, updateRefresh } from "@/lib/prefetch/refresh";
 
 export const runtime = "edge";
@@ -90,9 +90,17 @@ export async function POST(request) {
 
   try {
     if (!body.continuation) {
-      const cached = await getPrefetchCache(env.DB, cls, leaderboard, false, region);
+      const cached = await getPrefetchCache(env.DB, cls, leaderboard, false, region, {
+        metadataOnly: leaderboard === COMBAT_POWER,
+      });
       const complete =
         leaderboard !== COMBAT_POWER ||
+        (cached?.source === CP_SOURCE &&
+          cached.data?.population?.valid === true &&
+          cached.data.population.complete === true &&
+          cached.data.sourceMeta?.buildHealth !== "partial" &&
+          cached.buildCount >= populationTarget(cached.data)) ||
+        // Full-build responses, when supplied, require the same validation.
         inspectPopulation(cached, cls, leaderboard, region).complete;
       // A small interactive sample must not suppress the scheduled top-100 job.
       if (cached && complete && Date.now() - cached.fetchedAt < config.minRefreshMinutes * 60000)
@@ -104,7 +112,7 @@ export async function POST(request) {
           class: cls,
           leaderboard,
           region,
-          playerCount: cached.builds.length,
+          playerCount: cached.buildCount ?? cached.builds.length,
           errorCount: 0,
           durationMs: Date.now() - startTime,
         });
@@ -128,43 +136,50 @@ export async function POST(request) {
       env,
     });
 
+    const errorCount = Math.max(result.errors.length, result.sourceMeta?.errorCount || 0);
+    const population = inspectPopulation(
+      {
+        data: result.stats || { sourceMeta: result.sourceMeta },
+        builds: result.builds,
+        source: leaderboard === COMBAT_POWER ? CP_SOURCE : result.sourceMeta?.source,
+      },
+      cls,
+      leaderboard,
+      region
+    );
+    if (
+      leaderboard === COMBAT_POWER &&
+      (errorCount ||
+        result.sourceMeta?.buildHealth === "partial" ||
+        (!result.continuation && !population.complete))
+    ) {
+      await updateRefresh(env.DB, analysisConfig, refreshToken, "failed", {
+        buildCount: result.continuation?.processedCount ?? population.buildCount,
+        error: "Incomplete population; previous dataset retained.",
+      });
+      return Response.json(
+        {
+          success: false,
+          complete: false,
+          code: "INCOMPLETE_POPULATION",
+          class: cls,
+          leaderboard,
+          region,
+          playerCount: result.continuation?.processedCount ?? population.buildCount,
+          expectedCount: population.expectedCount,
+          errorCount,
+          errors: result.errors.slice(0, 10),
+          retryable: errorCount > 0,
+          error:
+            "Prefetch did not prepare a complete population. The previous dataset is retained.",
+        },
+        { status: 502 }
+      );
+    }
     if (result.continuation) {
       await updateRefresh(env.DB, analysisConfig, refreshToken, "running", {
-        buildCount: result.builds.length,
+        buildCount: result.continuation.processedCount,
       });
-    } else {
-      const population = inspectPopulation(
-        {
-          data: result.stats,
-          builds: result.builds,
-          source: leaderboard === COMBAT_POWER ? CP_SOURCE : result.sourceMeta?.source,
-        },
-        cls,
-        leaderboard,
-        region
-      );
-      if (leaderboard === COMBAT_POWER && (!population.complete || result.errors.length)) {
-        await updateRefresh(env.DB, analysisConfig, refreshToken, "failed", {
-          buildCount: population.buildCount,
-          error: "Incomplete population; previous dataset retained.",
-        });
-        return Response.json(
-          {
-            success: false,
-            complete: false,
-            code: "INCOMPLETE_POPULATION",
-            class: cls,
-            leaderboard,
-            region,
-            playerCount: population.buildCount,
-            expectedCount: population.expectedCount,
-            errorCount: result.errors.length,
-            error:
-              "Prefetch did not prepare a complete population. The previous dataset is retained.",
-          },
-          { status: 502 }
-        );
-      }
     }
     if (!result.continuation && result.stats && result.builds.length > 0) {
       const ttlMs = config.cacheTtlMinutes * 60_000;
@@ -195,7 +210,7 @@ export async function POST(request) {
         ? { ...result.continuation, ...(refreshToken ? { refreshToken } : {}) }
         : null,
       playerCount: result.playerCount ?? result.builds.length,
-      errorCount: result.errors.length,
+      errorCount,
       budgetUsed: result.budgetUsed,
       durationMs: Date.now() - startTime,
       errors: result.errors.slice(0, 10),

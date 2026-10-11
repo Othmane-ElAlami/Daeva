@@ -163,6 +163,19 @@ lease tokens and credentials. Upstream 503s and empty/malformed/incomplete final
 responses now fail the workflow; only an explicit disabled-prefetch response
 is skipped.
 
+Scheduled enrichment batches keep completed identities in their checkpoint and
+read only the next player-cache wave. This avoids repeatedly parsing an increasing
+completed prefix on Workers with tight CPU limits. A separate publication phase
+loads the full completed population once, aggregates it and saves the dataset
+without fetching another character. Admission checks read freshness and
+completeness metadata instead of transferring all cached builds. An unresolved
+build failure stops the job immediately, includes cumulative error counts, and
+permits one bounded population restart that reuses complete character caches.
+Large snapshots share repeated object field schemas inside the existing builds
+JSON column to stay within D1 row limits. This lossless encoding preserves every
+build value; ordinary array snapshots remain supported. Counts, freshness checks
+and replacement guards understand both formats.
+
 A real local top-100 run took about 150 seconds per 970-fetch-budget batch.
 Scheduled requests allow four minutes, with a 90-minute region/class-job timeout.
 The 120-batch cap accommodates one full build per Free/Bundled-plan invocation;

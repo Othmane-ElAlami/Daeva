@@ -8,14 +8,24 @@ import {
   setNormalizedCachedBuild,
 } from "../src/lib/db.js";
 import { characterKey } from "../src/lib/regions.js";
-import { getPrefetchCache, setPrefetchCache } from "../src/lib/prefetch/cache.js";
+import {
+  getPrefetchCache,
+  setPrefetchCache,
+  getAllPrefetchEntries,
+} from "../src/lib/prefetch/cache.js";
 import { populationKey, discoveryConfig } from "../src/lib/discovery-config.js";
 import { parseCombatPowerResponse } from "../src/lib/providers/leaderboard/shugo-combat-power.js";
 import { getLeaderboard } from "../src/lib/providers/leaderboard/index.js";
 import { analyze } from "../src/lib/analyzer.js";
 import { loadCachedBuild, loadCachedBuilds } from "../src/lib/character-builds.js";
 import { claimRefresh, updateRefresh } from "../src/lib/prefetch/refresh.js";
-import { extractBuild, createBudget, createWorkerBudget } from "../src/lib/scraper-shared.js";
+import { runPrefetchJob } from "../src/lib/prefetch/runner.js";
+import {
+  extractBuild,
+  aggregate,
+  createBudget,
+  createWorkerBudget,
+} from "../src/lib/scraper-shared.js";
 import {
   resultLabel,
   canQuickBuild,
@@ -98,6 +108,62 @@ function mockOfficialPipeline() {
 }
 
 describe("CP cache identity and SQL behavior", () => {
+  it("stores a large complete CP population losslessly and keeps encoded cache counts and guards accurate", async () => {
+    const equipment = fixture("tw-equipment");
+    equipment.equipment.equipmentList = equipment.equipment.equipmentList.slice(0, 22);
+    const item = fixture("global-item");
+    const details = equipment.equipment.equipmentList.map((entry) => ({
+      ...item,
+      id: entry.id,
+      name: entry.name,
+      slotPos: entry.slotPos,
+    }));
+    const player = parseCombatPowerResponse(fixture("tw"), {
+      region: "TW",
+      cls: "chanter",
+    }).rankings[0];
+    const base = extractBuild({ ...player, _equip: equipment }, {}, details, 3353, 1111968);
+    const builds = Array.from({ length: 100 }, (_, index) => ({
+      ...base,
+      characterId: `large-sample-${index}`,
+      rank: index + 1,
+    }));
+    const stats = { ...aggregate(builds), sourceMeta: { total: 100 } };
+    const saved = await setPrefetchCache(
+      db,
+      "chanter",
+      "combat-power",
+      stats,
+      builds,
+      100000,
+      "Shugo Combat Power",
+      "TW"
+    );
+    expect(saved).toMatchObject({ stored: true, complete: true, buildCount: 100 });
+    const row = db.sqlite.prepare("SELECT data, builds FROM prefetch_cache").get();
+    expect(Buffer.byteLength(JSON.stringify(builds))).toBeGreaterThan(2_000_000);
+    expect(Buffer.byteLength(row.data) + Buffer.byteLength(row.builds)).toBeLessThan(2_000_000);
+    expect(JSON.parse(row.builds).encoding).toBe("object-table-v1");
+    expect((await getPrefetchCache(db, "chanter", "combat-power", true, "TW")).builds).toEqual(
+      builds
+    );
+    expect(
+      await getPrefetchCache(db, "chanter", "combat-power", true, "TW", { metadataOnly: true })
+    ).toMatchObject({ buildCount: 100, data: { population: { complete: true } } });
+    expect((await getAllPrefetchEntries(db))[0]).toMatchObject({ buildCount: 100, complete: true });
+    const sample = await setPrefetchCache(
+      db,
+      "chanter",
+      "combat-power",
+      stats,
+      builds.slice(0, 1),
+      100000,
+      "Shugo Combat Power",
+      "TW"
+    );
+    expect(sample.stored).toBe(false);
+    expect(db.sqlite.prepare("SELECT builds FROM prefetch_cache").get().builds).toBe(row.builds);
+  });
   it("separates Global/KR/TW even for identical character/server IDs", async () => {
     for (const region of ["GLOBAL", "KR", "TW"])
       await setCachedPlayer(db, "same-id", 1001, region, { region }, details, 1);
@@ -458,9 +524,18 @@ describe("official build enrichment, ranking and continuation", () => {
     const prepare = db.prepare.bind(db);
     let queries = 0;
     let maxQueries = 0;
+    let playerRowsRead = 0;
     vi.spyOn(db, "prepare").mockImplementation((sql) => {
       if (++queries > 50) throw new Error("D1 Free query limit exceeded");
       const statement = prepare(sql);
+      if (sql.includes("FROM player_cache")) {
+        const all = statement.all.bind(statement);
+        statement.all = async () => {
+          const result = await all();
+          playerRowsRead += result.results.length;
+          return result;
+        };
+      }
       const bind = statement.bind.bind(statement);
       statement.bind = (...args) => {
         expect(args.length).toBeLessThanOrEqual(100);
@@ -530,6 +605,39 @@ describe("official build enrichment, ranking and continuation", () => {
     fetch.mockClear();
     const paid = await analyze({ ...config, limit: 100 }, { db, budget: createBudget() });
     expect(paid.count).toBe(100);
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    // Scheduled continuations read only the next wave. All completed builds
+    // are loaded once, in a separate publication request with no enrichment.
+    fetch.mockClear();
+    continuation = undefined;
+    let scheduled;
+    let scheduledBatches = 0;
+    do {
+      queries = 0;
+      playerRowsRead = 0;
+      const publishing = continuation?.phase === "publish";
+      scheduled = await runPrefetchJob("chanter", "combat-power", db, {
+        region: "GLOBAL",
+        sourceMode: "combat-power",
+        continuation,
+        env: { WORKER_SUBREQUEST_LIMIT: "50" },
+      });
+      if (publishing) {
+        expect(scheduled.count).toBe(100);
+        expect(scheduled.stats.total).toBe(100);
+        expect(scheduled.budgetUsed).toBe(0);
+        expect(playerRowsRead).toBe(100);
+      } else {
+        expect(scheduled.builds.length).toBeLessThanOrEqual(5);
+        expect(playerRowsRead).toBeLessThanOrEqual(5);
+        expect(scheduled.stats).toBeUndefined();
+        expect(scheduled.continuation.processedCount).toBe((continuation?.processedCount || 0) + 5);
+      }
+      continuation = scheduled.continuation;
+      expect(++scheduledBatches).toBeLessThanOrEqual(120);
+    } while (continuation);
+    expect(scheduledBatches).toBe(21);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
   it("completes full 25-item builds across 50-subrequest invocations without repeating discovery", async () => {
@@ -790,6 +898,14 @@ describe("prefetched populations and refresh safety", () => {
     });
     expect(cached.builds[0].stigmaSkills).toHaveLength(13);
     fetch.mockClear();
+    const summary = await getPrefetchCache(db, "chanter", "combat-power", false, "GLOBAL", {
+      metadataOnly: true,
+    });
+    expect(summary.builds).toBeUndefined();
+    expect(summary.buildCount).toBe(10);
+    expect(summary.data.population.complete).toBe(true);
+    const skipped = await (await prefetchPOST(prefetchRequest())).json();
+    expect(skipped).toMatchObject({ success: true, skipped: true, playerCount: 10 });
     for (let index = 0; index < 2; index++) {
       db.sqlite.prepare("DELETE FROM rate_limits").run();
       const result = await events({ limit: 10 });

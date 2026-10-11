@@ -1,6 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { populationKey, parsePopulationKey, COMBAT_POWER } from "../discovery-config.js";
 import { inspectPopulation, populationTarget } from "./population.js";
+import { encodeBuilds, decodeBuilds, buildCountSQL } from "./build-codec.js";
 // Prefetch System — D1-Backed Cache
 // ─────────────────────────────────────────────────────────────────────────────
 // Reads and writes prefetched leaderboard data in the D1 `prefetch_cache`
@@ -15,11 +16,24 @@ import { inspectPopulation, populationTarget } from "./population.js";
  * Returns null on miss. Stale entries (past expiresAt) are still returned
  * when allowStale is true — stale data is always better than no data.
  */
-export async function getPrefetchCache(db, cls, leaderboard, allowStale = true, region = "GLOBAL") {
+export async function getPrefetchCache(
+  db,
+  cls,
+  leaderboard,
+  allowStale = true,
+  region = "GLOBAL",
+  { metadataOnly = false } = {}
+) {
   try {
     const row = await db
       .prepare(
-        "SELECT data, builds, fetched_at, expires_at, source FROM prefetch_cache WHERE class = ? AND leaderboard = ?"
+        `SELECT ${
+          metadataOnly
+            ? `json_object('population', json_extract(data, '$.population'),
+                'sourceMeta', json_extract(data, '$.sourceMeta')) AS data,
+               ${buildCountSQL("builds")} AS build_count`
+            : "data, builds"
+        }, fetched_at, expires_at, source FROM prefetch_cache WHERE class = ? AND leaderboard = ?`
       )
       .bind(cls, populationKey(leaderboard, region))
       .first();
@@ -28,7 +42,7 @@ export async function getPrefetchCache(db, cls, leaderboard, allowStale = true, 
     if (now > row.expires_at && !allowStale) return null;
     return {
       data: JSON.parse(row.data),
-      builds: JSON.parse(row.builds),
+      ...(metadataOnly ? { buildCount: row.build_count } : { builds: decodeBuilds(row.builds) }),
       fetchedAt: row.fetched_at,
       expiresAt: row.expires_at,
       source: row.source,
@@ -60,11 +74,13 @@ export async function setPrefetchCache(
   if (cp && (!population.valid || data?.sourceMeta?.buildHealth === "partial"))
     return { stored: false, reason: "Incomplete or malformed build data" };
   const storedData = cp ? { ...data, population: { ...population, preparedBy } } : data;
+  const dataJson = JSON.stringify(storedData);
+  const buildsJson = cp ? encodeBuilds(builds, dataJson) : JSON.stringify(builds);
   // The SQL guard makes this safe even when two refreshes finish together.
   // Legacy rows without explicit completeness are evaluated from their count,
   // discovery total and build health. A partial sample cannot replace a full row.
   const priorComplete = `CASE WHEN json_valid(prefetch_cache.data) AND json_valid(prefetch_cache.builds)
-    THEN json_array_length(prefetch_cache.builds) >=
+    THEN (${buildCountSQL("prefetch_cache.builds")}) >=
       CASE WHEN json_extract(prefetch_cache.data, '$.sourceMeta.total') BETWEEN 1 AND 99
         THEN json_extract(prefetch_cache.data, '$.sourceMeta.total') ELSE 100 END
       AND COALESCE(json_extract(prefetch_cache.data, '$.sourceMeta.buildHealth'), '') != 'partial'
@@ -80,7 +96,7 @@ export async function setPrefetchCache(
          builds = excluded.builds, fetched_at = excluded.fetched_at,
          expires_at = excluded.expires_at, source = excluded.source
        WHERE ? = 1 OR (NOT (${priorComplete}) AND
-         CASE WHEN json_valid(prefetch_cache.builds) THEN json_array_length(prefetch_cache.builds)
+         CASE WHEN json_valid(prefetch_cache.builds) THEN (${buildCountSQL("prefetch_cache.builds")})
          ELSE 0 END <= ?)`
         : `INSERT OR REPLACE INTO prefetch_cache (class, leaderboard, data, builds, fetched_at, expires_at, source)
           VALUES (?, ?, ?, ?, ?, ?, ?)`
@@ -88,8 +104,8 @@ export async function setPrefetchCache(
     .bind(
       cls,
       populationKey(leaderboard, region),
-      JSON.stringify(storedData),
-      JSON.stringify(builds),
+      dataJson,
+      buildsJson,
       now,
       now + ttlMs,
       source,
@@ -107,7 +123,7 @@ export async function getAllPrefetchEntries(db) {
     const { results } = await db
       .prepare(
         `SELECT class, leaderboard, fetched_at, expires_at, source,
-          json_array_length(builds) AS build_count,
+          ${buildCountSQL("builds")} AS build_count,
           json_extract(data, '$.sourceMeta') AS source_meta,
           json_extract(data, '$.population') AS population,
           json_extract(data, '$.refresh.status') AS refresh_status,
