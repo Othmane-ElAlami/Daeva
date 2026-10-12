@@ -61,20 +61,65 @@ describe("scheduled Combat Power runner", () => {
     await expect(runCombatPowerPrefetch({ ...options, request, enrich })).rejects.toThrow(
       "incomplete"
     );
-    expect(enrich).toHaveBeenCalledTimes(2);
+    expect(enrich).toHaveBeenCalledTimes(1);
     expect(JSON.parse(request.mock.calls[1][1].body)).toMatchObject({ failed: true, continuation });
+    expect(JSON.parse(request.mock.calls[1][1].body).failure).toMatchObject({
+      phase: "enrichment",
+      message: expect.stringContaining("Item details unavailable"),
+    });
     expect(JSON.parse(request.mock.calls[1][1].body).enrichedBuild).toBeUndefined();
   });
   it("rejects repeated platform errors and malformed success bodies after bounded retries", async () => {
-    const request = vi.fn(async () => new Response("error code: 1102", { status: 503 }));
+    const request = vi.fn(
+      async () => new Response(`error code: 1102 ${options.secret}`, { status: 503 })
+    );
     const log = vi.fn();
     await expect(runCombatPowerPrefetch({ ...options, request, log })).rejects.toThrow(
-      "unavailable or malformed"
+      "HTTP 503, Cloudflare 1102"
     );
     expect(request).toHaveBeenCalledTimes(3);
-    expect(log).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledTimes(2);
+    expect(log.mock.calls.flat().join(" ")).not.toContain(options.secret);
     await expect(
       runCombatPowerPrefetch({ ...options, request: async () => Response.json({}) })
     ).rejects.toThrow("invalid population");
+  });
+  it("retries an upload without repeating enrichment and redacts failure credentials", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({ ...baseResponse, playerCount: 0, continuation, enrichPlayer: player })
+      )
+      .mockRejectedValueOnce(new Error(options.secret))
+      .mockResolvedValueOnce(Response.json({ ...baseResponse, playerCount: 1, complete: true }));
+    const enrich = vi.fn(async () => ({ build: { characterId: "sample" }, warnings: [] }));
+    const log = vi.fn();
+    expect(await runCombatPowerPrefetch({ ...options, request, enrich, log })).toMatchObject({
+      complete: true,
+    });
+    expect(enrich).toHaveBeenCalledOnce();
+    expect(request.mock.calls[1][1].body).toBe(request.mock.calls[2][1].body);
+    expect(log.mock.calls.flat().join(" ")).not.toContain(options.secret);
+    const failing = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({ ...baseResponse, playerCount: 0, continuation, enrichPlayer: player })
+      )
+      .mockResolvedValueOnce(Response.json({ code: "ENRICHMENT_FAILED" }, { status: 502 }));
+    let problem;
+    try {
+      await runCombatPowerPrefetch({
+        ...options,
+        request: failing,
+        enrich: async () => {
+          throw new Error(`Official failure ${options.secret}`);
+        },
+      });
+    } catch (error) {
+      problem = error;
+    }
+    expect(problem.message).toContain("[redacted]");
+    expect(problem.message).not.toContain(options.secret);
+    expect(JSON.parse(failing.mock.calls[1][1].body).failure.message).toContain("[redacted]");
   });
 });

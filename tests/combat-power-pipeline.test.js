@@ -17,7 +17,12 @@ import { populationKey, discoveryConfig } from "../src/lib/discovery-config.js";
 import { parseCombatPowerResponse } from "../src/lib/providers/leaderboard/shugo-combat-power.js";
 import { getLeaderboard } from "../src/lib/providers/leaderboard/index.js";
 import { analyze } from "../src/lib/analyzer.js";
-import { loadCachedBuild, loadCachedBuilds } from "../src/lib/character-builds.js";
+import {
+  loadCachedBuild,
+  loadCachedBuilds,
+  fetchCharacterBuild,
+  BUILD_FRESH_MS,
+} from "../src/lib/character-builds.js";
 import { claimRefresh, updateRefresh } from "../src/lib/prefetch/refresh.js";
 import { runPrefetchJob } from "../src/lib/prefetch/runner.js";
 import {
@@ -110,6 +115,48 @@ function mockOfficialPipeline() {
 }
 
 describe("CP cache identity and SQL behavior", () => {
+  it("filters expired player rows in SQL before transferring/parsing them during runner preparation", async () => {
+    const fetchedAt = Date.now() - 7 * 3600000;
+    for (const player of players.slice(0, 2))
+      await setCachedPlayer(
+        db,
+        player.characterId,
+        player.serverId,
+        player.region,
+        equip,
+        details,
+        3353,
+        { ...sampleBuild, ...buildPlayerMetadata(player), buildFetchedAt: fetchedAt },
+        fetchedAt
+      );
+    await db
+      .prepare("UPDATE player_cache SET character_id = ? WHERE character_id = ?")
+      .bind(players[1].characterId, `GLOBAL:${players[1].characterId}`)
+      .run();
+    const prepare = db.prepare.bind(db);
+    let rowsRead = 0;
+    vi.spyOn(db, "prepare").mockImplementation((sql) => {
+      const statement = prepare(sql);
+      if (sql.includes("FROM player_cache")) {
+        const all = statement.all.bind(statement);
+        statement.all = async () => {
+          const result = await all();
+          rowsRead += result.results.length;
+          return result;
+        };
+      }
+      return statement;
+    });
+    const candidates = players.slice(0, 2);
+    const fresh = await loadCachedBuilds(db, candidates, {
+      normalize: true,
+      maxAgeMs: BUILD_FRESH_MS,
+    });
+    expect([...fresh.values()]).toEqual([null, null]);
+    expect(rowsRead).toBe(0);
+    const retained = await loadCachedBuilds(db, candidates);
+    expect([...retained.values()].every((build) => build.buildFetchedAt === fetchedAt)).toBe(true);
+  });
   it("stores a large complete CP population losslessly and keeps encoded cache counts and guards accurate", async () => {
     const equipment = fixture("tw-equipment");
     equipment.equipment.equipmentList = equipment.equipment.equipmentList.slice(0, 22);
@@ -494,6 +541,76 @@ describe("provider failures and historical populations", () => {
 });
 
 describe("official build enrichment, ranking and continuation", () => {
+  it.each(["proxy", "retry"])(
+    "recovers a bad item response via %s without refetching successful items",
+    async (recovery) => {
+      const equipment = fixture("global-equipment");
+      equipment.equipment.equipmentList = equipment.equipment.equipmentList.slice(0, 2);
+      const counts = new Map();
+      const upstream = vi.fn(async (input) => {
+        let url = new URL(input);
+        if (url.pathname === "/api/proxy") url = new URL(url.searchParams.get("url"));
+        if (url.pathname.endsWith("/character/info")) return Response.json(fixture("global-info"));
+        if (url.pathname.endsWith("/character/equipment")) return Response.json(equipment);
+        const id = url.searchParams.get("id");
+        counts.set(id, (counts.get(id) || 0) + 1);
+        if (
+          id === String(equipment.equipment.equipmentList[0].id) &&
+          counts.get(id) <= (recovery === "proxy" ? 1 : 2)
+        )
+          return Response.json({});
+        const item = equipment.equipment.equipmentList.find((item) => String(item.id) === id);
+        return Response.json({ ...fixture("global-item"), id: item.id, name: item.name });
+      });
+      vi.stubGlobal("fetch", upstream);
+      const result = await fetchCharacterBuild(players[0], db, createBudget(), {
+        retryItemDetails: true,
+      });
+      expect(result.warnings).toEqual([]);
+      expect(result.build.equipItems).toHaveLength(2);
+      expect(counts.get(String(equipment.equipment.equipmentList[0].id))).toBe(
+        recovery === "proxy" ? 2 : 3
+      );
+      expect(counts.get(String(equipment.equipment.equipmentList[1].id))).toBe(1);
+      expect(
+        upstream.mock.calls.filter(([url]) => String(url).includes("/character/equipment?"))
+      ).toHaveLength(1);
+      expect((await loadCachedBuild(db, players[0])).equipItems).toHaveLength(2);
+    }
+  );
+  it("reports an unresolved item and preserves the existing player cache", async () => {
+    const fetchedAt = Date.now() - 7 * 3600000;
+    await setCachedPlayer(
+      db,
+      players[0].characterId,
+      players[0].serverId,
+      "GLOBAL",
+      equip,
+      details,
+      3353,
+      sampleBuild,
+      fetchedAt
+    );
+    const fetch = mockOfficialPipeline();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input, options) => {
+        if (String(input).includes("equipment/item") || String(input).includes("equipment%2Fitem"))
+          return Response.json({});
+        return fetch(input, options);
+      })
+    );
+    const result = await fetchCharacterBuild(players[0], db, createBudget(), {
+      retryItemDetails: true,
+    });
+    expect(result.warnings[0]).toContain(
+      `id ${equip.equipment.equipmentList[0].id}, slot ${equip.equipment.equipmentList[0].slotPos}`
+    );
+    expect(result.warnings[0]).toContain("Malformed official item details");
+    expect((await getCachedPlayers(db, [players[0]])).get(characterKey(players[0])).fetchedAt).toBe(
+      fetchedAt
+    );
+  });
   it.each([false, true])(
     "runner prefetch uploads 100 unique builds and reuses the population (corrupt duplicate: %s)",
     async (duplicate) => {
@@ -646,7 +763,7 @@ describe("official build enrichment, ranking and continuation", () => {
       env: { DB: db, ADMIN_SECRET: "runner-test", LEADERBOARD_SOURCE_MODE: "combat-power" },
     });
     const enrich = vi.fn(async () => {
-      throw new Error("Official profile identifiers do not match discovery.");
+      throw new Error("Official profile identifiers do not match discovery. runner-test");
     });
     await expect(
       runCombatPowerPrefetch({
@@ -666,6 +783,9 @@ describe("official build enrichment, ranking and continuation", () => {
     expect(after.fetchedAt).toBe(before.fetchedAt);
     expect(after.expiresAt).toBe(before.expiresAt);
     expect(after.data.refresh).toMatchObject({ status: "failed", leaseExpiresAt: 0 });
+    expect(after.data.refresh.error).toContain("enrichment");
+    expect(after.data.refresh.error).toContain("[redacted]");
+    expect(after.data.refresh.error).not.toContain("runner-test");
   });
   it("completes 100 fully enriched builds without exceeding Free D1/fetch limits in any batch", async () => {
     const response = fixture("global");

@@ -1,6 +1,11 @@
 import { getLeaderboard } from "./providers/leaderboard/index.js";
 import { AllProvidersFailedError } from "./providers/leaderboard/base.js";
-import { fetchCharacterBuild, loadCachedBuilds, isFreshBuild } from "./character-builds.js";
+import {
+  fetchCharacterBuild,
+  loadCachedBuilds,
+  isFreshBuild,
+  BUILD_FRESH_MS,
+} from "./character-builds.js";
 import { COMBAT_POWER, populationKey, isHistoricalOnly } from "./discovery-config.js";
 import { characterKey, matchesPlayerFilters } from "./regions.js";
 import { getPrefetchCache } from "./prefetch/cache.js";
@@ -167,7 +172,7 @@ export async function analyze(
         const group = await loadCachedBuilds(
           db,
           candidates.slice(offset, offset + cacheGroupSize),
-          { normalize: true }
+          { normalize: true, ...(enrichExternally ? { maxAgeMs: BUILD_FRESH_MS } : {}) }
         );
         for (const [key, build] of group) cachedBuilds.set(key, build);
       }

@@ -44,18 +44,23 @@ export async function setNormalizedCachedBuild(db, cacheId, serverId, build, fet
 // D1 Free permits 50 queries per invocation, independently of the fetch budget.
 // Read a population in bounded SQL queries rather than one query per character.
 // Each statement stays below D1's 100-bound-parameter limit.
-export async function getCachedPlayers(db, players) {
+export async function getCachedPlayers(db, players, { maxAgeMs = CACHE_MAX_AGE_MS } = {}) {
   const cached = new Map();
   if (!db || !players.length) return cached;
+  const oldest = Date.now() - maxAgeMs;
   const missing = [];
   for (let offset = 0; offset < players.length; offset += 40) {
     const group = players.slice(offset, offset + 40);
     const { results } = await db
       .prepare(
         `SELECT character_id, server_id, ${cachedBuildColumns}
-         FROM player_cache WHERE (character_id, server_id) IN (${group.map(() => "(?, ?)").join(", ")})`
+         FROM player_cache WHERE (character_id, server_id) IN (${group.map(() => "(?, ?)").join(", ")})
+           AND fetched_at >= ?`
       )
-      .bind(...group.flatMap((p) => [playerCacheId(p.characterId, p.region), String(p.serverId)]))
+      .bind(
+        ...group.flatMap((p) => [playerCacheId(p.characterId, p.region), String(p.serverId)]),
+        oldest
+      )
       .all();
     const rows = new Map(results.map((row) => [`${row.character_id}/${row.server_id}`, row]));
     for (const player of group) {
@@ -72,14 +77,20 @@ export async function getCachedPlayers(db, players) {
     const { results } = await db
       .prepare(
         `SELECT character_id, server_id, region, ${cachedBuildColumns}
-         FROM player_cache WHERE (character_id, server_id, region) IN (${group.map(() => "(?, ?, ?)").join(", ")})`
+         FROM player_cache AS legacy WHERE (character_id, server_id, region) IN (${group.map(() => "(?, ?, ?)").join(", ")})
+           AND fetched_at >= ? AND NOT EXISTS (
+             SELECT 1 FROM player_cache AS scoped
+             WHERE scoped.character_id = legacy.region || ':' || legacy.character_id
+               AND scoped.server_id = legacy.server_id
+           )`
       )
       .bind(
         ...group.flatMap((p) => [
           String(p.characterId),
           String(p.serverId),
           normalizeRegion(p.region),
-        ])
+        ]),
+        oldest
       )
       .all();
     const rows = new Map(

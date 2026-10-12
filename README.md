@@ -132,9 +132,13 @@ reloading the entire build population. A separate final invocation restores,
 aggregates and publishes the complete dataset; freshness checks read only cache
 metadata. Runner uploads must match the next discovered character's region,
 class, identifiers, rank and leaderboard CP, and retain their actual build-fetch
-timestamp. Missing/mismatched official profiles and incomplete item details are
-retried once per character; unresolved failures stop the refresh and retain the
-last usable population. Authentication secrets are never included in results.
+timestamp. Stale player rows are filtered in SQL before their build JSON is
+transferred or parsed. Missing/mismatched official profiles can retry once;
+scheduled item failures retry that item once while retaining successful details.
+Invalid direct item payloads also use the validated first-party proxy fallback.
+Unresolved failures stop the refresh and retain the last usable population.
+Workflow/status diagnostics identify the stage, character rank, failed item/slot
+or HTTP/Cloudflare error code when available. Authentication secrets are redacted.
 
 Each region/class job has a 90-minute timeout. CP runner jobs allow at most 125 API batches, covering up to 100 complete build uploads and a separate publication request. API calls have a one-minute timeout and bounded retries; another refresh's lease is polled for at most 30 minutes. The legacy/manual Worker enrichment path retains its fetch budget, and interactive analysis retains its continuation safeguards. An unresolved refresh never publishes a partial population.
 

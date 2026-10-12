@@ -17,22 +17,24 @@ import {
   buildPlayerMetadata,
   runPool,
   subrequestBudgetExhausted,
+  sleep,
 } from "./scraper-shared.js";
 
-async function officialJSON(player, path, budget, extra = {}) {
+export const BUILD_FRESH_MS = 6 * 60 * 60 * 1000;
+
+async function officialJSON(player, path, budget, extra = {}, validate = () => {}) {
   const url = characterApiUrl(player, path, extra);
+  async function read(target, headers) {
+    const data = await fetchJSON(target, headers, "GET", null, budget);
+    validate(data);
+    return data;
+  }
   try {
-    return await fetchJSON(url, makeDirectHeaders(), "GET", null, budget);
+    return await read(url, makeDirectHeaders());
   } catch (error) {
     if (error instanceof subrequestBudgetExhausted) throw error;
     // The fallback transports the same first-party JSON, never Shugo build HTML.
-    return await fetchJSON(
-      proxyUrl(url),
-      makeHeaders(`${baseUrl}/leaderboard`),
-      "GET",
-      null,
-      budget
-    );
+    return await read(proxyUrl(url), makeHeaders(`${baseUrl}/leaderboard`));
   }
 }
 
@@ -56,8 +58,8 @@ export async function loadCachedBuild(db, player) {
   return buildFromCache(player, cached);
 }
 
-export async function loadCachedBuilds(db, players, { normalize = false } = {}) {
-  const cached = await getCachedPlayers(db, players);
+export async function loadCachedBuilds(db, players, { normalize = false, maxAgeMs } = {}) {
+  const cached = await getCachedPlayers(db, players, { maxAgeMs });
   const builds = new Map();
   for (const player of players) {
     const key = characterKey(player);
@@ -131,7 +133,7 @@ export async function fetchCharacterBuild(
   player,
   db,
   budget,
-  { refresh = false, cachedBuild } = {}
+  { refresh = false, cachedBuild, retryItemDetails = false } = {}
 ) {
   if (player._build) return { build: player._build, warnings: [] };
   const cached = cachedBuild === undefined ? await loadCachedBuild(db, player) : cachedBuild;
@@ -160,17 +162,34 @@ export async function fetchCharacterBuild(
   const results = await runPool(
     equipment.map((item) => async () => {
       try {
-        const detail = await officialJSON(player, "equipment/item", budget, {
-          id: String(item.id),
-          enchantLevel: String(item.enchantLevel || 0),
-          slotPos: String(item.slotPos),
-        });
-        if (!detail?.id || !detail.name || String(detail.id) !== String(item.id))
-          throw new Error("Malformed official item details.");
-        return { ...detail, id: item.id, slotPos: item.slotPos };
+        // A bad HTTP-200 item payload also gets the first-party proxy fallback.
+        // Scheduled Node jobs retry only this item once, retaining other details.
+        const attempts = retryItemDetails ? 2 : 1;
+        for (let attempt = 0; attempt < attempts; attempt++) {
+          try {
+            const detail = await officialJSON(
+              player,
+              "equipment/item",
+              budget,
+              {
+                id: String(item.id),
+                enchantLevel: String(item.enchantLevel || 0),
+                slotPos: String(item.slotPos),
+              },
+              (data) => {
+                if (!data?.id || !data.name || String(data.id) !== String(item.id))
+                  throw new Error("Malformed official item details.");
+              }
+            );
+            return { ...detail, id: item.id, slotPos: item.slotPos };
+          } catch (error) {
+            if (error instanceof subrequestBudgetExhausted || attempt === attempts - 1) throw error;
+            await sleep(500);
+          }
+        }
       } catch (error) {
         if (error instanceof subrequestBudgetExhausted) return error;
-        warnings.push(`${item.name}: item details unavailable`);
+        warnings.push(`${item.name} (id ${item.id}, slot ${item.slotPos}): ${error.message}`);
         return null;
       }
     }),
@@ -210,5 +229,5 @@ export async function fetchCharacterBuild(
 
 export function isFreshBuild(build) {
   const age = Date.now() - build?.buildFetchedAt;
-  return !!build && Number.isFinite(age) && age >= 0 && age < 6 * 60 * 60 * 1000;
+  return !!build && Number.isFinite(age) && age >= 0 && age < BUILD_FRESH_MS;
 }

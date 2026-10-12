@@ -35,11 +35,16 @@ export async function runCombatPowerPrefetch({
   let waiting = 0;
   let requests = 0;
   let enrichedCount = 0;
+  let phase = "api";
+  let target = null;
+  const safeText = (value, limit = 500) =>
+    String(value).replaceAll(secret, "[redacted]").slice(0, limit);
 
   async function post(body) {
     for (let attempt = 0; attempt < 3; attempt++) {
       let response;
       let data;
+      let text = "";
       try {
         response = await request(endpoint, {
           method: "POST",
@@ -48,10 +53,17 @@ export async function runCombatPowerPrefetch({
           redirect: "error",
           signal: AbortSignal.timeout(60000),
         });
-        data = await response.json();
+        text = await response.text();
+        data = JSON.parse(text);
       } catch {
-        if (attempt === 2)
-          throw new Error("Prefetch API returned an unavailable or malformed response.");
+        const code = text.match(/error code:\s*(\d{4})\b/i)?.[1];
+        const status = response ? `HTTP ${response.status}` : "network/timeout";
+        const detail = `${status}${code ? `, Cloudflare ${code}` : ""}`;
+        if (attempt === 2 || [400, 401, 403, 404].includes(response?.status))
+          throw new Error(
+            `Prefetch API returned an unavailable or malformed response (${detail}).`
+          );
+        log(`${region}/${cls}: retrying API response (${detail}, attempt ${attempt + 1}/3)`);
         await wait(2000 * (attempt + 1));
         continue;
       }
@@ -63,7 +75,7 @@ export async function runCombatPowerPrefetch({
           continue;
         }
         throw new Error(
-          `Prefetch API failed (HTTP ${response.status}, ${data?.code || "unknown"}).`
+          `Prefetch API failed (HTTP ${response.status}, ${safeText(data?.code || "unknown", 80)}).`
         );
       }
       if (
@@ -82,6 +94,7 @@ export async function runCombatPowerPrefetch({
 
   try {
     while (requests < 125) {
+      phase = "api";
       const data = await post({
         ...base,
         continuation,
@@ -110,6 +123,8 @@ export async function runCombatPowerPrefetch({
       enrichedBuild = undefined;
       const player = data.enrichPlayer;
       if (!player) continue;
+      phase = "enrichment";
+      target = player;
       if (
         player.source !== CP_SOURCE ||
         player.region !== region ||
@@ -121,13 +136,20 @@ export async function runCombatPowerPrefetch({
       // Missing/mismatched profiles and incomplete item details never get uploaded.
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          const result = await enrich(player, null, createBudget());
-          if (!result?.build || result.warnings?.length)
-            throw new Error("Official build details are incomplete.");
+          const result = await enrich(player, null, createBudget(), { retryItemDetails: true });
+          if (!result?.build || result.warnings?.length) {
+            const error = new Error(
+              `Official build details are incomplete: ${safeText(result?.warnings?.slice(0, 3).join("; ") || "missing build")}`
+            );
+            error.code = "ITEM_DETAILS_INCOMPLETE";
+            throw error;
+          }
           enrichedBuild = result.build;
           break;
         } catch (error) {
-          if (attempt) throw error;
+          // Item retries already retained the successful details; do not fetch
+          // an entire character again for an unresolved item failure.
+          if (attempt || error.code === "ITEM_DETAILS_INCOMPLETE") throw error;
           await wait(2000);
         }
       }
@@ -135,13 +157,20 @@ export async function runCombatPowerPrefetch({
     }
     throw new Error("Population preparation batch limit reached.");
   } catch (error) {
+    const context = `${region}/${cls} ${phase} at ${Math.max(previousCount, 0)} builds${target ? ` (${target.characterName || target.characterId}, rank ${target.rank})` : ""}`;
+    const problem = new Error(safeText(`${context}: ${error.message}`));
     // Release the existing population lease without touching its last-good data.
     if (continuation?.refreshToken) {
       try {
         const response = await request(endpoint, {
           method: "POST",
           headers,
-          body: JSON.stringify({ ...base, continuation, failed: true }),
+          body: JSON.stringify({
+            ...base,
+            continuation,
+            failed: true,
+            failure: { phase, message: problem.message },
+          }),
           redirect: "error",
           signal: AbortSignal.timeout(30000),
         });
@@ -150,7 +179,7 @@ export async function runCombatPowerPrefetch({
         // If the API is unreachable, the bounded lease still expires normally.
       }
     }
-    throw error;
+    throw problem;
   }
 }
 

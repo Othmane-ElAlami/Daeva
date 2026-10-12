@@ -177,9 +177,19 @@ with matching region, class, IDs, CP rank/score and a recent original timestamp.
 Uploads populate the existing versioned player cache, preserving every
 normalized equipment/skill/arcana/rune/stone field. Only the complete final
 population replaces the full-build snapshot. One retry per failed character
-handles transient official responses without restarting discovery or refetching
-earlier builds; unresolved mismatches remain failures. API requests also have
+handles transient official profile responses without restarting discovery or refetching
+earlier builds; unresolved mismatches remain failures. Scheduled item failures
+retry only the failed item once and retain other fetched details; a malformed
+direct item response can use the same validated first-party proxy fallback as
+an HTTP error. Unresolved items do not trigger a second full character fetch.
+Freshness predicates exclude unusable old player rows in D1 before transferring
+and parsing their equipment/build JSON. API requests also have
 bounded retries, progress guards and a 125-batch limit.
+
+Failure diagnostics include the phase, prepared count and character rank, plus
+the item identifier/slot or returned HTTP/Cloudflare error code where known.
+The authenticated status endpoint retains that bounded diagnostic in the existing
+refresh metadata. Credentials are redacted in both the runner and endpoint.
 
 A refresh lease in that same row coordinates cold interactive requests and
 scheduled jobs, expires after ten minutes without a renewed continuation, and

@@ -150,9 +150,16 @@ export async function POST(request) {
       );
     refreshToken = lease.token;
     if (body.failed) {
+      const failure = body.failure;
+      let reason =
+        ["api", "enrichment"].includes(failure?.phase) && typeof failure.message === "string"
+          ? failure.message
+          : "Scheduled official build enrichment failed; previous dataset retained.";
+      if (env.ADMIN_SECRET) reason = reason.replaceAll(String(env.ADMIN_SECRET), "[redacted]");
+      reason = reason.slice(0, 500);
       await updateRefresh(env.DB, analysisConfig, refreshToken, "failed", {
         buildCount: body.continuation.processedCount,
-        error: "Scheduled official build enrichment failed; previous dataset retained.",
+        error: reason,
       });
       return Response.json({ success: false, code: "ENRICHMENT_FAILED" }, { status: 502 });
     }
