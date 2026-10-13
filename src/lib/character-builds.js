@@ -141,21 +141,25 @@ export async function fetchCharacterBuild(
     return { build: cached, warnings: [], cached: true, resumable: true };
   if (!budget.canAfford(3)) throw new subrequestBudgetExhausted(budget.used, budget.hardLimit);
   const [equipData, infoData] = await Promise.all([
-    officialJSON(player, "equipment", budget),
-    officialJSON(player, "info", budget),
+    officialJSON(player, "equipment", budget, {}, (data) => {
+      if (!data?.equipment?.equipmentList?.length || !data.skill?.skillList?.length)
+        throw new Error("Official character equipment/skills are unavailable.");
+    }),
+    officialJSON(player, "info", budget, {}, (data) => {
+      if (
+        !data?.profile ||
+        String(data.profile.characterId) !== player.characterId ||
+        Number(data.profile.serverId) !== Number(player.serverId)
+      )
+        throw new Error("Official profile identifiers do not match discovery.");
+      const combatPower = extractCombatPowerFromInfo(data);
+      const itemLevel = extractItemLevelFromInfo(data);
+      if (!Number.isFinite(combatPower) || combatPower <= 0 || !Number.isFinite(itemLevel))
+        throw new Error("Official character stats are unavailable.");
+    }),
   ]);
-  if (!equipData?.equipment?.equipmentList?.length || !equipData.skill?.skillList?.length)
-    throw new Error("Official character equipment/skills are unavailable.");
-  if (
-    !infoData?.profile ||
-    String(infoData.profile.characterId) !== player.characterId ||
-    Number(infoData.profile.serverId) !== Number(player.serverId)
-  )
-    throw new Error("Official profile identifiers do not match discovery.");
   const combatPower = extractCombatPowerFromInfo(infoData);
   const itemLevel = extractItemLevelFromInfo(infoData);
-  if (combatPower == null || itemLevel == null)
-    throw new Error("Official character stats are unavailable.");
   const equipment = equipData.equipment.equipmentList.filter(Boolean);
   if (!budget.canAfford(equipment.length + 1)) throw new subrequestBudgetExhausted(budget.used);
   const warnings = [];

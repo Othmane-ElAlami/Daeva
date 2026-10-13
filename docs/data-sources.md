@@ -182,6 +182,10 @@ earlier builds; unresolved mismatches remain failures. Scheduled item failures
 retry only the failed item once and retain other fetched details; a malformed
 direct item response can use the same validated first-party proxy fallback as
 an HTTP error. Unresolved items do not trigger a second full character fetch.
+Profile stats and equipment/skills are also validated before selecting a response,
+so HTTP-200 responses with unavailable stats (including zero Item Level) or
+equipment can use that proxy fallback. Character/server IDs remain strict on
+both transports; no leaderboard score or gear formula fills missing official stats.
 Freshness predicates exclude unusable old player rows in D1 before transferring
 and parsing their equipment/build JSON. API requests also have
 bounded retries, progress guards and a 125-batch limit.

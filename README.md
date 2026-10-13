@@ -135,7 +135,9 @@ class, identifiers, rank and leaderboard CP, and retain their actual build-fetch
 timestamp. Stale player rows are filtered in SQL before their build JSON is
 transferred or parsed. Missing/mismatched official profiles can retry once;
 scheduled item failures retry that item once while retaining successful details.
-Invalid direct item payloads also use the validated first-party proxy fallback.
+Invalid direct profile stats, equipment/skills or item payloads also use the
+validated first-party proxy fallback. Both transports must return the expected
+character/server IDs and complete official stats; a zero Item Level is unavailable.
 Unresolved failures stop the refresh and retain the last usable population.
 Workflow/status diagnostics identify the stage, character rank, failed item/slot
 or HTTP/Cloudflare error code when available. Authentication secrets are redacted.

@@ -541,6 +541,98 @@ describe("provider failures and historical populations", () => {
 });
 
 describe("official build enrichment, ranking and continuation", () => {
+  it.each(["item-level", "combat-power", "equipment"])(
+    "recovers an invalid direct %s response through the validated proxy",
+    async (failure) => {
+      const upstream = mockOfficialPipeline();
+      const fetch = vi.fn(async (input, options) => {
+        const url = new URL(input);
+        if (url.pathname === "/api/proxy") return upstream(url.searchParams.get("url"), options);
+        const data = await (await upstream(input, options)).json();
+        if (url.pathname.endsWith("/character/info")) {
+          if (failure === "item-level")
+            for (const stat of data.stat.statList) if (stat.type === "ItemLevel") stat.value = 0;
+          if (failure === "combat-power") data.profile.combatPower = null;
+        }
+        if (failure === "equipment" && url.pathname.endsWith("/character/equipment"))
+          data.equipment.equipmentList = [];
+        return Response.json(data);
+      });
+      vi.stubGlobal("fetch", fetch);
+      const result = await fetchCharacterBuild(players[0], db, createBudget());
+      expect(result.warnings).toEqual([]);
+      expect(result.build.gearScore).toBe(3353);
+      expect(result.build.combatPower).toBe(222360);
+      expect(result.build.equipItems).toHaveLength(1);
+      expect(
+        fetch.mock.calls.filter(([url]) => new URL(url).pathname === "/api/proxy")
+      ).toHaveLength(1);
+      expect(
+        fetch.mock.calls.filter(([url]) =>
+          new URL(url).pathname.endsWith("/character/equipment/item")
+        )
+      ).toHaveLength(1);
+      expect((await loadCachedBuild(db, players[0])).gearScore).toBe(3353);
+    }
+  );
+  it("rejects mismatched profile IDs on both transports without caching a build", async () => {
+    const upstream = mockOfficialPipeline();
+    const fetch = vi.fn(async (input, options) => {
+      let url = new URL(input);
+      if (url.pathname === "/api/proxy") url = new URL(url.searchParams.get("url"));
+      const data = await (await upstream(url.toString(), options)).json();
+      if (url.pathname.endsWith("/character/info")) data.profile.characterId = "wrong-character";
+      return Response.json(data);
+    });
+    vi.stubGlobal("fetch", fetch);
+    await expect(fetchCharacterBuild(players[0], db, createBudget())).rejects.toThrow(
+      "Official profile identifiers do not match discovery."
+    );
+    expect(fetch.mock.calls.filter(([url]) => new URL(url).pathname === "/api/proxy")).toHaveLength(
+      1
+    );
+    expect(
+      await getCachedPlayer(db, players[0].characterId, players[0].serverId, "GLOBAL")
+    ).toBeNull();
+  });
+  it("preserves the last cached build when both profile transports have unavailable stats", async () => {
+    const fetchedAt = Date.now() - 7 * 3600000;
+    await setCachedPlayer(
+      db,
+      players[0].characterId,
+      players[0].serverId,
+      "GLOBAL",
+      equip,
+      details,
+      3353,
+      sampleBuild,
+      fetchedAt
+    );
+    const upstream = mockOfficialPipeline();
+    const fetch = vi.fn(async (input, options) => {
+      let url = new URL(input);
+      if (url.pathname === "/api/proxy") url = new URL(url.searchParams.get("url"));
+      const data = await (await upstream(url.toString(), options)).json();
+      if (url.pathname.endsWith("/character/info"))
+        for (const stat of data.stat.statList) if (stat.type === "ItemLevel") stat.value = 0;
+      return Response.json(data);
+    });
+    vi.stubGlobal("fetch", fetch);
+    await expect(fetchCharacterBuild(players[0], db, createBudget())).rejects.toThrow(
+      "Official character stats are unavailable."
+    );
+    expect(fetch.mock.calls.filter(([url]) => new URL(url).pathname === "/api/proxy")).toHaveLength(
+      1
+    );
+    const retained = await getCachedPlayer(
+      db,
+      players[0].characterId,
+      players[0].serverId,
+      "GLOBAL"
+    );
+    expect(retained.fetchedAt).toBe(fetchedAt);
+    expect(retained.itemLevel).toBe(3353);
+  });
   it.each(["proxy", "retry"])(
     "recovers a bad item response via %s without refetching successful items",
     async (recovery) => {
