@@ -136,7 +136,10 @@ export async function runCombatPowerPrefetch({
       // Missing/mismatched profiles and incomplete item details never get uploaded.
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          const result = await enrich(player, null, createBudget(), { retryItemDetails: true });
+          const result = await enrich(player, null, createBudget(), {
+            retryItemDetails: true,
+            retryEquipmentChanges: true,
+          });
           if (!result?.build || result.warnings?.length) {
             const error = new Error(
               `Official build details are incomplete: ${safeText(result?.warnings?.slice(0, 3).join("; ") || "missing build")}`
@@ -144,12 +147,20 @@ export async function runCombatPowerPrefetch({
             error.code = "ITEM_DETAILS_INCOMPLETE";
             throw error;
           }
+          if (result.equipmentRefreshed)
+            log(
+              `${region}/${cls}: refreshed changed equipment for ${safeText(player.characterName || player.characterId)} (rank ${player.rank})`
+            );
           enrichedBuild = result.build;
           break;
         } catch (error) {
           // Item retries already retained the successful details; do not fetch
           // an entire character again for an unresolved item failure.
-          if (attempt || error.code === "ITEM_DETAILS_INCOMPLETE") throw error;
+          if (
+            attempt ||
+            ["ITEM_DETAILS_INCOMPLETE", "EQUIPMENT_REFRESH_FAILED"].includes(error.code)
+          )
+            throw error;
           await wait(2000);
         }
       }

@@ -126,6 +126,11 @@ function buildFromCache(player, cached) {
   );
 }
 
+function validateEquipment(data) {
+  if (!data?.equipment?.equipmentList?.length || !data.skill?.skillList?.length)
+    throw new Error("Official character equipment/skills are unavailable.");
+}
+
 // Official item detail calls cost one subrequest each. Both interactive analysis
 // and scheduled prefetch use the same budget/continuation path instead of dropping
 // arcana, rune or stone data to make a top-100 job fit one invocation.
@@ -133,7 +138,7 @@ export async function fetchCharacterBuild(
   player,
   db,
   budget,
-  { refresh = false, cachedBuild, retryItemDetails = false } = {}
+  { refresh = false, cachedBuild, retryItemDetails = false, retryEquipmentChanges = false } = {}
 ) {
   if (player._build) return { build: player._build, warnings: [] };
   const cached = cachedBuild === undefined ? await loadCachedBuild(db, player) : cachedBuild;
@@ -141,10 +146,7 @@ export async function fetchCharacterBuild(
     return { build: cached, warnings: [], cached: true, resumable: true };
   if (!budget.canAfford(3)) throw new subrequestBudgetExhausted(budget.used, budget.hardLimit);
   const [equipData, infoData] = await Promise.all([
-    officialJSON(player, "equipment", budget, {}, (data) => {
-      if (!data?.equipment?.equipmentList?.length || !data.skill?.skillList?.length)
-        throw new Error("Official character equipment/skills are unavailable.");
-    }),
+    officialJSON(player, "equipment", budget, {}, validateEquipment),
     officialJSON(player, "info", budget, {}, (data) => {
       if (
         !data?.profile ||
@@ -163,6 +165,7 @@ export async function fetchCharacterBuild(
   const equipment = equipData.equipment.equipmentList.filter(Boolean);
   if (!budget.canAfford(equipment.length + 1)) throw new subrequestBudgetExhausted(budget.used);
   const warnings = [];
+  const failedItems = [];
   const results = await runPool(
     equipment.map((item) => async () => {
       try {
@@ -193,6 +196,7 @@ export async function fetchCharacterBuild(
         }
       } catch (error) {
         if (error instanceof subrequestBudgetExhausted) return error;
+        failedItems.push(item);
         warnings.push(`${item.name} (id ${item.id}, slot ${item.slotPos}): ${error.message}`);
         return null;
       }
@@ -206,6 +210,46 @@ export async function fetchCharacterBuild(
     !budget.canAfford()
   )
     throw new subrequestBudgetExhausted(budget.used);
+  if (failedItems.length && retryEquipmentChanges) {
+    let latest;
+    try {
+      latest = await officialJSON(player, "equipment", budget, {}, validateEquipment);
+    } catch (error) {
+      if (error instanceof subrequestBudgetExhausted) throw error;
+      // The original incomplete result still fails scheduled publication.
+    }
+    const changed =
+      latest &&
+      failedItems.some((item) => {
+        const current = latest.equipment.equipmentList.find(
+          (candidate) => candidate && String(candidate.slotPos) === String(item.slotPos)
+        );
+        return (
+          !current ||
+          ["id", "enchantLevel", "exceedLevel"].some(
+            (field) => String(current[field] ?? 0) !== String(item[field] ?? 0)
+          )
+        );
+      });
+    if (changed) {
+      // Rebuild the whole character from fresh official responses once. Mixing
+      // the original skills/gear with a replacement item's details is unsafe.
+      try {
+        const result = await fetchCharacterBuild(player, db, budget, {
+          refresh: true,
+          cachedBuild: null,
+          retryItemDetails,
+          retryEquipmentChanges: false,
+        });
+        return { ...result, equipmentRefreshed: true };
+      } catch (error) {
+        if (error instanceof subrequestBudgetExhausted) throw error;
+        const problem = new Error(`Changed equipment refresh failed: ${error.message}`);
+        problem.code = "EQUIPMENT_REFRESH_FAILED";
+        throw problem;
+      }
+    }
+  }
   const equipDetails = results.filter(Boolean);
   // Preserve equipment/skill results even if individual item details fail, but
   // do not promote an incomplete build into the reusable player cache.

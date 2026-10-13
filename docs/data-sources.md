@@ -181,7 +181,12 @@ handles transient official profile responses without restarting discovery or ref
 earlier builds; unresolved mismatches remain failures. Scheduled item failures
 retry only the failed item once and retain other fetched details; a malformed
 direct item response can use the same validated first-party proxy fallback as
-an HTTP error. Unresolved items do not trigger a second full character fetch.
+an HTTP error. After unresolved item retries, scheduled enrichment rechecks the
+equipment list once. If a failed slot's item ID, enchant or exceed level changed,
+it rebuilds that character once from fresh official equipment, stats and item
+details. Other prepared players remain intact; unchanged malformed items do not
+trigger a full character retry. The replacement never combines old skills/gear
+with new item details, and a failed replacement retains the last usable cache.
 Profile stats and equipment/skills are also validated before selecting a response,
 so HTTP-200 responses with unavailable stats (including zero Item Level) or
 equipment can use that proxy fallback. Character/server IDs remain strict on

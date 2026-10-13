@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Recover scheduled enrichment when a failed item belongs to changed equipment: recheck the failed slot and rebuild that character once from fresh official data. Preserve strict item validation and the previous cache when equipment is unchanged or the replacement still fails.
 - Validate official profile stats and equipment before selecting their response, so an HTTP-200 payload with unavailable Item Level, Combat Power or equipment can recover through the first-party proxy. Require matching character/server IDs and complete data on both transports; unresolved failures retain the previous full population.
 - Filter stale player-cache rows in SQL during scheduled CP preparation. Recover invalid direct item responses through the validated first-party proxy and retry only failed items; retain complete datasets on unresolved failures. Report bounded stage/item/HTTP diagnostics in workflow logs and prefetch status with credential redaction.
 - Ignore corrupt CP lookup duplicates only when a valid entry with the same official profile key and character metadata exists. Preserve the valid entry's ID, CP and rank, and continue bounded pagination to prepare 100 unique builds; standalone malformed IDs remain provider failures.

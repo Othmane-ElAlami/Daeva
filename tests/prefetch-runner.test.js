@@ -47,27 +47,62 @@ describe("scheduled Combat Power runner", () => {
       execution: "runner",
     });
   });
-  it("never uploads builds with missing official item details", async () => {
+  it.each(["items", "equipment-refresh"])(
+    "never uploads an incomplete %s result or repeats enrichment",
+    async (failure) => {
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce(
+          Response.json({ ...baseResponse, playerCount: 0, continuation, enrichPlayer: player })
+        )
+        .mockResolvedValueOnce(Response.json({ code: "ENRICHMENT_FAILED" }, { status: 502 }));
+      const enrich = vi.fn(async () => {
+        if (failure === "equipment-refresh") {
+          const error = new Error("Item details unavailable after incomplete equipment refresh.");
+          error.code = "EQUIPMENT_REFRESH_FAILED";
+          throw error;
+        }
+        return { build: { characterId: "sample" }, warnings: ["Item details unavailable"] };
+      });
+      await expect(runCombatPowerPrefetch({ ...options, request, enrich })).rejects.toThrow(
+        "incomplete"
+      );
+      expect(enrich).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(request.mock.calls[1][1].body)).toMatchObject({
+        failed: true,
+        continuation,
+      });
+      expect(JSON.parse(request.mock.calls[1][1].body).failure).toMatchObject({
+        phase: "enrichment",
+        message: expect.stringContaining("Item details unavailable"),
+      });
+      expect(JSON.parse(request.mock.calls[1][1].body).enrichedBuild).toBeUndefined();
+    }
+  );
+  it("enables bounded gear-change recovery without rediscovery and logs successful recovery", async () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce(
         Response.json({ ...baseResponse, playerCount: 0, continuation, enrichPlayer: player })
       )
-      .mockResolvedValueOnce(Response.json({ code: "ENRICHMENT_FAILED" }, { status: 502 }));
+      .mockResolvedValueOnce(Response.json({ ...baseResponse, playerCount: 1, complete: true }));
     const enrich = vi.fn(async () => ({
       build: { characterId: "sample" },
-      warnings: ["Item details unavailable"],
+      warnings: [],
+      equipmentRefreshed: true,
     }));
-    await expect(runCombatPowerPrefetch({ ...options, request, enrich })).rejects.toThrow(
-      "incomplete"
-    );
-    expect(enrich).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(request.mock.calls[1][1].body)).toMatchObject({ failed: true, continuation });
-    expect(JSON.parse(request.mock.calls[1][1].body).failure).toMatchObject({
-      phase: "enrichment",
-      message: expect.stringContaining("Item details unavailable"),
+    const log = vi.fn();
+    expect(await runCombatPowerPrefetch({ ...options, request, enrich, log })).toMatchObject({
+      complete: true,
+      enrichedCount: 1,
     });
-    expect(JSON.parse(request.mock.calls[1][1].body).enrichedBuild).toBeUndefined();
+    expect(enrich).toHaveBeenCalledOnce();
+    expect(enrich.mock.calls[0][3]).toEqual({
+      retryItemDetails: true,
+      retryEquipmentChanges: true,
+    });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("refreshed changed equipment"));
+    expect(request).toHaveBeenCalledTimes(2);
   });
   it("rejects repeated platform errors and malformed success bodies after bounded retries", async () => {
     const request = vi.fn(

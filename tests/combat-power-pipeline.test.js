@@ -670,6 +670,94 @@ describe("official build enrichment, ranking and continuation", () => {
       expect((await loadCachedBuild(db, players[0])).equipItems).toHaveLength(2);
     }
   );
+  it.each([true, false])(
+    "rebuilds changed equipment once without mixing snapshots (replacement complete: %s)",
+    async (complete) => {
+      const fetchedAt = Date.now() - 7 * 3600000;
+      await setCachedPlayer(
+        db,
+        players[0].characterId,
+        players[0].serverId,
+        "GLOBAL",
+        equip,
+        details,
+        3353,
+        sampleBuild,
+        fetchedAt
+      );
+      let equipmentReads = 0;
+      let infoReads = 0;
+      const oldItem = {
+        id: 810150001,
+        name: "Chalice of Vigor",
+        grade: "Rare",
+        slotPos: 41,
+        slotPosName: "Arcana1",
+        enchantLevel: 1,
+        exceedLevel: 0,
+      };
+      const currentItem = { ...oldItem, id: 810140001, grade: "Legend" };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input) => {
+          let url = new URL(input);
+          if (url.pathname === "/api/proxy") url = new URL(url.searchParams.get("url"));
+          if (url.pathname.endsWith("/character/equipment")) {
+            const data = structuredClone(equip);
+            data.equipment.equipmentList = [++equipmentReads === 1 ? oldItem : currentItem];
+            if (equipmentReads > 1)
+              for (const skill of data.skill.skillList) skill.name = `Current ${skill.name}`;
+            return Response.json(data);
+          }
+          if (url.pathname.endsWith("/character/info")) {
+            const data = fixture("global-info");
+            if (++infoReads > 1) {
+              data.profile.combatPower = 250000;
+              for (const stat of data.stat.statList)
+                if (stat.type === "ItemLevel") stat.value = 3500;
+            }
+            return Response.json(data);
+          }
+          if (complete && url.searchParams.get("id") === String(currentItem.id))
+            return Response.json({
+              ...currentItem,
+              categoryName: "Chalice",
+              mainStats: [{ id: "Time", name: "Time [Siel]", value: "16", extra: "1" }],
+            });
+          return Response.json({});
+        })
+      );
+      const result = await fetchCharacterBuild(players[0], db, createBudget(), {
+        retryItemDetails: true,
+        retryEquipmentChanges: true,
+      });
+      expect(result.equipmentRefreshed).toBe(true);
+      expect(equipmentReads).toBe(3);
+      expect(infoReads).toBe(2);
+      expect(result.build.combatPower).toBe(250000);
+      expect(result.build.gearScore).toBe(3500);
+      expect(result.build.leaderboardCombatPower).toBe(players[0].combatPower);
+      expect(result.build.rank).toBe(players[0].rank);
+      expect(result.build.activeSkills.every((skill) => skill.name.startsWith("Current "))).toBe(
+        true
+      );
+      expect(result.build.equipItems[0].grade).toBe("Legend");
+      const cached = await getCachedPlayer(
+        db,
+        players[0].characterId,
+        players[0].serverId,
+        "GLOBAL"
+      );
+      if (complete) {
+        expect(result.warnings).toEqual([]);
+        expect(cached.equipDetails[0].id).toBe(currentItem.id);
+        expect(cached.fetchedAt).toBeGreaterThan(fetchedAt);
+      } else {
+        expect(result.warnings).toHaveLength(1);
+        expect(cached.fetchedAt).toBe(fetchedAt);
+      }
+    }
+  );
   it("reports an unresolved item and preserves the existing player cache", async () => {
     const fetchedAt = Date.now() - 7 * 3600000;
     await setCachedPlayer(
@@ -694,11 +782,16 @@ describe("official build enrichment, ranking and continuation", () => {
     );
     const result = await fetchCharacterBuild(players[0], db, createBudget(), {
       retryItemDetails: true,
+      retryEquipmentChanges: true,
     });
     expect(result.warnings[0]).toContain(
       `id ${equip.equipment.equipmentList[0].id}, slot ${equip.equipment.equipmentList[0].slotPos}`
     );
     expect(result.warnings[0]).toContain("Malformed official item details");
+    expect(result.equipmentRefreshed).toBeUndefined();
+    expect(
+      fetch.mock.calls.filter(([url]) => new URL(url).pathname.endsWith("/character/equipment"))
+    ).toHaveLength(2);
     expect((await getCachedPlayers(db, [players[0]])).get(characterKey(players[0])).fetchedAt).toBe(
       fetchedAt
     );

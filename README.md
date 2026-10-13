@@ -138,6 +138,9 @@ scheduled item failures retry that item once while retaining successful details.
 Invalid direct profile stats, equipment/skills or item payloads also use the
 validated first-party proxy fallback. Both transports must return the expected
 character/server IDs and complete official stats; a zero Item Level is unavailable.
+After unresolved item retries, scheduled runs recheck equipment once. A changed
+failed slot triggers one complete character rebuild from fresh official data;
+unchanged malformed items remain failures. Old and new equipment are never combined.
 Unresolved failures stop the refresh and retain the last usable population.
 Workflow/status diagnostics identify the stage, character rank, failed item/slot
 or HTTP/Cloudflare error code when available. Authentication secrets are redacted.
