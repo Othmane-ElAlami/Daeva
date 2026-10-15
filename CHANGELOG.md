@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Pace scheduled upstream requests and honor HTTP-429 `Retry-After` with shared, bounded cooldowns. Retry individual requests while retaining successful item details and completed players, renew continuation leases during waits, and prevent overlapping jobs for the same population. Distinguish unavailable profiles from real ID mismatches and keep response-body reads within their timeout.
+- Backfill individually unavailable CP profiles/items from the next ranks to prepare 100 complete available builds. Preserve actual ranks, disclose omissions in source details/status and stop on widespread failures; rate limits and authentication/transport failures cannot be skipped. Keep the last complete cache on unsuccessful refreshes.
+- Retry transient official HTTP 404 responses before declaring a character/item unavailable; retain successful item details while retrying.
 - Recover scheduled enrichment when a failed item belongs to changed equipment: recheck the failed slot and rebuild that character once from fresh official data. Preserve strict item validation and the previous cache when equipment is unchanged or the replacement still fails.
 - Validate official profile stats and equipment before selecting their response, so an HTTP-200 payload with unavailable Item Level, Combat Power or equipment can recover through the first-party proxy. Require matching character/server IDs and complete data on both transports; unresolved failures retain the previous full population.
 - Filter stale player-cache rows in SQL during scheduled CP preparation. Recover invalid direct item responses through the validated first-party proxy and retry only failed items; retain complete datasets on unresolved failures. Report bounded stage/item/HTTP diagnostics in workflow logs and prefetch status with credential redaction.

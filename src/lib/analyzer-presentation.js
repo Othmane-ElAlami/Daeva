@@ -55,9 +55,13 @@ export function quickBuild(stats, builds) {
 export function sourceHealthText(meta) {
   if (meta.health === "unavailable") return "Unavailable";
   if (meta.health === "historical") return "Historical aggregate snapshot";
+  const omitted = meta.unavailablePlayers?.length || 0;
+  const availability = omitted
+    ? ` · ${omitted} unavailable profile${omitted === 1 ? "" : "s"} omitted`
+    : "";
   if (meta.source === "Cache")
-    return `${meta.health === "stale" ? "Stale" : "Recent"} full-build cache · fetched ${new Date(meta.fetchedAt).toISOString()}`;
+    return `${meta.health === "stale" ? "Stale" : "Recent"} full-build cache · fetched ${new Date(meta.fetchedAt).toISOString()}${availability}`;
   if (meta.leaderboardType === COMBAT_POWER)
-    return "Live/Recent Character Data · Shugo CP leaderboard · periodically refreshed";
+    return `Live/Recent Character Data · Shugo CP leaderboard · periodically refreshed${availability}`;
   return meta.health === "partial" ? "Partial Data" : "Recent Character Data";
 }

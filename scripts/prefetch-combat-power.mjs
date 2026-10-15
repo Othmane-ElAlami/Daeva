@@ -3,6 +3,13 @@ import { fetchCharacterBuild } from "../src/lib/character-builds.js";
 import { classes, createBudget, sleep } from "../src/lib/scraper-shared.js";
 import { characterKey, normalizeRegion } from "../src/lib/regions.js";
 import { COMBAT_POWER, CP_SOURCE } from "../src/lib/discovery-config.js";
+import { createScheduledJSON } from "../src/lib/prefetch/upstream.js";
+import {
+  MAX_UNAVAILABLE_PROFILES,
+  MAX_CONSECUTIVE_UNAVAILABLE,
+  unavailableCode,
+  unavailableStreak,
+} from "../src/lib/prefetch/unavailable.js";
 
 // Only official build fetching runs here. The authenticated API owns discovery,
 // freshness, leases, cache reuse, completeness checks and final D1 publication.
@@ -31,7 +38,9 @@ export async function runCombatPowerPrefetch({
   const headers = { "Content-Type": "application/json", Authorization: `Bearer ${secret}` };
   let continuation;
   let enrichedBuild;
+  let unavailable;
   let previousCount = -1;
+  let previousProgress = -1;
   let waiting = 0;
   let requests = 0;
   let enrichedCount = 0;
@@ -39,6 +48,36 @@ export async function runCombatPowerPrefetch({
   let target = null;
   const safeText = (value, limit = 500) =>
     String(value).replaceAll(secret, "[redacted]").slice(0, limit);
+  let lastHeartbeat = Date.now();
+  let heartbeat = null;
+  async function keepLease() {
+    if (heartbeat) return heartbeat;
+    if (!continuation?.refreshToken || Date.now() - lastHeartbeat < 60000) return;
+    lastHeartbeat = Date.now();
+    heartbeat = (async () => {
+      try {
+        const data = await post({ ...base, continuation, heartbeat: true });
+        if (data.heartbeat !== true || data.playerCount !== continuation.processedCount)
+          throw new Error("Population lease could not be renewed during upstream backoff.");
+      } catch (error) {
+        error.code = "LEASE_LOST";
+        error.retryable = false;
+        throw error;
+      }
+    })();
+    try {
+      await heartbeat;
+    } finally {
+      heartbeat = null;
+    }
+  }
+  const upstream = createScheduledJSON({
+    onWait: keepLease,
+    onRetry: ({ host, error, delayMs, attempt }) =>
+      log(
+        `${region}/${cls}: ${safeText(error.message)} from ${host}; retry ${attempt} in ${Math.ceil(delayMs / 1000)}s`
+      ),
+  });
 
   async function post(body) {
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -93,13 +132,15 @@ export async function runCombatPowerPrefetch({
   }
 
   try {
-    while (requests < 125) {
+    while (requests < 160) {
       phase = "api";
       const data = await post({
         ...base,
         continuation,
         ...(enrichedBuild ? { enrichedBuild } : {}),
+        ...(unavailable ? { unavailable } : {}),
       });
+      lastHeartbeat = Date.now();
       if (data.disabled) {
         log(`${region}/${cls}: prefetch disabled`);
         return { skipped: true };
@@ -114,13 +155,25 @@ export async function runCombatPowerPrefetch({
       if (data.complete === true) {
         if (data.continuation || data.playerCount < 1)
           throw new Error("Prefetch API did not publish a complete population.");
-        return { complete: true, buildCount: data.playerCount, enrichedCount, requests };
+        return {
+          complete: true,
+          buildCount: data.playerCount,
+          enrichedCount,
+          requests,
+          cacheHit: data.skipped === true,
+          upstreamRetries: upstream.metrics.retries,
+          rateLimits: upstream.metrics.rateLimits,
+          unavailableCount: data.sourceMeta?.unavailablePlayers?.length || 0,
+        };
       }
-      if (data.playerCount <= previousCount)
-        throw new Error("Population preparation made no progress.");
+      const unavailableCount = data.sourceMeta?.unavailablePlayers?.length || 0;
+      const progress = data.playerCount + unavailableCount;
+      if (progress <= previousProgress) throw new Error("Population preparation made no progress.");
       previousCount = data.playerCount;
+      previousProgress = progress;
       continuation = data.continuation;
       enrichedBuild = undefined;
+      unavailable = undefined;
       const player = data.enrichPlayer;
       if (!player) continue;
       phase = "enrichment";
@@ -139,12 +192,17 @@ export async function runCombatPowerPrefetch({
           const result = await enrich(player, null, createBudget(), {
             retryItemDetails: true,
             retryEquipmentChanges: true,
+            requestJSON: upstream.json,
           });
           if (!result?.build || result.warnings?.length) {
             const error = new Error(
               `Official build details are incomplete: ${safeText(result?.warnings?.slice(0, 3).join("; ") || "missing build")}`
             );
-            error.code = "ITEM_DETAILS_INCOMPLETE";
+            error.code =
+              result?.itemFailures?.length && result.itemFailures.every(unavailableCode)
+                ? "ITEM_UNAVAILABLE"
+                : "ITEM_DETAILS_INCOMPLETE";
+            error.retryable = false;
             throw error;
           }
           if (result.equipmentRefreshed)
@@ -154,17 +212,32 @@ export async function runCombatPowerPrefetch({
           enrichedBuild = result.build;
           break;
         } catch (error) {
+          const code = unavailableCode(error);
+          if (code && (attempt || error.retryable === false || error.retryExhausted)) {
+            if (
+              unavailableCount >= MAX_UNAVAILABLE_PROFILES ||
+              unavailableStreak(continuation) >= MAX_CONSECUTIVE_UNAVAILABLE
+            )
+              throw new Error("Too many unavailable profiles; previous dataset retained.");
+            unavailable = { code, reason: safeText(error.message) };
+            log(
+              `${region}/${cls}: omitting unavailable ${safeText(player.characterName || player.characterId)} (rank ${player.rank}, ${code}); trying the next CP rank`
+            );
+            break;
+          }
           // Item retries already retained the successful details; do not fetch
           // an entire character again for an unresolved item failure.
           if (
             attempt ||
+            error.retryable === false ||
+            error.retryExhausted ||
             ["ITEM_DETAILS_INCOMPLETE", "EQUIPMENT_REFRESH_FAILED"].includes(error.code)
           )
             throw error;
           await wait(2000);
         }
       }
-      enrichedCount++;
+      if (enrichedBuild) enrichedCount++;
     }
     throw new Error("Population preparation batch limit reached.");
   } catch (error) {

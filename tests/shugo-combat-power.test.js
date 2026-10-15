@@ -72,9 +72,11 @@ describe("Shugo Combat Power public contract", () => {
     });
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (url) =>
-        Response.json(new URL(url).pathname.endsWith("/info") ? info : fixture("global-equipment"))
-      )
+      vi.fn(async (input) => {
+        let url = new URL(input);
+        if (url.pathname === "/api/proxy") url = new URL(url.searchParams.get("url"));
+        return Response.json(url.pathname.endsWith("/info") ? info : fixture("global-equipment"));
+      })
     );
     await expect(
       fetchCharacterBuild(

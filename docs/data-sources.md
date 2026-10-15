@@ -193,7 +193,30 @@ equipment can use that proxy fallback. Character/server IDs remain strict on
 both transports; no leaderboard score or gear formula fills missing official stats.
 Freshness predicates exclude unusable old player rows in D1 before transferring
 and parsing their equipment/build JSON. API requests also have
-bounded retries, progress guards and a 125-batch limit.
+bounded retries, progress guards and a 160-batch limit.
+
+The scheduled transport spaces requests by 500 ms per host and coordinates
+HTTP-429 cooldowns across its item/profile workers. It preserves `Retry-After`
+(seconds or HTTP date), retries the failed request with bounded backoff, and
+retains successful item responses and the completed population prefix. Missing
+data and HTTP 404 responses can retry after 5/15 seconds; live official item
+requests can transiently return 404 before succeeding. An actual mismatched
+profile ID is never accepted.
+Retry delays total at most ten minutes per job. An authenticated continuation
+heartbeat renews the existing lease during waits without performing discovery,
+enrichment or publication. A lost lease stops further upstream work. No new
+cache/table is introduced, and incomplete data never becomes a complete snapshot.
+
+Confirmed unavailable profiles/items can be omitted in favor of the next CP
+ranks, within the same provider and existing three-page discovery bound. The
+target remains 100 complete available builds, with original ranks/CP preserved.
+`sourceMeta.unavailablePlayers` records the omitted discovery identities/reasons;
+source details disclose the count and authenticated status exposes
+`unavailableCount`. No unavailable build is uploaded or cached. A maximum of 25
+omissions, or six consecutive unavailable characters, bounds this recovery.
+HTTP 429, authentication and transport failures cannot be omitted, including
+when a proxy returns a different error. Exhaustion or insufficient complete
+builds fails the job while retaining the last usable dataset and its timestamps.
 
 Failure diagnostics include the phase, prepared count and character rank, plus
 the item identifier/slot or returned HTTP/Cloudflare error code where known.

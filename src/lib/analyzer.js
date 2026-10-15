@@ -10,6 +10,7 @@ import { COMBAT_POWER, populationKey, isHistoricalOnly } from "./discovery-confi
 import { characterKey, matchesPlayerFilters } from "./regions.js";
 import { getPrefetchCache } from "./prefetch/cache.js";
 import { cachedAnalysis } from "./prefetch/population.js";
+import { MAX_UNAVAILABLE_PROFILES } from "./prefetch/unavailable.js";
 import {
   leaderboardTypes,
   classRankingIds,
@@ -49,7 +50,9 @@ export function validateContinuation(value, config) {
     (value.phase === "publish" && (value.players.length !== 0 || value.processedCount === 0))
   )
     return false;
-  const players = [...value.players, ...value.processedPlayers];
+  const unavailable = value.sourceMeta.unavailablePlayers || [];
+  if (!Array.isArray(unavailable) || unavailable.length > MAX_UNAVAILABLE_PROFILES) return false;
+  const players = [...value.players, ...value.processedPlayers, ...unavailable];
   return (
     players.every(
       (p) =>
@@ -108,6 +111,7 @@ export async function analyze(
     if (!validateContinuation(continuation, config))
       throw new Error("Invalid continuation population.");
     sourceMeta = continuation.sourceMeta;
+    for (const player of sourceMeta.unavailablePlayers || []) seen.add(characterKey(player));
     players = continuation.players;
     // Scheduled batches retain identities only. Re-reading and parsing the
     // entire completed prefix on every invocation grows CPU work quadratically.

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCombatPowerPrefetch } from "../scripts/prefetch-combat-power.mjs";
 
 const player = {
@@ -24,8 +24,53 @@ const options = {
   wait: async () => {},
   log: () => {},
 };
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
 
 describe("scheduled Combat Power runner", () => {
+  it("heartbeats through upstream backoff and uploads the same player's completed build", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn(async (_url, init) => {
+      const body = JSON.parse(init.body);
+      if (body.heartbeat)
+        return Response.json({ ...baseResponse, heartbeat: true, playerCount: 0, continuation });
+      if (body.enrichedBuild)
+        return Response.json({ ...baseResponse, complete: true, playerCount: 1 });
+      return Response.json({ ...baseResponse, playerCount: 0, continuation, enrichPlayer: player });
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response("limited", {
+            status: 429,
+            headers: { "Retry-After": "65" },
+          })
+        )
+        .mockResolvedValue(Response.json({ id: 1 }))
+    );
+    const enrich = vi.fn(async (_player, _db, budget, config) => {
+      await config.requestJSON("https://aion2.plaync.com/item", {}, "GET", null, budget);
+      return { build: { characterId: "sample" }, warnings: [] };
+    });
+    const result = runCombatPowerPrefetch({ ...options, request, enrich });
+    const check = expect(result).resolves.toMatchObject({
+      complete: true,
+      enrichedCount: 1,
+      upstreamRetries: 1,
+      rateLimits: 1,
+    });
+    await vi.advanceTimersByTimeAsync(90000);
+    await check;
+    expect(enrich).toHaveBeenCalledOnce();
+    const bodies = request.mock.calls.map(([, init]) => JSON.parse(init.body));
+    expect(bodies.filter((body) => body.heartbeat)).toHaveLength(1);
+    expect(bodies.filter((body) => !body.heartbeat && !body.enrichedBuild)).toHaveLength(1);
+    expect(bodies.at(-1).enrichedBuild).toEqual({ characterId: "sample" });
+  });
   it("retries a transient invalid official profile once without rediscovering the population", async () => {
     const request = vi
       .fn()
@@ -79,6 +124,72 @@ describe("scheduled Combat Power runner", () => {
       expect(JSON.parse(request.mock.calls[1][1].body).enrichedBuild).toBeUndefined();
     }
   );
+  it.each(["missing-item", "schema", "rate-limit", "proxy-rate-limit"])(
+    "only backfills a confirmed unavailable character (%s)",
+    async (failure) => {
+      const skippable = ["missing-item", "schema"].includes(failure);
+      const replacement = { ...player, characterId: "replacement" };
+      const omitted = [{ ...player, code: "ITEM_UNAVAILABLE", preparedBuildCount: 0 }];
+      const request = vi.fn(async (_url, init) => {
+        const body = JSON.parse(init.body);
+        if (body.failed) return Response.json({ code: "ENRICHMENT_FAILED" }, { status: 502 });
+        if (body.unavailable)
+          return Response.json({
+            ...baseResponse,
+            playerCount: 0,
+            sourceMeta: { unavailablePlayers: omitted },
+            continuation: {
+              ...continuation,
+              players: [replacement],
+              sourceMeta: { unavailablePlayers: omitted },
+            },
+            enrichPlayer: replacement,
+          });
+        if (body.enrichedBuild)
+          return Response.json({
+            ...baseResponse,
+            playerCount: 1,
+            complete: true,
+            sourceMeta: { unavailablePlayers: omitted },
+          });
+        return Response.json({
+          ...baseResponse,
+          playerCount: 0,
+          continuation,
+          enrichPlayer: player,
+        });
+      });
+      const enrich = vi.fn(async (target) => {
+        if (target.characterId === "replacement")
+          return { build: { characterId: target.characterId }, warnings: [] };
+        const error = new Error("Official item unavailable");
+        if (failure === "schema") error.code = "ITEM_UNAVAILABLE";
+        else error.status = failure === "rate-limit" ? 429 : 404;
+        if (failure === "proxy-rate-limit") error.officialFailure = { status: 429 };
+        return {
+          build: { characterId: "sample" },
+          warnings: [error.message],
+          itemFailures: [error],
+        };
+      });
+      const run = runCombatPowerPrefetch({ ...options, request, enrich });
+      if (skippable) {
+        expect(await run).toMatchObject({
+          complete: true,
+          buildCount: 1,
+          enrichedCount: 1,
+          unavailableCount: 1,
+        });
+        expect(enrich).toHaveBeenCalledTimes(2);
+      } else {
+        await expect(run).rejects.toThrow("incomplete");
+        expect(enrich).toHaveBeenCalledOnce();
+      }
+      const bodies = request.mock.calls.map(([, init]) => JSON.parse(init.body));
+      expect(bodies.filter((body) => body.unavailable)).toHaveLength(skippable ? 1 : 0);
+      expect(bodies.filter((body) => body.enrichedBuild?.characterId === "sample")).toHaveLength(0);
+    }
+  );
   it("enables bounded gear-change recovery without rediscovery and logs successful recovery", async () => {
     const request = vi
       .fn()
@@ -100,6 +211,7 @@ describe("scheduled Combat Power runner", () => {
     expect(enrich.mock.calls[0][3]).toEqual({
       retryItemDetails: true,
       retryEquipmentChanges: true,
+      requestJSON: expect.any(Function),
     });
     expect(log).toHaveBeenCalledWith(expect.stringContaining("refreshed changed equipment"));
     expect(request).toHaveBeenCalledTimes(2);

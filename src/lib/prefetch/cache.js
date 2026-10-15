@@ -157,6 +157,7 @@ export async function getAllPrefetchEntries(db) {
         complete,
         preparedBy: recorded.preparedBy || "unknown",
         discoveryDuplicatesIgnored: meta.discoveryDuplicatesIgnored || 0,
+        unavailableCount: meta.unavailablePlayers?.length || 0,
         lastSuccessfulRun: r.last_success || (complete ? r.fetched_at : null),
         refreshStatus: r.refresh_status || null,
         refreshStartedAt: r.refresh_started || null,

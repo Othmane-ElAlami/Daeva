@@ -23,7 +23,12 @@ import { validateContinuation } from "@/lib/analyzer";
 import { saveMetaSnapshot } from "@/lib/meta-snapshots";
 import { inspectPopulation, populationTarget } from "@/lib/prefetch/population";
 import { claimRefresh, updateRefresh } from "@/lib/prefetch/refresh";
-import { validRunnerBuild, acceptRunnerBuild } from "@/lib/prefetch/handoff";
+import {
+  validRunnerBuild,
+  acceptRunnerBuild,
+  validUnavailablePlayer,
+  omitUnavailablePlayer,
+} from "@/lib/prefetch/handoff";
 
 export const runtime = "edge";
 
@@ -104,6 +109,27 @@ export async function POST(request) {
       { error: "A runner failure requires its pending continuation." },
       { status: 400 }
     );
+  if (
+    body.unavailable &&
+    (!external ||
+      !body.continuation?.refreshToken ||
+      body.failed ||
+      body.enrichedBuild ||
+      body.heartbeat ||
+      !validUnavailablePlayer(body.unavailable, body.continuation))
+  )
+    return Response.json(
+      { error: "Invalid or excessive unavailable-profile report." },
+      { status: 400 }
+    );
+  if (
+    body.heartbeat &&
+    (!external || !body.continuation?.refreshToken || body.failed || body.enrichedBuild)
+  )
+    return Response.json(
+      { error: "A runner heartbeat requires its pending lease only." },
+      { status: 400 }
+    );
 
   const startTime = Date.now();
   let refreshToken = null;
@@ -149,6 +175,22 @@ export async function POST(request) {
         { status: 202 }
       );
     refreshToken = lease.token;
+    if (body.heartbeat) {
+      await updateRefresh(env.DB, analysisConfig, refreshToken, "running", {
+        buildCount: body.continuation.processedCount,
+      });
+      return Response.json({
+        success: true,
+        heartbeat: true,
+        complete: false,
+        class: cls,
+        leaderboard,
+        region,
+        playerCount: body.continuation.processedCount,
+        errorCount: 0,
+        continuation: body.continuation,
+      });
+    }
     if (body.failed) {
       const failure = body.failure;
       let reason =
@@ -165,7 +207,9 @@ export async function POST(request) {
     }
     const continuation = body.enrichedBuild
       ? await acceptRunnerBuild(env.DB, body.enrichedBuild, body.continuation)
-      : body.continuation;
+      : body.unavailable
+        ? omitUnavailablePlayer(body.unavailable, body.continuation)
+        : body.continuation;
     const result = await runPrefetchJob(cls, leaderboard, env.DB, {
       region,
       sourceMode: config.sourceMode,

@@ -11,6 +11,9 @@ jobs:
   prefetch:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    concurrency:
+      group: prefetch-${{ matrix.region }}-${{ matrix.class }}
+      cancel-in-progress: false
     strategy:
       fail-fast: false
       max-parallel: 3

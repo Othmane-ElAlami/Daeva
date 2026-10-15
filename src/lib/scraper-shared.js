@@ -163,6 +163,22 @@ export function createWorkerBudget(env = {}) {
 
 // ── Fetch Helpers ────────────────────────────────────────────────────────────
 
+export class UpstreamHttpError extends Error {
+  constructor(response) {
+    super(`HTTP ${response.status}`);
+    this.name = "UpstreamHttpError";
+    this.status = response.status;
+    const retryAfter = response.headers?.get?.("Retry-After");
+    const seconds = retryAfter == null ? NaN : Number(retryAfter);
+    const date = retryAfter == null ? NaN : Date.parse(retryAfter);
+    this.retryAfterMs = Number.isFinite(seconds)
+      ? Math.max(0, seconds * 1000)
+      : Number.isFinite(date)
+        ? Math.max(0, date - Date.now())
+        : null;
+  }
+}
+
 // Map raw API URLs to user-friendly descriptions for logs.
 function friendlyFetchLabel(url) {
   // Unwrap proxy URLs to inspect the inner path
@@ -199,11 +215,22 @@ export async function fetchJSON(
     opts.headers = { ...headers, "Content-Type": "application/json" };
   }
   const label = friendlyFetchLabel(url);
-  let res;
   try {
-    res = await fetch(url, opts);
+    const res = await fetch(url, opts);
+    if (!res.ok) {
+      if (logger) logger.error("fetch", `${label} — failed (HTTP ${res.status})`);
+      const error = new UpstreamHttpError(res);
+      try {
+        await res.body?.cancel?.();
+      } catch {
+        /* Preserve the HTTP error. */
+      }
+      throw error;
+    }
+    const data = await res.json();
+    if (logger) logger.success("fetch", `${label} ✓`);
+    return data;
   } catch (err) {
-    clearTimeout(timer);
     if (err.name === "AbortError") {
       throw new Error(`Request timed out after ${timeoutMs}ms`);
     }
@@ -213,14 +240,9 @@ export async function fetchJSON(
       throw new subrequestBudgetExhausted(budget ? budget.used : 0);
     }
     throw err;
+  } finally {
+    clearTimeout(timer);
   }
-  clearTimeout(timer);
-  if (!res.ok) {
-    if (logger) logger.error("fetch", `${label} — failed (HTTP ${res.status})`);
-    throw new Error(`HTTP ${res.status}`);
-  }
-  if (logger) logger.success("fetch", `${label} ✓`);
-  return res.json();
 }
 
 // Shared cooldown state for coordinating rate-limit backoff across concurrent workers.

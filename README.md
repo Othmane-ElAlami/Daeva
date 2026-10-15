@@ -113,6 +113,25 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 A GitHub Actions workflow calls the authenticated `POST /api/prefetch/run` endpoint every six hours (03:17, 09:17, 15:17 and 21:17 UTC). It runs 8 classes × 3 supported regions, using direct upstream class filtering. A region-wide top 100 cannot supply the top 100 of each class, so those queries are intentionally distinct.
 
+Scheduled build requests start at least 500 ms apart per upstream host. HTTP 429
+responses pause all workers using that host and honor `Retry-After`, with bounded
+30/60/120/240-second backoff. That host then slows to one request per second.
+Only the failed request is repeated; fetched item
+details and completed players remain available. Missing response data and HTTP
+404 responses can retry
+after 5/15 seconds; mismatched identities are never accepted. Each job allows at
+most ten minutes of retry delays, renews its D1 lease
+during long waits, and retains the last complete dataset if retries are exhausted.
+Overlapping jobs for the same region/class queue instead of running together.
+Runner summaries distinguish cache hits, enrichment, retries and rate limits.
+
+If an individual profile or item remains unavailable, the scheduler can try the
+next CP-ranked character to prepare 100 complete available builds. It retains
+the actual ranks and reports omitted profiles in source details and admin status.
+At most 25 profiles may be omitted; six consecutive unavailable profiles stop the
+refresh. Rate limits, authentication errors and transport failures remain job
+failures. An incomplete population never replaces the last complete dataset.
+
 There is no server-startup prefetch loop. Region/class jobs run with at most three active jobs. The authenticated API owns Shugo discovery, cache reuse, refresh leases and publication. `scripts/prefetch-combat-power.mjs` fetches missing official character/item builds on the GitHub Actions runner, avoiding Worker CPU limits during enrichment. It uses the same build-fetching code as interactive analysis, with two concurrent item requests per character and one character at a time per job. Complete official character caches younger than six hours are reused. A complete job publishes its full player builds and aggregates to D1; continuation work and failed/partial refreshes preserve the previous full snapshot. Recently completed jobs are skipped for 330 minutes; datasets are fresh for 420 minutes and remain usable as stale data for up to seven days.
 
 The analyzer consumes these datasets before live discovery or enrichment. Cold

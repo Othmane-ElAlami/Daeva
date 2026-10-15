@@ -22,19 +22,37 @@ import {
 
 export const BUILD_FRESH_MS = 6 * 60 * 60 * 1000;
 
-async function officialJSON(player, path, budget, extra = {}, validate = () => {}) {
+function unavailable(message, code, retryable = true) {
+  const error = new Error(message);
+  Object.assign(error, { code, retryable });
+  return error;
+}
+
+async function officialJSON(
+  player,
+  path,
+  budget,
+  extra = {},
+  validate = () => {},
+  requestJSON = fetchJSON
+) {
   const url = characterApiUrl(player, path, extra);
   async function read(target, headers) {
-    const data = await fetchJSON(target, headers, "GET", null, budget);
+    const data = await requestJSON(target, headers, "GET", null, budget, null, 20000, validate);
     validate(data);
     return data;
   }
   try {
     return await read(url, makeDirectHeaders());
   } catch (error) {
-    if (error instanceof subrequestBudgetExhausted) throw error;
+    if (error instanceof subrequestBudgetExhausted || error.code === "LEASE_LOST") throw error;
     // The fallback transports the same first-party JSON, never Shugo build HTML.
-    return await read(proxyUrl(url), makeHeaders(`${baseUrl}/leaderboard`));
+    try {
+      return await read(proxyUrl(url), makeHeaders(`${baseUrl}/leaderboard`));
+    } catch (fallbackError) {
+      if (fallbackError !== error) fallbackError.officialFailure = error;
+      throw fallbackError;
+    }
   }
 }
 
@@ -128,7 +146,10 @@ function buildFromCache(player, cached) {
 
 function validateEquipment(data) {
   if (!data?.equipment?.equipmentList?.length || !data.skill?.skillList?.length)
-    throw new Error("Official character equipment/skills are unavailable.");
+    throw unavailable(
+      "Official character equipment/skills are unavailable.",
+      "EQUIPMENT_UNAVAILABLE"
+    );
 }
 
 // Official item detail calls cost one subrequest each. Both interactive analysis
@@ -138,7 +159,13 @@ export async function fetchCharacterBuild(
   player,
   db,
   budget,
-  { refresh = false, cachedBuild, retryItemDetails = false, retryEquipmentChanges = false } = {}
+  {
+    refresh = false,
+    cachedBuild,
+    retryItemDetails = false,
+    retryEquipmentChanges = false,
+    requestJSON = fetchJSON,
+  } = {}
 ) {
   if (player._build) return { build: player._build, warnings: [] };
   const cached = cachedBuild === undefined ? await loadCachedBuild(db, player) : cachedBuild;
@@ -146,19 +173,31 @@ export async function fetchCharacterBuild(
     return { build: cached, warnings: [], cached: true, resumable: true };
   if (!budget.canAfford(3)) throw new subrequestBudgetExhausted(budget.used, budget.hardLimit);
   const [equipData, infoData] = await Promise.all([
-    officialJSON(player, "equipment", budget, {}, validateEquipment),
-    officialJSON(player, "info", budget, {}, (data) => {
-      if (
-        !data?.profile ||
-        String(data.profile.characterId) !== player.characterId ||
-        Number(data.profile.serverId) !== Number(player.serverId)
-      )
-        throw new Error("Official profile identifiers do not match discovery.");
-      const combatPower = extractCombatPowerFromInfo(data);
-      const itemLevel = extractItemLevelFromInfo(data);
-      if (!Number.isFinite(combatPower) || combatPower <= 0 || !Number.isFinite(itemLevel))
-        throw new Error("Official character stats are unavailable.");
-    }),
+    officialJSON(player, "equipment", budget, {}, validateEquipment, requestJSON),
+    officialJSON(
+      player,
+      "info",
+      budget,
+      {},
+      (data) => {
+        if (!data?.profile)
+          throw unavailable("Official character profile is unavailable.", "PROFILE_UNAVAILABLE");
+        if (
+          String(data.profile.characterId) !== player.characterId ||
+          Number(data.profile.serverId) !== Number(player.serverId)
+        )
+          throw unavailable(
+            "Official profile identifiers do not match discovery.",
+            "PROFILE_IDENTITY_MISMATCH",
+            false
+          );
+        const combatPower = extractCombatPowerFromInfo(data);
+        const itemLevel = extractItemLevelFromInfo(data);
+        if (!Number.isFinite(combatPower) || combatPower <= 0 || !Number.isFinite(itemLevel))
+          throw unavailable("Official character stats are unavailable.", "STATS_UNAVAILABLE");
+      },
+      requestJSON
+    ),
   ]);
   const combatPower = extractCombatPowerFromInfo(infoData);
   const itemLevel = extractItemLevelFromInfo(infoData);
@@ -166,6 +205,7 @@ export async function fetchCharacterBuild(
   if (!budget.canAfford(equipment.length + 1)) throw new subrequestBudgetExhausted(budget.used);
   const warnings = [];
   const failedItems = [];
+  const itemFailures = [];
   const results = await runPool(
     equipment.map((item) => async () => {
       try {
@@ -185,18 +225,26 @@ export async function fetchCharacterBuild(
               },
               (data) => {
                 if (!data?.id || !data.name || String(data.id) !== String(item.id))
-                  throw new Error("Malformed official item details.");
-              }
+                  throw unavailable("Malformed official item details.", "ITEM_UNAVAILABLE");
+              },
+              requestJSON
             );
             return { ...detail, id: item.id, slotPos: item.slotPos };
           } catch (error) {
-            if (error instanceof subrequestBudgetExhausted || attempt === attempts - 1) throw error;
+            if (
+              error instanceof subrequestBudgetExhausted ||
+              error.retryExhausted ||
+              attempt === attempts - 1
+            )
+              throw error;
             await sleep(500);
           }
         }
       } catch (error) {
         if (error instanceof subrequestBudgetExhausted) return error;
+        if (error.code === "LEASE_LOST") return error;
         failedItems.push(item);
+        itemFailures.push(error);
         warnings.push(`${item.name} (id ${item.id}, slot ${item.slotPos}): ${error.message}`);
         return null;
       }
@@ -204,6 +252,8 @@ export async function fetchCharacterBuild(
     2,
     budget
   );
+  const leaseLost = results.find((result) => result?.code === "LEASE_LOST");
+  if (leaseLost) throw leaseLost;
   if (
     results.filter((result) => result !== undefined).length !== equipment.length ||
     results.some((result) => result instanceof subrequestBudgetExhausted) ||
@@ -213,9 +263,9 @@ export async function fetchCharacterBuild(
   if (failedItems.length && retryEquipmentChanges) {
     let latest;
     try {
-      latest = await officialJSON(player, "equipment", budget, {}, validateEquipment);
+      latest = await officialJSON(player, "equipment", budget, {}, validateEquipment, requestJSON);
     } catch (error) {
-      if (error instanceof subrequestBudgetExhausted) throw error;
+      if (error instanceof subrequestBudgetExhausted || error.code === "LEASE_LOST") throw error;
       // The original incomplete result still fails scheduled publication.
     }
     const changed =
@@ -240,10 +290,11 @@ export async function fetchCharacterBuild(
           cachedBuild: null,
           retryItemDetails,
           retryEquipmentChanges: false,
+          requestJSON,
         });
         return { ...result, equipmentRefreshed: true };
       } catch (error) {
-        if (error instanceof subrequestBudgetExhausted) throw error;
+        if (error instanceof subrequestBudgetExhausted || error.code === "LEASE_LOST") throw error;
         const problem = new Error(`Changed equipment refresh failed: ${error.message}`);
         problem.code = "EQUIPMENT_REFRESH_FAILED";
         throw problem;
@@ -271,6 +322,7 @@ export async function fetchCharacterBuild(
   return {
     build,
     warnings,
+    itemFailures,
     resumable: !!db && !warnings.length && equipDetails.length === equipment.length,
   };
 }

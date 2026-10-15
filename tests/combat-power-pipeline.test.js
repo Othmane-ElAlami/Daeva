@@ -46,6 +46,7 @@ import { POST } from "../app/api/scrape/route.js";
 import { POST as prefetchPOST } from "../app/api/prefetch/run/route.js";
 import { GET as prefetchStatus } from "../app/api/prefetch/status/route.js";
 import { runCombatPowerPrefetch } from "../scripts/prefetch-combat-power.mjs";
+import { createScheduledJSON } from "../src/lib/prefetch/upstream.js";
 
 const fixture = (name) =>
   JSON.parse(readFileSync(new URL(`./fixtures/shugo-combat-power/${name}.json`, import.meta.url)));
@@ -541,6 +542,113 @@ describe("provider failures and historical populations", () => {
 });
 
 describe("official build enrichment, ranking and continuation", () => {
+  it("recovers a rate-limited item without refetching the profile or successful items", async () => {
+    const equipment = fixture("global-equipment");
+    equipment.equipment.equipmentList = equipment.equipment.equipmentList.slice(0, 2);
+    const counts = new Map();
+    const request = vi.fn(async (input) => {
+      const url = new URL(input);
+      counts.set(url.pathname, (counts.get(url.pathname) || 0) + 1);
+      if (url.pathname.endsWith("/character/info")) return Response.json(fixture("global-info"));
+      if (url.pathname.endsWith("/character/equipment")) return Response.json(equipment);
+      const id = url.searchParams.get("id");
+      counts.set(id, (counts.get(id) || 0) + 1);
+      if (id === String(equipment.equipment.equipmentList[0].id) && counts.get(id) === 1)
+        return new Response("limited", { status: 429, headers: { "Retry-After": "45" } });
+      if (id === String(equipment.equipment.equipmentList[0].id) && counts.get(id) === 2)
+        return new Response("temporarily unavailable", { status: 404 });
+      const item = equipment.equipment.equipmentList.find((item) => String(item.id) === id);
+      return Response.json({ ...fixture("global-item"), id: item.id, name: item.name });
+    });
+    vi.stubGlobal("fetch", request);
+    let time = 0;
+    const transport = createScheduledJSON({
+      now: () => time,
+      wait: async (ms) => {
+        time += ms;
+      },
+    });
+    const result = await fetchCharacterBuild(players[0], db, createBudget(), {
+      requestJSON: transport.json,
+      retryItemDetails: true,
+      retryEquipmentChanges: true,
+    });
+    expect(result.warnings).toEqual([]);
+    expect(result.build.equipItems).toHaveLength(2);
+    expect(counts.get("/api/character/equipment")).toBe(1);
+    expect(counts.get("/api/character/info")).toBe(1);
+    expect(counts.get(String(equipment.equipment.equipmentList[0].id))).toBe(3);
+    expect(counts.get(String(equipment.equipment.equipmentList[1].id))).toBe(1);
+    expect(transport.metrics.rateLimits).toBe(1);
+    expect((await loadCachedBuild(db, players[0])).equipItems).toHaveLength(2);
+  });
+  it("renews a scheduled continuation lease without discovery, enrichment or cache publication", async () => {
+    await setPrefetchCache(
+      db,
+      "chanter",
+      "combat-power",
+      { sourceMeta: { total: 1 } },
+      [sampleBuild],
+      -1,
+      "Shugo Combat Power",
+      "GLOBAL"
+    );
+    const before = await getPrefetchCache(db, "chanter", "combat-power", true, "GLOBAL");
+    const upstream = vi.fn(async () => Response.json(fixture("global")));
+    vi.stubGlobal("fetch", upstream);
+    getRequestContext.mockReturnValue({
+      env: { DB: db, ADMIN_SECRET: "heartbeat-test", LEADERBOARD_SOURCE_MODE: "combat-power" },
+    });
+    const base = {
+      cls: "chanter",
+      leaderboard: "combat-power",
+      region: "GLOBAL",
+      execution: "runner",
+    };
+    const post = (body) =>
+      prefetchPOST(
+        new Request("http://localhost/api/prefetch/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: "Bearer heartbeat-test" },
+          body: JSON.stringify(body),
+        })
+      );
+    const prepared = await (await post(base)).json();
+    const lease = (await getPrefetchCache(db, "chanter", "combat-power", true, "GLOBAL")).data
+      .refresh;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 120000);
+    try {
+      const response = await post({
+        ...base,
+        continuation: prepared.continuation,
+        heartbeat: true,
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        heartbeat: true,
+        complete: false,
+        playerCount: 0,
+      });
+      const retained = await getPrefetchCache(db, "chanter", "combat-power", true, "GLOBAL");
+      expect(retained.builds).toEqual(before.builds);
+      expect(retained.fetchedAt).toBe(before.fetchedAt);
+      expect(retained.expiresAt).toBe(before.expiresAt);
+      expect(retained.data.refresh.leaseExpiresAt).toBeGreaterThan(lease.leaseExpiresAt);
+      expect(upstream).toHaveBeenCalledOnce();
+      expect(
+        (
+          await post({
+            ...base,
+            continuation: { ...prepared.continuation, refreshToken: "wrong-owner" },
+            heartbeat: true,
+          })
+        ).status
+      ).toBe(202);
+      expect((await post({ ...base, heartbeat: true })).status).toBe(400);
+    } finally {
+      clock.mockRestore();
+    }
+  });
   it.each(["item-level", "combat-power", "equipment"])(
     "recovers an invalid direct %s response through the validated proxy",
     async (failure) => {
@@ -796,11 +904,13 @@ describe("official build enrichment, ranking and continuation", () => {
       fetchedAt
     );
   });
-  it.each([false, true])(
-    "runner prefetch uploads 100 unique builds and reuses the population (corrupt duplicate: %s)",
-    async (duplicate) => {
+  it.each(["complete", "duplicate", "unavailable"])(
+    "runner prefetch uploads 100 complete unique builds and reuses the population (%s)",
+    async (scenario) => {
+      const duplicate = scenario === "duplicate";
+      const unavailable = scenario === "unavailable";
       const discovery = fixture("global");
-      discovery.entries = Array.from({ length: 100 }, (_, index) => ({
+      discovery.entries = Array.from({ length: unavailable ? 101 : 100 }, (_, index) => ({
         ...discovery.entries[0],
         characterId: `runner-${index}`,
         rank: index + 1,
@@ -818,8 +928,8 @@ describe("official build enrichment, ranking and continuation", () => {
       Object.assign(discovery, {
         total: entries.length,
         limit: 100,
-        totalPages: duplicate ? 2 : 1,
-        hasMore: duplicate,
+        totalPages: duplicate || unavailable ? 2 : 1,
+        hasMore: duplicate || unavailable,
       });
       const upstream = vi.fn(async (url) => {
         expect(url).toContain("/api/leaderboard/combat-power?");
@@ -827,7 +937,7 @@ describe("official build enrichment, ranking and continuation", () => {
         return Response.json({
           ...discovery,
           page,
-          hasMore: page === 1 && duplicate,
+          hasMore: page === 1 && (duplicate || unavailable),
           entries: entries.slice((page - 1) * 100, page * 100),
         });
       });
@@ -836,10 +946,17 @@ describe("official build enrichment, ranking and continuation", () => {
         env: { DB: db, ADMIN_SECRET: "runner-test", LEADERBOARD_SOURCE_MODE: "combat-power" },
       });
       const fetchedAt = Date.now() - 60000;
-      const enrich = vi.fn(async (player) => ({
-        build: { ...sampleBuild, ...buildPlayerMetadata(player), buildFetchedAt: fetchedAt },
-        warnings: [],
-      }));
+      const enrich = vi.fn(async (player) => {
+        if (unavailable && player.characterId === "runner-0") {
+          const error = new Error("Official character profile is unavailable.");
+          Object.assign(error, { code: "PROFILE_UNAVAILABLE", retryExhausted: true });
+          throw error;
+        }
+        return {
+          build: { ...sampleBuild, ...buildPlayerMetadata(player), buildFetchedAt: fetchedAt },
+          warnings: [],
+        };
+      });
       const options = {
         apiUrl: "http://localhost",
         secret: "runner-test",
@@ -854,9 +971,10 @@ describe("official build enrichment, ranking and continuation", () => {
         complete: true,
         buildCount: 100,
         enrichedCount: 100,
-        requests: 102,
+        requests: unavailable ? 103 : 102,
+        unavailableCount: unavailable ? 1 : 0,
       });
-      expect(enrich).toHaveBeenCalledTimes(100);
+      expect(enrich).toHaveBeenCalledTimes(unavailable ? 101 : 100);
       const cached = await getPrefetchCache(db, "chanter", "combat-power", false, "GLOBAL");
       expect(cached.data.population).toMatchObject({
         complete: true,
@@ -865,13 +983,21 @@ describe("official build enrichment, ranking and continuation", () => {
       });
       expect(cached.builds[0].buildFetchedAt).toBe(fetchedAt);
       expect(cached.builds.map((build) => build.rank)).toEqual(
-        Array.from({ length: 100 }, (_, i) => i + 1 + (duplicate && i > 0 ? 1 : 0))
+        Array.from({ length: 100 }, (_, i) => i + 1 + (unavailable || (duplicate && i > 0) ? 1 : 0))
       );
       expect(cached.data.sourceMeta.discoveryDuplicatesIgnored).toBe(duplicate ? 1 : 0);
       expect((await getAllPrefetchEntries(db))[0].discoveryDuplicatesIgnored).toBe(
         duplicate ? 1 : 0
       );
       expect(canQuickBuild(cached.data, cached.builds)).toBe(true);
+      if (unavailable) {
+        expect(cached.data.sourceMeta.unavailablePlayers).toMatchObject([
+          { characterId: "runner-0", rank: 1, code: "PROFILE_UNAVAILABLE" },
+        ]);
+        expect(sourceHealthText(cached.data.sourceMeta)).toContain("1 unavailable profile omitted");
+        expect((await getAllPrefetchEntries(db))[0].unavailableCount).toBe(1);
+        expect(db.sqlite.prepare("SELECT COUNT(*) AS n FROM player_cache").get().n).toBe(100);
+      }
       enrich.mockClear();
       expect(await runCombatPowerPrefetch(options)).toMatchObject({
         complete: true,
@@ -885,7 +1011,69 @@ describe("official build enrichment, ranking and continuation", () => {
         count: 100,
         sourceMeta: { source: "Cache" },
       });
-      expect(upstream).toHaveBeenCalledTimes(duplicate ? 2 : 1);
+      expect(upstream).toHaveBeenCalledTimes(duplicate || unavailable ? 2 : 1);
+    }
+  );
+  it.each(["outage", "rate-limit"])(
+    "preserves the last full dataset instead of backfilling through a %s",
+    async (failure) => {
+      await setPrefetchCache(
+        db,
+        "chanter",
+        "combat-power",
+        { sourceMeta: { total: 1 } },
+        [sampleBuild],
+        -1,
+        "Shugo Combat Power",
+        "GLOBAL"
+      );
+      const before = await getPrefetchCache(db, "chanter", "combat-power", true, "GLOBAL");
+      const discovery = fixture("global");
+      discovery.entries = Array.from({ length: 100 }, (_, index) => ({
+        ...discovery.entries[0],
+        characterId: `unavailable-${index}`,
+        rank: index + 1,
+      }));
+      Object.assign(discovery, { total: 100, totalPages: 1, hasMore: false, limit: 100 });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => Response.json(discovery))
+      );
+      getRequestContext.mockReturnValue({
+        env: {
+          DB: db,
+          ADMIN_SECRET: "runner-test",
+          LEADERBOARD_SOURCE_MODE: "combat-power",
+        },
+      });
+      const enrich = vi.fn(async () => {
+        const error = new Error(failure === "outage" ? "Official profile unavailable" : "HTTP 429");
+        Object.assign(
+          error,
+          failure === "outage"
+            ? { code: "PROFILE_UNAVAILABLE", retryExhausted: true }
+            : { status: 429, retryExhausted: true }
+        );
+        throw error;
+      });
+      await expect(
+        runCombatPowerPrefetch({
+          apiUrl: "http://localhost",
+          secret: "runner-test",
+          cls: "chanter",
+          region: "GLOBAL",
+          request: (url, init) => prefetchPOST(new Request(url, init)),
+          enrich,
+          wait: async () => {},
+          log: () => {},
+        })
+      ).rejects.toThrow(failure === "outage" ? "Too many unavailable" : "HTTP 429");
+      expect(enrich).toHaveBeenCalledTimes(failure === "outage" ? 6 : 1);
+      const after = await getPrefetchCache(db, "chanter", "combat-power", true, "GLOBAL");
+      expect(after.builds).toEqual(before.builds);
+      expect(after.fetchedAt).toBe(before.fetchedAt);
+      expect(after.expiresAt).toBe(before.expiresAt);
+      expect(after.data.refresh).toMatchObject({ status: "failed", leaseExpiresAt: 0 });
     }
   );
   it.each(["region", "identity", "timestamp", "details"])(
@@ -928,6 +1116,62 @@ describe("official build enrichment, ranking and continuation", () => {
       expect(db.sqlite.prepare("SELECT COUNT(*) AS count FROM player_cache").get().count).toBe(0);
     }
   );
+  it("rejects unauthenticated, conflicting and excessive profile omission reports", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(fixture("global")))
+    );
+    getRequestContext.mockReturnValue({
+      env: {
+        DB: db,
+        ADMIN_SECRET: "runner-test",
+        LEADERBOARD_SOURCE_MODE: "combat-power",
+      },
+    });
+    const base = {
+      cls: "chanter",
+      region: "GLOBAL",
+      leaderboard: "combat-power",
+      execution: "runner",
+    };
+    const post = (body, secret = "runner-test") =>
+      prefetchPOST(
+        new Request("http://localhost/api/prefetch/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${secret}` },
+          body: JSON.stringify({ ...base, ...body }),
+        })
+      );
+    const { continuation } = await (await post({})).json();
+    const unavailable = { code: "PROFILE_NOT_FOUND", reason: "HTTP 404" };
+    expect((await post({ continuation, unavailable }, "wrong-secret")).status).toBe(401);
+    expect((await post({ continuation, unavailable, heartbeat: true })).status).toBe(400);
+    expect(
+      (await post({ continuation, unavailable: { code: "HTTP_429", reason: "limited" } })).status
+    ).toBe(400);
+    expect(
+      (await post({ continuation: { ...continuation, refreshToken: undefined }, unavailable }))
+        .status
+    ).toBe(400);
+    const omitted = Array.from({ length: 25 }, (_, index) => ({
+      ...players[0],
+      characterId: `omitted-${index}`,
+      code: "PROFILE_NOT_FOUND",
+      preparedBuildCount: index,
+    }));
+    expect(
+      (
+        await post({
+          continuation: {
+            ...continuation,
+            sourceMeta: { ...continuation.sourceMeta, unavailablePlayers: omitted },
+          },
+          unavailable,
+        })
+      ).status
+    ).toBe(400);
+    expect(db.sqlite.prepare("SELECT COUNT(*) AS n FROM player_cache").get().n).toBe(0);
+  });
   it("runner build failure releases the lease and preserves the last complete dataset", async () => {
     await setPrefetchCache(
       db,

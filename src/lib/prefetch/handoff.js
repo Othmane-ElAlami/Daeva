@@ -2,6 +2,44 @@ import { characterKey } from "../regions.js";
 import { COMBAT_POWER, CP_SOURCE } from "../discovery-config.js";
 import { setCachedPlayer } from "../db.js";
 import { inspectPopulation } from "./population.js";
+import {
+  MAX_UNAVAILABLE_PROFILES,
+  MAX_CONSECUTIVE_UNAVAILABLE,
+  UNAVAILABLE_CODES,
+  unavailableStreak,
+} from "./unavailable.js";
+
+export function validUnavailablePlayer(unavailable, continuation) {
+  return !!(
+    continuation?.players?.length &&
+    UNAVAILABLE_CODES.includes(unavailable?.code) &&
+    typeof unavailable.reason === "string" &&
+    unavailable.reason.length > 0 &&
+    unavailable.reason.length <= 500 &&
+    (continuation.sourceMeta.unavailablePlayers?.length || 0) < MAX_UNAVAILABLE_PROFILES &&
+    unavailableStreak(continuation) < MAX_CONSECUTIVE_UNAVAILABLE
+  );
+}
+
+export function omitUnavailablePlayer(unavailable, continuation) {
+  const [player, ...players] = continuation.players;
+  return {
+    ...continuation,
+    players,
+    sourceMeta: {
+      ...continuation.sourceMeta,
+      unavailablePlayers: [
+        ...(continuation.sourceMeta.unavailablePlayers || []),
+        {
+          ...player,
+          code: unavailable.code,
+          reason: unavailable.reason,
+          preparedBuildCount: continuation.processedCount,
+        },
+      ],
+    },
+  };
+}
 
 // Only the authenticated scheduler can upload an enriched build. It must match
 // the next character in the same discovered population, including its CP rank.
