@@ -168,7 +168,12 @@ export async function runCombatPowerPrefetch({
       }
       const unavailableCount = data.sourceMeta?.unavailablePlayers?.length || 0;
       const progress = data.playerCount + unavailableCount;
-      if (progress <= previousProgress) throw new Error("Population preparation made no progress.");
+      // A cache-only checkpoint can hand off its next uncached player without
+      // incrementing the build count. Accept that transition once; an upload or
+      // omission must still advance progress before another build is fetched.
+      const handoff = data.enrichPlayer && !enrichedBuild && !unavailable;
+      if (progress < previousProgress || (progress === previousProgress && !handoff))
+        throw new Error("Population preparation made no progress.");
       previousCount = data.playerCount;
       previousProgress = progress;
       continuation = data.continuation;

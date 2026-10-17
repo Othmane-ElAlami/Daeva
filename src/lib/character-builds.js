@@ -5,6 +5,7 @@ import {
   setNormalizedCachedBuild,
 } from "./db.js";
 import { characterApiUrl, characterKey } from "./regions.js";
+import { unavailableCode } from "./prefetch/unavailable.js";
 import {
   fetchJSON,
   makeDirectHeaders,
@@ -172,7 +173,7 @@ export async function fetchCharacterBuild(
   if (!refresh && isFreshBuild(cached))
     return { build: cached, warnings: [], cached: true, resumable: true };
   if (!budget.canAfford(3)) throw new subrequestBudgetExhausted(budget.used, budget.hardLimit);
-  const [equipData, infoData] = await Promise.all([
+  const characterData = await Promise.allSettled([
     officialJSON(player, "equipment", budget, {}, validateEquipment, requestJSON),
     officialJSON(
       player,
@@ -199,6 +200,23 @@ export async function fetchCharacterBuild(
       requestJSON
     ),
   ]);
+  // Settle both requests before omitting a character or advancing its lease.
+  // A fast profile failure must not leave equipment retries running after this
+  // build returns, nor hide a simultaneous rate limit/authentication failure.
+  const failures = characterData
+    .filter((result) => result.status === "rejected")
+    .map((result) => result.reason);
+  if (failures.length)
+    throw (
+      failures.find(
+        (error) =>
+          error instanceof subrequestBudgetExhausted ||
+          ["LEASE_LOST", "PREFETCH_DEADLINE"].includes(error.code)
+      ) ||
+      failures.find((error) => !unavailableCode(error)) ||
+      failures[0]
+    );
+  const [equipData, infoData] = characterData.map((result) => result.value);
   const combatPower = extractCombatPowerFromInfo(infoData);
   const itemLevel = extractItemLevelFromInfo(infoData);
   const equipment = equipData.equipment.equipmentList.filter(Boolean);

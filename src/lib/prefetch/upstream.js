@@ -10,22 +10,38 @@ export function createScheduledJSON({
   onWait = async () => {},
   intervalMs = 500,
   maxCooldownMs = 10 * 60000,
+  maxDurationMs = 80 * 60000,
 } = {}) {
   const hosts = new Map();
   const metrics = { retries: 0, rateLimits: 0 };
-  let cooldownSpent = 0;
+  let rateLimitWaitSpent = 0;
   let fatal = null;
+  const deadline = now() + maxDurationMs;
+
+  function checkDeadline() {
+    if (!fatal && now() >= deadline)
+      fatal = Object.assign(
+        new Error("Scheduled upstream time limit reached; previous dataset retained."),
+        {
+          code: "PREFETCH_DEADLINE",
+          retryable: false,
+        }
+      );
+    if (fatal) throw fatal;
+  }
 
   async function pause(until) {
     while (now() < until) {
+      checkDeadline();
       try {
         await onWait();
       } catch (error) {
         fatal = error;
         throw error;
       }
+      checkDeadline();
       const remaining = until - now();
-      if (remaining > 0) await wait(Math.min(30000, remaining));
+      if (remaining > 0) await wait(Math.min(30000, remaining, deadline - now()));
     }
   }
 
@@ -40,12 +56,12 @@ export function createScheduledJSON({
     });
     await previous;
     try {
-      if (fatal) throw fatal;
+      checkDeadline();
       if (state.blocked) throw state.blocked;
       while (now() < Math.max(state.next, state.cooldown))
         await pause(Math.max(state.next, state.cooldown));
       if (state.blocked) throw state.blocked;
-      if (fatal) throw fatal;
+      checkDeadline();
       state.next = now() + state.interval;
     } finally {
       release();
@@ -54,7 +70,7 @@ export function createScheduledJSON({
   }
 
   async function json(url, headers, method, body, budget, logger, timeoutMs, validate = () => {}) {
-    if (fatal) throw fatal;
+    checkDeadline();
     const host = new URL(url).host;
     for (let attempt = 0; ; attempt++) {
       if (budget && !budget.canAfford())
@@ -82,14 +98,21 @@ export function createScheduledJSON({
           error.retryAfterMs || 0,
           limited ? 30000 * 2 ** attempt : 5000 * 3 ** attempt
         );
-        if (!retryable || attempt >= attempts || cooldownSpent + delay > maxCooldownMs) {
+        if (
+          !retryable ||
+          attempt >= attempts ||
+          (limited && rateLimitWaitSpent + delay > maxCooldownMs)
+        ) {
           error.retryExhausted = true;
           if (limited) state.blocked = error;
           throw error;
         }
         // A 429 pauses every worker using that host, including queued requests.
         if (limited) state.cooldown = Math.max(state.cooldown, now() + delay);
-        cooldownSpent += delay;
+        // Ordinary per-request retries must not exhaust rate-limit recovery
+        // for the remainder of a 2,500+ request population. They remain bounded
+        // by two retries per request and the overall job deadline.
+        if (limited) rateLimitWaitSpent += delay;
         metrics.retries++;
         onRetry({ host, error, delayMs: delay, attempt: attempt + 1 });
         await pause(now() + delay);

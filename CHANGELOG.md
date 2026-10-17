@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Settle parallel profile/equipment requests before returning a failed character. Stop omitted profiles from continuing upstream retries, and preserve hard rate-limit/authentication failures when a simultaneous profile lookup is unavailable.
+- Accept the scheduled handoff from a cached checkpoint to the next uncached player without requiring its build count to increase first. Keep progress checks for repeated checkpoints and unaccepted uploads, preventing duplicate enrichment.
+- Separate HTTP-429 wait limits from ordinary per-request retries so long Global populations retain item recovery after ten minutes of accumulated 404 delays. Bound upstream work to 80 minutes and retain the last complete dataset on deadline/failure.
 - Pace scheduled upstream requests and honor HTTP-429 `Retry-After` with shared, bounded cooldowns. Retry individual requests while retaining successful item details and completed players, renew continuation leases during waits, and prevent overlapping jobs for the same population. Distinguish unavailable profiles from real ID mismatches and keep response-body reads within their timeout.
 - Backfill individually unavailable CP profiles/items from the next ranks to prepare 100 complete available builds. Preserve actual ranks, disclose omissions in source details/status and stop on widespread failures; rate limits and authentication/transport failures cannot be skipped. Keep the last complete cache on unsuccessful refreshes.
 - Retry transient official HTTP 404 responses before declaring a character/item unavailable; retain successful item details while retrying.

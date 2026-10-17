@@ -153,6 +153,50 @@ describe("scheduled upstream transport", () => {
     expect(fetch).toHaveBeenCalledOnce();
     expect(transport.wait).not.toHaveBeenCalled();
   });
+  it("keeps per-request recovery after ten minutes of unrelated 404 retry delays", async () => {
+    const attempted = new Set();
+    const request = vi.fn(async (url) => {
+      if (url.endsWith("/too-long"))
+        throw Object.assign(new Error("HTTP 429"), { status: 429, retryAfterMs: 900000 });
+      if (!attempted.has(url)) {
+        attempted.add(url);
+        const status = url.endsWith("/limited") ? 429 : 404;
+        throw Object.assign(new Error(`HTTP ${status}`), { status });
+      }
+      return { id: url };
+    });
+    const transport = clocked({ request });
+    for (let index = 0; index < 130; index++) {
+      const url = `https://example.com/item-${index}`;
+      expect(await transport.json(url, {})).toEqual({ id: url });
+    }
+    expect(request).toHaveBeenCalledTimes(260);
+    expect(transport.metrics.retries).toBe(130);
+    expect(await transport.json("https://example.com/limited", {})).toEqual({
+      id: "https://example.com/limited",
+    });
+    expect(transport.metrics.retries).toBe(131);
+    await expect(transport.json("https://example.com/too-long", {})).rejects.toMatchObject({
+      status: 429,
+      retryExhausted: true,
+    });
+    expect(request).toHaveBeenCalledTimes(263);
+  });
+  it("stops every host at the job deadline without oversleeping or retrying", async () => {
+    const request = vi.fn(async () => {
+      throw Object.assign(new Error("HTTP 404"), { status: 404 });
+    });
+    const transport = clocked({ request, maxDurationMs: 2000 });
+    await expect(transport.json("https://example.com/item", {})).rejects.toMatchObject({
+      code: "PREFETCH_DEADLINE",
+      retryable: false,
+    });
+    await expect(transport.json("https://shugo.gg/proxy", {})).rejects.toMatchObject({
+      code: "PREFETCH_DEADLINE",
+    });
+    expect(request).toHaveBeenCalledOnce();
+    expect(transport.now()).toBe(3000);
+  });
 
   it("stops all transports after losing the population lease", async () => {
     const lost = Object.assign(new Error("Lease lost"), { code: "LEASE_LOST", retryable: false });

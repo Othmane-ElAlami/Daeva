@@ -193,7 +193,15 @@ equipment can use that proxy fallback. Character/server IDs remain strict on
 both transports; no leaderboard score or gear formula fills missing official stats.
 Freshness predicates exclude unusable old player rows in D1 before transferring
 and parsing their equipment/build JSON. API requests also have
-bounded retries, progress guards and a 160-batch limit.
+bounded retries, progress guards and a 160-batch limit. A cache-only checkpoint
+may hand off the next uncached character at the same processed count. That is
+valid work; repeated checkpoints or unaccepted uploads still fail the progress
+guard instead of repeating enrichment.
+
+Profile and equipment requests settle together before returning a failed
+character. This prevents orphaned retries after an omission or completed job.
+Budget/lease/deadline failures and hard HTTP/transport failures take precedence
+over a simultaneous unavailable-profile response, so they cannot be skipped.
 
 The scheduled transport spaces requests by 500 ms per host and coordinates
 HTTP-429 cooldowns across its item/profile workers. It preserves `Retry-After`
@@ -202,7 +210,11 @@ retains successful item responses and the completed population prefix. Missing
 data and HTTP 404 responses can retry after 5/15 seconds; live official item
 requests can transiently return 404 before succeeding. An actual mismatched
 profile ID is never accepted.
-Retry delays total at most ten minutes per job. An authenticated continuation
+HTTP-429 waits total at most ten minutes per job. Ordinary request failures have
+their own two-retry limit; they do not consume a population-wide delay allowance
+that would disable later recovery and cause avoidable profile omissions. All
+scheduled upstream work stops at an 80-minute deadline, leaving cleanup time
+within the Actions job's 90-minute limit. An authenticated continuation
 heartbeat renews the existing lease during waits without performing discovery,
 enrichment or publication. A lost lease stops further upstream work. No new
 cache/table is introduced, and incomplete data never becomes a complete snapshot.

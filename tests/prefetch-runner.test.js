@@ -30,6 +30,53 @@ afterEach(() => {
 });
 
 describe("scheduled Combat Power runner", () => {
+  it("accepts the handoff from a cached checkpoint to the next uncached build", async () => {
+    const checkpoint = { ...continuation, processedCount: 5 };
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({ ...baseResponse, playerCount: 5, continuation: checkpoint })
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          ...baseResponse,
+          playerCount: 5,
+          continuation: checkpoint,
+          enrichPlayer: player,
+        })
+      )
+      .mockResolvedValueOnce(Response.json({ ...baseResponse, playerCount: 6, complete: true }));
+    const enrich = vi.fn(async () => ({ build: { characterId: "sample" }, warnings: [] }));
+    expect(await runCombatPowerPrefetch({ ...options, request, enrich })).toMatchObject({
+      complete: true,
+      buildCount: 6,
+      enrichedCount: 1,
+      requests: 3,
+    });
+    expect(enrich).toHaveBeenCalledOnce();
+    expect(JSON.parse(request.mock.calls[2][1].body).enrichedBuild.characterId).toBe("sample");
+  });
+  it.each(["checkpoint", "unaccepted-upload"])(
+    "still rejects a repeated %s without progress",
+    async (stage) => {
+      const response = {
+        ...baseResponse,
+        playerCount: 5,
+        continuation: { ...continuation, processedCount: 5 },
+        ...(stage === "unaccepted-upload" ? { enrichPlayer: player } : {}),
+      };
+      const request = vi.fn(async (_url, init) =>
+        JSON.parse(init.body).failed
+          ? Response.json({ code: "ENRICHMENT_FAILED" }, { status: 502 })
+          : Response.json(response)
+      );
+      const enrich = vi.fn(async () => ({ build: { characterId: "sample" }, warnings: [] }));
+      await expect(runCombatPowerPrefetch({ ...options, request, enrich })).rejects.toThrow(
+        "no progress"
+      );
+      expect(enrich).toHaveBeenCalledTimes(stage === "unaccepted-upload" ? 1 : 0);
+    }
+  );
   it("heartbeats through upstream backoff and uploads the same player's completed build", async () => {
     vi.useFakeTimers();
     const request = vi.fn(async (_url, init) => {

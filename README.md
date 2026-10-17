@@ -119,9 +119,12 @@ responses pause all workers using that host and honor `Retry-After`, with bounde
 Only the failed request is repeated; fetched item
 details and completed players remain available. Missing response data and HTTP
 404 responses can retry
-after 5/15 seconds; mismatched identities are never accepted. Each job allows at
-most ten minutes of retry delays, renews its D1 lease
-during long waits, and retains the last complete dataset if retries are exhausted.
+after 5/15 seconds, at most twice per request; mismatched identities are never
+accepted. HTTP-429 waits have a separate ten-minute allowance, so ordinary item
+retries cannot disable recovery for the rest of a large population. An 80-minute
+upstream deadline leaves room for cleanup within the 90-minute Actions job.
+Jobs renew their D1 lease during long waits and retain the last complete dataset
+on failure.
 Overlapping jobs for the same region/class queue instead of running together.
 Runner summaries distinguish cache hits, enrichment, retries and rate limits.
 

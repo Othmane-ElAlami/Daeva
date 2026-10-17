@@ -542,6 +542,53 @@ describe("provider failures and historical populations", () => {
 });
 
 describe("official build enrichment, ranking and continuation", () => {
+  it.each(["equipment-ok", "rate-limit"])(
+    "settles profile/equipment work and prioritizes hard failures (%s)",
+    async (failure) => {
+      let finishEquipment;
+      const equipmentReady = new Promise((resolve) => {
+        finishEquipment = resolve;
+      });
+      let infoCalls = 0;
+      const requestJSON = vi.fn(async (input) => {
+        let url = new URL(input);
+        if (url.pathname === "/api/proxy") url = new URL(url.searchParams.get("url"));
+        if (url.pathname.endsWith("/info")) {
+          infoCalls++;
+          const info = fixture("global-info");
+          info.profile.characterId = "wrong-character";
+          return info;
+        }
+        await equipmentReady;
+        if (failure === "rate-limit")
+          throw Object.assign(new Error("HTTP 429"), { status: 429, retryExhausted: true });
+        return fixture("global-equipment");
+      });
+      let settled = false;
+      const result = fetchCharacterBuild(players[0], db, createBudget(), { requestJSON }).then(
+        (build) => {
+          settled = true;
+          return { build };
+        },
+        (error) => {
+          settled = true;
+          return { error };
+        }
+      );
+      try {
+        await vi.waitFor(() => expect(infoCalls).toBe(2));
+        expect(settled).toBe(false);
+      } finally {
+        finishEquipment();
+      }
+      const { error } = await result;
+      expect(error).toMatchObject(
+        failure === "rate-limit" ? { status: 429 } : { code: "PROFILE_IDENTITY_MISMATCH" }
+      );
+      expect(db.sqlite.prepare("SELECT COUNT(*) AS n FROM player_cache").get().n).toBe(0);
+      expect(requestJSON).toHaveBeenCalledTimes(failure === "rate-limit" ? 4 : 3);
+    }
+  );
   it("recovers a rate-limited item without refetching the profile or successful items", async () => {
     const equipment = fixture("global-equipment");
     equipment.equipment.equipmentList = equipment.equipment.equipmentList.slice(0, 2);
@@ -904,11 +951,12 @@ describe("official build enrichment, ranking and continuation", () => {
       fetchedAt
     );
   });
-  it.each(["complete", "duplicate", "unavailable"])(
+  it.each(["complete", "duplicate", "unavailable", "mixed-cache"])(
     "runner prefetch uploads 100 complete unique builds and reuses the population (%s)",
     async (scenario) => {
       const duplicate = scenario === "duplicate";
       const unavailable = scenario === "unavailable";
+      const cachedCount = scenario === "mixed-cache" ? 5 : 0;
       const discovery = fixture("global");
       discovery.entries = Array.from({ length: unavailable ? 101 : 100 }, (_, index) => ({
         ...discovery.entries[0],
@@ -946,6 +994,27 @@ describe("official build enrichment, ranking and continuation", () => {
         env: { DB: db, ADMIN_SECRET: "runner-test", LEADERBOARD_SOURCE_MODE: "combat-power" },
       });
       const fetchedAt = Date.now() - 60000;
+      for (const player of cachedCount
+        ? parseCombatPowerResponse(discovery, config).rankings.slice(0, cachedCount)
+        : [])
+        await setCachedPlayer(
+          db,
+          player.characterId,
+          player.serverId,
+          player.region,
+          {
+            _daevaBuildVersion: 1,
+            _daevaBuild: {
+              ...sampleBuild,
+              ...buildPlayerMetadata(player),
+              buildFetchedAt: fetchedAt,
+            },
+          },
+          [],
+          sampleBuild.gearScore,
+          null,
+          fetchedAt
+        );
       const enrich = vi.fn(async (player) => {
         if (unavailable && player.characterId === "runner-0") {
           const error = new Error("Official character profile is unavailable.");
@@ -970,11 +1039,11 @@ describe("official build enrichment, ranking and continuation", () => {
       expect(await runCombatPowerPrefetch(options)).toMatchObject({
         complete: true,
         buildCount: 100,
-        enrichedCount: 100,
-        requests: unavailable ? 103 : 102,
+        enrichedCount: 100 - cachedCount,
+        requests: unavailable ? 103 : cachedCount ? 98 : 102,
         unavailableCount: unavailable ? 1 : 0,
       });
-      expect(enrich).toHaveBeenCalledTimes(unavailable ? 101 : 100);
+      expect(enrich).toHaveBeenCalledTimes(unavailable ? 101 : 100 - cachedCount);
       const cached = await getPrefetchCache(db, "chanter", "combat-power", false, "GLOBAL");
       expect(cached.data.population).toMatchObject({
         complete: true,
@@ -1014,7 +1083,7 @@ describe("official build enrichment, ranking and continuation", () => {
       expect(upstream).toHaveBeenCalledTimes(duplicate || unavailable ? 2 : 1);
     }
   );
-  it.each(["outage", "rate-limit"])(
+  it.each(["outage", "rate-limit", "deadline"])(
     "preserves the last full dataset instead of backfilling through a %s",
     async (failure) => {
       await setPrefetchCache(
@@ -1047,12 +1116,20 @@ describe("official build enrichment, ranking and continuation", () => {
         },
       });
       const enrich = vi.fn(async () => {
-        const error = new Error(failure === "outage" ? "Official profile unavailable" : "HTTP 429");
+        const error = new Error(
+          failure === "outage"
+            ? "Official profile unavailable"
+            : failure === "deadline"
+              ? "Scheduled upstream time limit reached"
+              : "HTTP 429"
+        );
         Object.assign(
           error,
           failure === "outage"
             ? { code: "PROFILE_UNAVAILABLE", retryExhausted: true }
-            : { status: 429, retryExhausted: true }
+            : failure === "deadline"
+              ? { code: "PREFETCH_DEADLINE", retryable: false }
+              : { status: 429, retryExhausted: true }
         );
         throw error;
       });
@@ -1067,7 +1144,13 @@ describe("official build enrichment, ranking and continuation", () => {
           wait: async () => {},
           log: () => {},
         })
-      ).rejects.toThrow(failure === "outage" ? "Too many unavailable" : "HTTP 429");
+      ).rejects.toThrow(
+        failure === "outage"
+          ? "Too many unavailable"
+          : failure === "deadline"
+            ? "time limit reached"
+            : "HTTP 429"
+      );
       expect(enrich).toHaveBeenCalledTimes(failure === "outage" ? 6 : 1);
       const after = await getPrefetchCache(db, "chanter", "combat-power", true, "GLOBAL");
       expect(after.builds).toEqual(before.builds);
