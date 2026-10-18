@@ -1,4 +1,5 @@
 import { fetchJSON, sleep, subrequestBudgetExhausted } from "../scraper-shared.js";
+import { unavailableCode } from "./unavailable.js";
 
 // One instance per scheduled population, shared by its profile/item workers.
 // This is transport scheduling only; all build caching remains in existing D1.
@@ -13,7 +14,7 @@ export function createScheduledJSON({
   maxDurationMs = 80 * 60000,
 } = {}) {
   const hosts = new Map();
-  const metrics = { retries: 0, rateLimits: 0 };
+  const metrics = { retries: 0, rateLimits: 0, transportFallbacks: 0 };
   let rateLimitWaitSpent = 0;
   let fatal = null;
   const deadline = now() + maxDurationMs;
@@ -69,7 +70,17 @@ export function createScheduledJSON({
     return state;
   }
 
-  async function json(url, headers, method, body, budget, logger, timeoutMs, validate = () => {}) {
+  async function json(
+    url,
+    headers,
+    method,
+    body,
+    budget,
+    logger,
+    timeoutMs,
+    validate = () => {},
+    { fallbackAvailable = false } = {}
+  ) {
     checkDeadline();
     const host = new URL(url).host;
     for (let attempt = 0; ; attempt++) {
@@ -81,6 +92,13 @@ export function createScheduledJSON({
         validate(data);
         return data;
       } catch (error) {
+        // Try the alternate transport before spending time retrying an
+        // unavailable direct response. Both transports still validate the same
+        // official payload; unresolved fallback requests retain bounded retries.
+        if (fallbackAvailable && unavailableCode(error)) {
+          metrics.transportFallbacks++;
+          throw error;
+        }
         if (error instanceof subrequestBudgetExhausted || error.retryable === false) throw error;
         const limited = error.status === 429;
         if (limited) {

@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Try the validated official-JSON proxy immediately when scheduled direct requests return HTTP 404 or unavailable data, avoiding repeated direct-request delays that exhausted Global prefetch's deadline. Use four scheduled item workers to absorb response latency under the unchanged per-host request-rate cap. Keep bounded retries for unresolved proxy requests, strict build validation and the last complete cache. Count immediate fallbacks for unavailable responses in runner summaries.
 - Settle parallel profile/equipment requests before returning a failed character. Stop omitted profiles from continuing upstream retries, and preserve hard rate-limit/authentication failures when a simultaneous profile lookup is unavailable.
 - Accept the scheduled handoff from a cached checkpoint to the next uncached player without requiring its build count to increase first. Keep progress checks for repeated checkpoints and unaccepted uploads, preventing duplicate enrichment.
 - Separate HTTP-429 wait limits from ordinary per-request retries so long Global populations retain item recovery after ten minutes of accumulated 404 delays. Bound upstream work to 80 minutes and retain the last complete dataset on deadline/failure.

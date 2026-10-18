@@ -16,6 +16,25 @@ function clocked(options = {}) {
 }
 
 describe("scheduled upstream transport", () => {
+  it("keeps request spacing with four item workers waiting for slow responses", async () => {
+    vi.useFakeTimers();
+    const starts = [];
+    const request = vi.fn(async () => {
+      starts.push(Date.now());
+      await new Promise((resolve) => setTimeout(resolve, 1800));
+      return { ok: true };
+    });
+    const transport = createScheduledJSON({ request });
+    const pending = Promise.all(
+      Array.from({ length: 4 }, (_, index) =>
+        transport.json(`https://example.com/item-${index}`, {})
+      )
+    );
+    await vi.advanceTimersByTimeAsync(4000);
+    await pending;
+    expect(starts).toHaveLength(4);
+    expect(starts.slice(1).every((time, index) => time - starts[index] >= 500)).toBe(true);
+  });
   it("honors Retry-After and pauses queued requests to the same host", async () => {
     vi.useFakeTimers();
     const starts = [];
@@ -44,7 +63,7 @@ describe("scheduled upstream transport", () => {
     expect(starts.slice(1).every((time) => time >= retryAt)).toBe(true);
     expect(starts[2] - starts[1]).toBeGreaterThanOrEqual(500);
     expect(budget.used).toBe(3);
-    expect(transport.metrics).toEqual({ retries: 1, rateLimits: 1 });
+    expect(transport.metrics).toEqual({ retries: 1, rateLimits: 1, transportFallbacks: 0 });
   });
 
   it("preserves HTTP-date Retry-After and keeps the timeout active while reading the body", async () => {
@@ -131,6 +150,26 @@ describe("scheduled upstream transport", () => {
     expect(transport.metrics.retries).toBe(3);
     expect(transport.wait.mock.calls.flat()).toContain(15000);
   });
+  it.each(["404", "missing-stats"])(
+    "hands an unavailable direct %s to its fallback without retry delays",
+    async (failure) => {
+      const request = vi.fn(async () => {
+        throw Object.assign(
+          new Error("Unavailable"),
+          failure === "404" ? { status: 404 } : { code: "STATS_UNAVAILABLE", retryable: true }
+        );
+      });
+      const transport = clocked({ request });
+      await expect(
+        transport.json("https://example.com/info", {}, "GET", null, null, null, 20000, undefined, {
+          fallbackAvailable: true,
+        })
+      ).rejects.toThrow("Unavailable");
+      expect(request).toHaveBeenCalledOnce();
+      expect(transport.wait).not.toHaveBeenCalled();
+      expect(transport.metrics).toEqual({ retries: 0, rateLimits: 0, transportFallbacks: 1 });
+    }
+  );
 
   it("fails bounded cooldowns without retrying before a long Retry-After", async () => {
     vi.stubGlobal(

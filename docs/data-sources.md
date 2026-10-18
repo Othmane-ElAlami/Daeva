@@ -203,13 +203,20 @@ character. This prevents orphaned retries after an omission or completed job.
 Budget/lease/deadline failures and hard HTTP/transport failures take precedence
 over a simultaneous unavailable-profile response, so they cannot be skipped.
 
-The scheduled transport spaces requests by 500 ms per host and coordinates
+Scheduled builds use four item workers to absorb response latency, retaining
+one character at a time per job and two workers for interactive enrichment.
+The scheduled transport still spaces requests by 500 ms per host and coordinates
 HTTP-429 cooldowns across its item/profile workers. It preserves `Retry-After`
 (seconds or HTTP date), retries the failed request with bounded backoff, and
-retains successful item responses and the completed population prefix. Missing
-data and HTTP 404 responses can retry after 5/15 seconds; live official item
-requests can transiently return 404 before succeeding. An actual mismatched
-profile ID is never accepted.
+retains successful item responses and the completed population prefix. A direct
+HTTP 404 or typed unavailable-data response tries Shugo's proxy immediately,
+before spending time on retries. The proxy carries the same official JSON and
+uses the same identity/data validation; unresolved proxy requests retain their
+5/15-second retries. Rate limits and hard transport failures keep their existing
+bounded handling. An actual mismatched profile ID is never accepted.
+Runner summaries count these immediate fallbacks in `upstreamFallbacks`,
+separately from delayed retries. The Global endpoint, locale and subregion
+contract remains the one used by NCSOFT's public character client.
 HTTP-429 waits total at most ten minutes per job. Ordinary request failures have
 their own two-retry limit; they do not consume a population-wide delay allowance
 that would disable later recovery and cause avoidable profile omissions. All

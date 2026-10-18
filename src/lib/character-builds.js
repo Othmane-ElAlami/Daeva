@@ -38,13 +38,23 @@ async function officialJSON(
   requestJSON = fetchJSON
 ) {
   const url = characterApiUrl(player, path, extra);
-  async function read(target, headers) {
-    const data = await requestJSON(target, headers, "GET", null, budget, null, 20000, validate);
+  async function read(target, headers, options = {}) {
+    const data = await requestJSON(
+      target,
+      headers,
+      "GET",
+      null,
+      budget,
+      null,
+      20000,
+      validate,
+      options
+    );
     validate(data);
     return data;
   }
   try {
-    return await read(url, makeDirectHeaders());
+    return await read(url, makeDirectHeaders(), { fallbackAvailable: true });
   } catch (error) {
     if (error instanceof subrequestBudgetExhausted || error.code === "LEASE_LOST") throw error;
     // The fallback transports the same first-party JSON, never Shugo build HTML.
@@ -165,6 +175,7 @@ export async function fetchCharacterBuild(
     cachedBuild,
     retryItemDetails = false,
     retryEquipmentChanges = false,
+    itemConcurrency = 2,
     requestJSON = fetchJSON,
   } = {}
 ) {
@@ -267,7 +278,7 @@ export async function fetchCharacterBuild(
         return null;
       }
     }),
-    2,
+    itemConcurrency,
     budget
   );
   const leaseLost = results.find((result) => result?.code === "LEASE_LOST");
@@ -308,6 +319,7 @@ export async function fetchCharacterBuild(
           cachedBuild: null,
           retryItemDetails,
           retryEquipmentChanges: false,
+          itemConcurrency,
           requestJSON,
         });
         return { ...result, equipmentRefreshed: true };

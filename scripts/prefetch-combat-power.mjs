@@ -163,6 +163,7 @@ export async function runCombatPowerPrefetch({
           cacheHit: data.skipped === true,
           upstreamRetries: upstream.metrics.retries,
           rateLimits: upstream.metrics.rateLimits,
+          upstreamFallbacks: upstream.metrics.transportFallbacks,
           unavailableCount: data.sourceMeta?.unavailablePlayers?.length || 0,
         };
       }
@@ -197,6 +198,9 @@ export async function runCombatPowerPrefetch({
           const result = await enrich(player, null, createBudget(), {
             retryItemDetails: true,
             retryEquipmentChanges: true,
+            // Allow for response latency without increasing the per-host
+            // request rate enforced by the shared scheduled transport.
+            itemConcurrency: 4,
             requestJSON: upstream.json,
           });
           if (!result?.build || result.warnings?.length) {

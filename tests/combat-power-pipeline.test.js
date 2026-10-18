@@ -594,7 +594,8 @@ describe("official build enrichment, ranking and continuation", () => {
     equipment.equipment.equipmentList = equipment.equipment.equipmentList.slice(0, 2);
     const counts = new Map();
     const request = vi.fn(async (input) => {
-      const url = new URL(input);
+      let url = new URL(input);
+      if (url.pathname === "/api/proxy") url = new URL(url.searchParams.get("url"));
       counts.set(url.pathname, (counts.get(url.pathname) || 0) + 1);
       if (url.pathname.endsWith("/character/info")) return Response.json(fixture("global-info"));
       if (url.pathname.endsWith("/character/equipment")) return Response.json(equipment);
@@ -627,8 +628,64 @@ describe("official build enrichment, ranking and continuation", () => {
     expect(counts.get(String(equipment.equipment.equipmentList[0].id))).toBe(3);
     expect(counts.get(String(equipment.equipment.equipmentList[1].id))).toBe(1);
     expect(transport.metrics.rateLimits).toBe(1);
+    expect(transport.metrics.transportFallbacks).toBe(1);
     expect((await loadCachedBuild(db, players[0])).equipItems).toHaveLength(2);
   });
+  it.each([2, 4])(
+    "enriches a full build through immediate fallbacks with %i item workers",
+    async (itemConcurrency) => {
+      const equipment = fixture("global-equipment");
+      const direct = new Map();
+      const proxy = new Map();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input) => {
+          let url = new URL(input);
+          const proxied = url.pathname === "/api/proxy";
+          if (proxied) url = new URL(url.searchParams.get("url"));
+          if (url.pathname.endsWith("/character/info"))
+            return Response.json(fixture("global-info"));
+          if (url.pathname.endsWith("/character/equipment")) return Response.json(equipment);
+          const id = url.searchParams.get("id");
+          const counts = proxied ? proxy : direct;
+          const key = `${id}:${url.searchParams.get("slotPos")}`;
+          counts.set(key, (counts.get(key) || 0) + 1);
+          if (!proxied) return new Response("unavailable", { status: 404 });
+          const item = equipment.equipment.equipmentList.find((entry) => String(entry.id) === id);
+          return Response.json({ ...fixture("global-item"), id: item.id, name: item.name });
+        })
+      );
+      let time = 0;
+      const waits = [];
+      const transport = createScheduledJSON({
+        now: () => time,
+        wait: async (ms) => {
+          waits.push(ms);
+          time += ms;
+        },
+      });
+      const result = await fetchCharacterBuild(players[0], db, createBudget(), {
+        requestJSON: transport.json,
+        retryItemDetails: true,
+        retryEquipmentChanges: true,
+        itemConcurrency,
+      });
+      expect(result.warnings).toEqual([]);
+      expect(result.build).toMatchObject({
+        characterId: players[0].characterId,
+        serverId: players[0].serverId,
+        region: "GLOBAL",
+      });
+      expect(result.build.equipItems).toHaveLength(25);
+      expect(result.build.activeSkills).toHaveLength(12);
+      expect(result.build.stigmaSkills).toHaveLength(13);
+      expect(direct.size).toBe(25);
+      expect([...direct.values(), ...proxy.values()]).toEqual(Array(50).fill(1));
+      expect(transport.metrics).toEqual({ retries: 0, rateLimits: 0, transportFallbacks: 25 });
+      expect(waits.every((ms) => ms <= 500)).toBe(true);
+      expect((await loadCachedBuild(db, players[0])).equipItems).toHaveLength(25);
+    }
+  );
   it("renews a scheduled continuation lease without discovery, enrichment or cache publication", async () => {
     await setPrefetchCache(
       db,

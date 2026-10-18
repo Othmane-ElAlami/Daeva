@@ -117,16 +117,18 @@ Scheduled build requests start at least 500 ms apart per upstream host. HTTP 429
 responses pause all workers using that host and honor `Retry-After`, with bounded
 30/60/120/240-second backoff. That host then slows to one request per second.
 Only the failed request is repeated; fetched item
-details and completed players remain available. Missing response data and HTTP
-404 responses can retry
-after 5/15 seconds, at most twice per request; mismatched identities are never
+details and completed players remain available. Unavailable direct responses
+(HTTP 404 or missing official data) try Shugo's proxy of the same official JSON
+immediately, before retry delays. Unresolved proxy requests can retry after
+5/15 seconds, at most twice per request; mismatched identities are never
 accepted. HTTP-429 waits have a separate ten-minute allowance, so ordinary item
 retries cannot disable recovery for the rest of a large population. An 80-minute
 upstream deadline leaves room for cleanup within the 90-minute Actions job.
 Jobs renew their D1 lease during long waits and retain the last complete dataset
 on failure.
 Overlapping jobs for the same region/class queue instead of running together.
-Runner summaries distinguish cache hits, enrichment, retries and rate limits.
+Runner summaries distinguish cache hits, enrichment, retries, rate limits and
+immediate fallbacks for unavailable responses (`upstreamFallbacks`).
 
 If an individual profile or item remains unavailable, the scheduler can try the
 next CP-ranked character to prepare 100 complete available builds. It retains
@@ -135,7 +137,7 @@ At most 25 profiles may be omitted; six consecutive unavailable profiles stop th
 refresh. Rate limits, authentication errors and transport failures remain job
 failures. An incomplete population never replaces the last complete dataset.
 
-There is no server-startup prefetch loop. Region/class jobs run with at most three active jobs. The authenticated API owns Shugo discovery, cache reuse, refresh leases and publication. `scripts/prefetch-combat-power.mjs` fetches missing official character/item builds on the GitHub Actions runner, avoiding Worker CPU limits during enrichment. It uses the same build-fetching code as interactive analysis, with two concurrent item requests per character and one character at a time per job. Complete official character caches younger than six hours are reused. A complete job publishes its full player builds and aggregates to D1; continuation work and failed/partial refreshes preserve the previous full snapshot. Recently completed jobs are skipped for 330 minutes; datasets are fresh for 420 minutes and remain usable as stale data for up to seven days.
+There is no server-startup prefetch loop. Region/class jobs run with at most three active jobs. The authenticated API owns Shugo discovery, cache reuse, refresh leases and publication. `scripts/prefetch-combat-power.mjs` fetches missing official character/item builds on the GitHub Actions runner, avoiding Worker CPU limits during enrichment. It uses the same build-fetching code as interactive analysis, with four item workers and one character at a time per scheduled job. Those workers share the same 500 ms per-host request spacing; extra workers absorb response latency without raising that request-rate cap. Interactive enrichment retains two item workers. Complete official character caches younger than six hours are reused. A complete job publishes its full player builds and aggregates to D1; continuation work and failed/partial refreshes preserve the previous full snapshot. Recently completed jobs are skipped for 330 minutes; datasets are fresh for 420 minutes and remain usable as stale data for up to seven days.
 
 The analyzer consumes these datasets before live discovery or enrichment. Cold
 requests and scheduled refreshes coordinate using a lease in the existing D1
@@ -167,7 +169,7 @@ Unresolved failures stop the refresh and retain the last usable population.
 Workflow/status diagnostics identify the stage, character rank, failed item/slot
 or HTTP/Cloudflare error code when available. Authentication secrets are redacted.
 
-Each region/class job has a 90-minute timeout. CP runner jobs allow at most 125 API batches, covering up to 100 complete build uploads and a separate publication request. API calls have a one-minute timeout and bounded retries; another refresh's lease is polled for at most 30 minutes. The legacy/manual Worker enrichment path retains its fetch budget, and interactive analysis retains its continuation safeguards. An unresolved refresh never publishes a partial population.
+Each region/class job has a 90-minute timeout. CP runner jobs allow at most 160 API batches, covering cached-player checkpoints, up to 100 complete build uploads, bounded omissions and a separate publication request. API calls have a one-minute timeout and bounded retries; another refresh's lease is polled for at most 30 minutes. The legacy/manual Worker enrichment path retains its fetch budget, and interactive analysis retains its continuation safeguards. An unresolved refresh never publishes a partial population.
 
 Shugo may retain corrupt duplicate lookup records. Daeva discards one only when
 a valid entry with the same official profile-image character key, region,

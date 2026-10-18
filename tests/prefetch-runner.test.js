@@ -258,6 +258,7 @@ describe("scheduled Combat Power runner", () => {
     expect(enrich.mock.calls[0][3]).toEqual({
       retryItemDetails: true,
       retryEquipmentChanges: true,
+      itemConcurrency: 4,
       requestJSON: expect.any(Function),
     });
     expect(log).toHaveBeenCalledWith(expect.stringContaining("refreshed changed equipment"));
