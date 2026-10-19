@@ -113,6 +113,11 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 A GitHub Actions workflow calls the authenticated `POST /api/prefetch/run` endpoint every six hours (03:17, 09:17, 15:17 and 21:17 UTC). It runs 8 classes × 3 supported regions, using direct upstream class filtering. A region-wide top 100 cannot supply the top 100 of each class, so those queries are intentionally distinct.
 
+Startup validates the complete discovery configuration before starting a refresh.
+Interrupted responses, including truncated HTTP-200 JSON, are retried up to twice.
+An unsupported mode/class/region or exhausted recovery fails explicitly before
+discovery, enrichment or cache writes.
+
 Scheduled build requests start at least 500 ms apart per upstream host. HTTP 429
 responses pause all workers using that host and honor `Retry-After`, with bounded
 30/60/120/240-second backoff. That host then slows to one request per second.
