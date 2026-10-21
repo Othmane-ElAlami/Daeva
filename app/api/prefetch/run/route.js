@@ -32,6 +32,15 @@ import {
 
 export const runtime = "edge";
 
+function failureMessage(message, secret) {
+  let detail =
+    typeof message === "string" && message
+      ? message
+      : "Upstream preparation failed; previous dataset retained.";
+  if (secret) detail = detail.replaceAll(String(secret), "[redacted]");
+  return detail.replace(/\s+/g, " ").slice(0, 500);
+}
+
 export async function POST(request) {
   const { env } = getRequestContext();
 
@@ -197,8 +206,7 @@ export async function POST(request) {
         ["api", "enrichment"].includes(failure?.phase) && typeof failure.message === "string"
           ? failure.message
           : "Scheduled official build enrichment failed; previous dataset retained.";
-      if (env.ADMIN_SECRET) reason = reason.replaceAll(String(env.ADMIN_SECRET), "[redacted]");
-      reason = reason.slice(0, 500);
+      reason = failureMessage(reason, env.ADMIN_SECRET);
       await updateRefresh(env.DB, analysisConfig, refreshToken, "failed", {
         buildCount: body.continuation.processedCount,
         error: reason,
@@ -301,8 +309,9 @@ export async function POST(request) {
     });
   } catch (err) {
     const isUpstreamFailure = err.name === "AllProvidersFailedError";
+    const reason = failureMessage(err.message, env.ADMIN_SECRET);
     await updateRefresh(env.DB, analysisConfig, refreshToken, "failed", {
-      error: "Upstream preparation failed; previous dataset retained.",
+      error: reason,
     }).catch(() => {});
     return Response.json(
       {
@@ -311,7 +320,7 @@ export async function POST(request) {
         leaderboard,
         region,
         code: isUpstreamFailure ? "UPSTREAM_UNAVAILABLE" : "PREFETCH_FAILED",
-        error: err.message,
+        error: reason,
         durationMs: Date.now() - startTime,
       },
       { status: isUpstreamFailure ? 503 : 500 }

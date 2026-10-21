@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Allow 30/60-second recovery for temporary discovery exhaustion during scheduled prefetch. Preserve the redacted upstream error in retry/failure logs and refresh status instead of reporting only `UPSTREAM_UNAVAILABLE`; keep provider exhaustion explicit and retain the last complete cache.
 - Retry incomplete discovery configuration responses during scheduled prefetch startup, including truncated HTTP-200 JSON. Validate the selected mode/class/region before enrichment and fail explicitly after bounded recovery; keep cache data and refresh safeguards unchanged.
 - Try the validated official-JSON proxy immediately when scheduled direct requests return HTTP 404 or unavailable data, avoiding repeated direct-request delays that exhausted Global prefetch's deadline. Use four scheduled item workers to absorb response latency under the unchanged per-host request-rate cap. Keep bounded retries for unresolved proxy requests, strict build validation and the last complete cache. Count immediate fallbacks for unavailable responses in runner summaries.
 - Settle parallel profile/equipment requests before returning a failed character. Stop omitted profiles from continuing upstream retries, and preserve hard rate-limit/authentication failures when a simultaneous profile lookup is unavailable.

@@ -176,6 +176,11 @@ or HTTP/Cloudflare error code when available. Authentication secrets are redacte
 
 Each region/class job has a 90-minute timeout. CP runner jobs allow at most 160 API batches, covering cached-player checkpoints, up to 100 complete build uploads, bounded omissions and a separate publication request. API calls have a one-minute timeout and bounded retries; another refresh's lease is polled for at most 30 minutes. The legacy/manual Worker enrichment path retains its fetch budget, and interactive analysis retains its continuation safeguards. An unresolved refresh never publishes a partial population.
 
+Discovery exhaustion (`503 UPSTREAM_UNAVAILABLE`) retries after 30 and 60 seconds,
+then fails explicitly if the source is still unavailable. Other API failures keep
+their shorter retries. Workflow logs and authenticated refresh status retain the
+bounded, redacted upstream explanation; successful builds are not fetched again.
+
 Shugo may retain corrupt duplicate lookup records. Daeva discards one only when
 a valid entry with the same official profile-image character key, region,
 server, name, class and faction is present. Its valid ID, CP and upstream rank

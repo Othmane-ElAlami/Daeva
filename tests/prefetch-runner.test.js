@@ -30,6 +30,70 @@ afterEach(() => {
 });
 
 describe("scheduled Combat Power runner", () => {
+  it("recovers a discovery outage after bounded waits without repeating enrichment", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            code: "UPSTREAM_UNAVAILABLE",
+            error: "All leaderboard providers failed: Combat Power HTTP 503.",
+          },
+          { status: 503 }
+        )
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            code: "UPSTREAM_UNAVAILABLE",
+            error: "All leaderboard providers failed: Combat Power HTTP 503.",
+          },
+          { status: 503 }
+        )
+      )
+      .mockResolvedValueOnce(
+        Response.json({ ...baseResponse, playerCount: 0, continuation, enrichPlayer: player })
+      )
+      .mockResolvedValueOnce(Response.json({ ...baseResponse, playerCount: 1, complete: true }));
+    const wait = vi.fn(async () => {});
+    const log = vi.fn();
+    const enrich = vi.fn(async () => ({ build: { characterId: "sample" }, warnings: [] }));
+    expect(await runCombatPowerPrefetch({ ...options, request, wait, log, enrich })).toMatchObject({
+      complete: true,
+      enrichedCount: 1,
+    });
+    expect(wait.mock.calls.map(([ms]) => ms)).toEqual([30000, 60000]);
+    expect(enrich).toHaveBeenCalledOnce();
+    expect(
+      request.mock.calls
+        .slice(0, 3)
+        .every(([, init]) => init.body === request.mock.calls[0][1].body)
+    ).toBe(true);
+    expect(log.mock.calls.flat().join(" ")).toContain("Combat Power HTTP 503");
+  });
+  it("fails persistent discovery unavailability with bounded, redacted diagnostic details", async () => {
+    const request = vi.fn(async () =>
+      Response.json(
+        {
+          code: "UPSTREAM_UNAVAILABLE",
+          error: `All leaderboard providers failed: Combat Power HTTP 503. ${options.secret}\n::error::upstream`,
+        },
+        { status: 503 }
+      )
+    );
+    const wait = vi.fn(async () => {});
+    const log = vi.fn();
+    const enrich = vi.fn();
+    await expect(
+      runCombatPowerPrefetch({ ...options, request, wait, log, enrich })
+    ).rejects.toThrow("Combat Power HTTP 503");
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(wait.mock.calls.map(([ms]) => ms)).toEqual([30000, 60000]);
+    expect(enrich).not.toHaveBeenCalled();
+    expect(log.mock.calls.flat().join(" ")).not.toContain(options.secret);
+    expect(log.mock.calls.flat().join(" ")).not.toContain("\n");
+    expect(log.mock.calls.flat().join(" ")).toContain("[redacted]");
+  });
   it("accepts the handoff from a cached checkpoint to the next uncached build", async () => {
     const checkpoint = { ...continuation, processedCount: 5 };
     const request = vi

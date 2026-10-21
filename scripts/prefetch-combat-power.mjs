@@ -47,7 +47,7 @@ export async function runCombatPowerPrefetch({
   let phase = "api";
   let target = null;
   const safeText = (value, limit = 500) =>
-    String(value).replaceAll(secret, "[redacted]").slice(0, limit);
+    String(value).replaceAll(secret, "[redacted]").replace(/\s+/g, " ").slice(0, limit);
   let lastHeartbeat = Date.now();
   let heartbeat = null;
   async function keepLease() {
@@ -109,13 +109,23 @@ export async function runCombatPowerPrefetch({
       if (response.status === 202 && data?.inProgress === true) return { waiting: true };
       if (response.status === 503 && data?.code === "PREFETCH_DISABLED") return { disabled: true };
       if (!response.ok) {
+        const detail = `HTTP ${response.status}, ${safeText(data?.code || "unknown", 80)}${
+          typeof data?.error === "string" ? `: ${safeText(data.error, 300)}` : ""
+        }`;
         if ([500, 502, 503, 504].includes(response.status) && attempt < 2) {
-          await wait(2000 * (attempt + 1));
+          // Give a short discovery outage time to recover without restarting
+          // the population or repeating successful enrichment/uploads.
+          const delay =
+            response.status === 503 && data?.code === "UPSTREAM_UNAVAILABLE"
+              ? 30000 * (attempt + 1)
+              : 2000 * (attempt + 1);
+          log(
+            `${region}/${cls}: retrying API response (${detail}, attempt ${attempt + 1}/3) in ${delay / 1000}s`
+          );
+          await wait(delay);
           continue;
         }
-        throw new Error(
-          `Prefetch API failed (HTTP ${response.status}, ${safeText(data?.code || "unknown", 80)}).`
-        );
+        throw new Error(`Prefetch API failed (${detail}).`);
       }
       if (
         data?.success !== true ||

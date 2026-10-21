@@ -29,6 +29,7 @@ import { getRequestContext } from "@cloudflare/next-on-pages";
 import { validateAdminRequest } from "@/lib/admin-auth";
 import { runPrefetchJob } from "@/lib/prefetch/runner";
 import { getPrefetchCache, setPrefetchCache } from "@/lib/prefetch/cache";
+import { updateRefresh } from "@/lib/prefetch/refresh";
 import { POST } from "../../app/api/prefetch/run/route.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -316,6 +317,37 @@ describe("POST /api/prefetch/run — edge cases", () => {
     expect(body.success).toBe(false);
     expect(body.error).toBe("Upstream Timeout");
     expect(typeof body.durationMs).toBe("number");
+  });
+
+  it("retains sanitized upstream details in the response and refresh status without publishing", async () => {
+    vi.stubEnv("LEADERBOARD_SOURCE_MODE", "combat-power");
+    const db = makeDb();
+    getRequestContext.mockReturnValue({ env: { DB: db, ADMIN_SECRET: "test-private-secret" } });
+    getPrefetchCache.mockResolvedValueOnce(null);
+    runPrefetchJob.mockRejectedValueOnce(
+      Object.assign(
+        new Error("All leaderboard providers failed: Combat Power HTTP 503.\ntest-private-secret"),
+        { name: "AllProvidersFailedError" }
+      )
+    );
+    const response = await POST(
+      req({ cls: "chanter", leaderboard: "combat-power", region: "GLOBAL" })
+    );
+    expect(response.status).toBe(503);
+    const body = await response.json();
+    expect(body.code).toBe("UPSTREAM_UNAVAILABLE");
+    expect(body.error).toContain("Combat Power HTTP 503");
+    expect(body.error).toContain("[redacted]");
+    expect(body.error).not.toContain("test-private-secret");
+    expect(body.error).not.toContain("\n");
+    expect(updateRefresh).toHaveBeenLastCalledWith(
+      db,
+      expect.objectContaining({ region: "GLOBAL" }),
+      "test-lease",
+      "failed",
+      { error: body.error }
+    );
+    expect(setPrefetchCache).not.toHaveBeenCalled();
   });
 
   it("includes up to 10 errors in response", async () => {
