@@ -30,6 +30,123 @@ afterEach(() => {
 });
 
 describe("scheduled Combat Power runner", () => {
+  it.each(["html", "json", "truncated"])(
+    "recovers a %s 503 during publication without rediscovery or enrichment",
+    async (format) => {
+      const publication = {
+        ...continuation,
+        players: [],
+        processedCount: 100,
+        phase: "publish",
+      };
+      const unavailable = () =>
+        format === "json"
+          ? Response.json(
+              { code: "PREFETCH_FAILED", error: "Temporary publication failure" },
+              { status: 503 }
+            )
+          : new Response(
+              format === "html"
+                ? `<html><h1>Service Unavailable</h1>${options.secret}\n::error::diagnostic</html>`
+                : '{"success":false,"error":"interrupted',
+              {
+                status: 503,
+                headers: { "Content-Type": "text/html", "CF-Ray": "test-ray-NRT" },
+              }
+            );
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce(
+          Response.json({ ...baseResponse, playerCount: 100, continuation: publication })
+        )
+        .mockImplementationOnce(async () => unavailable())
+        .mockImplementationOnce(async () => unavailable())
+        .mockResolvedValueOnce(
+          Response.json({ ...baseResponse, playerCount: 100, complete: true })
+        );
+      const wait = vi.fn(async () => {});
+      const log = vi.fn();
+      const enrich = vi.fn();
+      expect(
+        await runCombatPowerPrefetch({ ...options, request, wait, log, enrich })
+      ).toMatchObject({
+        complete: true,
+        buildCount: 100,
+        enrichedCount: 0,
+      });
+      expect(wait.mock.calls.map(([ms]) => ms)).toEqual([30000, 60000]);
+      expect(enrich).not.toHaveBeenCalled();
+      const bodies = request.mock.calls.map(([, init]) => init.body);
+      expect(bodies.slice(1)).toEqual([bodies[1], bodies[1], bodies[1]]);
+      expect(JSON.parse(bodies[1]).continuation).toEqual(publication);
+      const logs = log.mock.calls.flat().join(" ");
+      expect(logs).not.toContain(options.secret);
+      expect(logs).not.toContain("\n");
+      if (format === "html") {
+        expect(logs).toContain("Ray test-ray-NRT");
+        expect(logs).toContain("Service Unavailable");
+        expect(logs).toContain("[redacted]");
+      }
+    }
+  );
+  it("releases an exhausted publication lease without restarting completed character work", async () => {
+    const publication = { ...continuation, players: [], processedCount: 100, phase: "publish" };
+    const request = vi.fn(async (_url, init) => {
+      const body = JSON.parse(init.body);
+      if (body.failed) return Response.json({ code: "ENRICHMENT_FAILED" }, { status: 502 });
+      if (!body.continuation)
+        return Response.json({ ...baseResponse, playerCount: 100, continuation: publication });
+      return new Response("Service Unavailable", { status: 503 });
+    });
+    const wait = vi.fn(async () => {});
+    const enrich = vi.fn();
+    await expect(runCombatPowerPrefetch({ ...options, request, wait, enrich })).rejects.toThrow(
+      "api at 100 builds"
+    );
+    expect(wait.mock.calls.map(([ms]) => ms)).toEqual([30000, 60000]);
+    expect(enrich).not.toHaveBeenCalled();
+    const bodies = request.mock.calls.map(([, init]) => JSON.parse(init.body));
+    expect(bodies).toHaveLength(5);
+    expect(bodies.slice(1, 4)).toEqual([bodies[1], bodies[1], bodies[1]]);
+    expect(bodies.at(-1)).toMatchObject({ failed: true, continuation: publication });
+  });
+  it.each(["90", "Wed, 21 Oct 2026 23:36:30 GMT"])(
+    "honors API Retry-After %s without character work",
+    async (retryAfter) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-10-21T23:35:00Z"));
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response("Service Unavailable", {
+            status: 503,
+            headers: { "Retry-After": retryAfter },
+          })
+        )
+        .mockResolvedValueOnce(
+          Response.json({ ...baseResponse, playerCount: 100, complete: true })
+        );
+      const wait = vi.fn(async () => {});
+      const enrich = vi.fn();
+      expect(await runCombatPowerPrefetch({ ...options, request, wait, enrich })).toMatchObject({
+        complete: true,
+      });
+      expect(wait).toHaveBeenCalledExactlyOnceWith(90000);
+      expect(enrich).not.toHaveBeenCalled();
+    }
+  );
+  it("fails explicitly when Retry-After exceeds the bounded recovery window", async () => {
+    const request = vi.fn(
+      async () =>
+        new Response("Service Unavailable", { status: 503, headers: { "Retry-After": "600" } })
+    );
+    const wait = vi.fn();
+    await expect(runCombatPowerPrefetch({ ...options, request, wait })).rejects.toThrow(
+      "exceeds the retry wait limit"
+    );
+    expect(request).toHaveBeenCalledOnce();
+    expect(wait).not.toHaveBeenCalled();
+  });
   it("recovers a discovery outage after bounded waits without repeating enrichment", async () => {
     const request = vi
       .fn()

@@ -1008,7 +1008,7 @@ describe("official build enrichment, ranking and continuation", () => {
       fetchedAt
     );
   });
-  it.each(["complete", "duplicate", "unavailable", "mixed-cache"])(
+  it.each(["complete", "duplicate", "unavailable", "mixed-cache", "publication-retry"])(
     "runner prefetch uploads 100 complete unique builds and reuses the population (%s)",
     async (scenario) => {
       const duplicate = scenario === "duplicate";
@@ -1083,14 +1083,26 @@ describe("official build enrichment, ranking and continuation", () => {
           warnings: [],
         };
       });
+      const publicationRequests = [];
+      const wait = vi.fn(async () => {});
       const options = {
         apiUrl: "http://localhost",
         secret: "runner-test",
         cls: "chanter",
         region: "GLOBAL",
-        request: (url, init) => prefetchPOST(new Request(url, init)),
+        request: (url, init) => {
+          if (
+            scenario === "publication-retry" &&
+            JSON.parse(init.body).continuation?.phase === "publish"
+          ) {
+            publicationRequests.push(init.body);
+            if (publicationRequests.length < 3)
+              return new Response("Service Unavailable", { status: 503 });
+          }
+          return prefetchPOST(new Request(url, init));
+        },
         enrich,
-        wait: async () => {},
+        wait,
         log: () => {},
       };
       expect(await runCombatPowerPrefetch(options)).toMatchObject({
@@ -1101,6 +1113,11 @@ describe("official build enrichment, ranking and continuation", () => {
         unavailableCount: unavailable ? 1 : 0,
       });
       expect(enrich).toHaveBeenCalledTimes(unavailable ? 101 : 100 - cachedCount);
+      if (scenario === "publication-retry") {
+        expect(publicationRequests).toEqual(Array(3).fill(publicationRequests[0]));
+        expect(wait.mock.calls.map(([ms]) => ms)).toEqual([30000, 60000]);
+        expect(upstream).toHaveBeenCalledOnce();
+      }
       const cached = await getPrefetchCache(db, "chanter", "combat-power", false, "GLOBAL");
       expect(cached.data.population).toMatchObject({
         complete: true,
@@ -1311,6 +1328,97 @@ describe("official build enrichment, ranking and continuation", () => {
       ).status
     ).toBe(400);
     expect(db.sqlite.prepare("SELECT COUNT(*) AS n FROM player_cache").get().n).toBe(0);
+  });
+  it("exhausted publication recovery preserves the full snapshot and all prepared character builds", async () => {
+    const discovery = fixture("global");
+    discovery.entries = Array.from({ length: 100 }, (_, index) => ({
+      ...discovery.entries[0],
+      characterId: `prepared-${index}`,
+      rank: index + 1,
+      combatPower: 300000 - index,
+      profileImg: discovery.entries[0].profileImg.replace(
+        "charKey=1000",
+        `charKey=${1000 + index}`
+      ),
+    }));
+    Object.assign(discovery, { total: 100, totalPages: 1, limit: 100, hasMore: false });
+    const preparedPlayers = parseCombatPowerResponse(discovery, config).rankings;
+    const priorBuilds = preparedPlayers.map((player, index) => ({
+      ...sampleBuild,
+      ...buildPlayerMetadata(player),
+      characterId: `previous-${index}`,
+    }));
+    await setPrefetchCache(
+      db,
+      "chanter",
+      "combat-power",
+      { sourceMeta: { total: 100 } },
+      priorBuilds,
+      -1,
+      "Shugo Combat Power",
+      "GLOBAL"
+    );
+    const before = await getPrefetchCache(db, "chanter", "combat-power", true, "GLOBAL");
+    const fetchedAt = Date.now() - 60000;
+    for (const player of preparedPlayers)
+      await setCachedPlayer(
+        db,
+        player.characterId,
+        player.serverId,
+        player.region,
+        {
+          _daevaBuildVersion: 1,
+          _daevaBuild: {
+            ...sampleBuild,
+            ...buildPlayerMetadata(player),
+            buildFetchedAt: fetchedAt,
+          },
+        },
+        [],
+        sampleBuild.gearScore,
+        null,
+        fetchedAt
+      );
+    const upstream = vi.fn(async () => Response.json(discovery));
+    vi.stubGlobal("fetch", upstream);
+    getRequestContext.mockReturnValue({
+      env: { DB: db, ADMIN_SECRET: "runner-test", LEADERBOARD_SOURCE_MODE: "combat-power" },
+    });
+    const publications = [];
+    const enrich = vi.fn();
+    await expect(
+      runCombatPowerPrefetch({
+        apiUrl: "http://localhost",
+        secret: "runner-test",
+        cls: "chanter",
+        region: "GLOBAL",
+        request: (url, init) => {
+          const body = JSON.parse(init.body);
+          if (!body.failed && body.continuation?.phase === "publish") {
+            publications.push(init.body);
+            return new Response("Service Unavailable", { status: 503 });
+          }
+          return prefetchPOST(new Request(url, init));
+        },
+        enrich,
+        wait: async () => {},
+        log: () => {},
+      })
+    ).rejects.toThrow("api at 100 builds");
+    expect(publications).toEqual(Array(3).fill(publications[0]));
+    expect(enrich).not.toHaveBeenCalled();
+    expect(upstream).toHaveBeenCalledOnce();
+    const after = await getPrefetchCache(db, "chanter", "combat-power", true, "GLOBAL");
+    expect(after.builds).toEqual(before.builds);
+    expect(after.fetchedAt).toBe(before.fetchedAt);
+    expect(after.expiresAt).toBe(before.expiresAt);
+    expect(after.data.refresh).toMatchObject({
+      status: "failed",
+      leaseExpiresAt: 0,
+      buildCount: 100,
+    });
+    expect(after.data.refresh.error).toContain("HTTP 503");
+    expect((await loadCachedBuilds(db, preparedPlayers)).size).toBe(100);
   });
   it("runner build failure releases the lease and preserves the last complete dataset", async () => {
     await setPrefetchCache(

@@ -118,6 +118,14 @@ Interrupted responses, including truncated HTTP-200 JSON, are retried up to twic
 An unsupported mode/class/region or exhausted recovery fails explicitly before
 discovery, enrichment or cache writes.
 
+API checkpoint, upload and publication requests retry temporary server errors
+after 30/60 seconds, including non-JSON 503 responses. Retries send the same
+request without repeating discovery or character enrichment. `Retry-After` can
+extend each wait up to two minutes; longer requested pauses fail explicitly.
+Malformed-response diagnostics include a bounded, redacted body summary and the
+Cloudflare Ray ID when present. Exhausted publication recovery retains the last
+complete dataset and the already prepared individual character caches.
+
 Scheduled build requests start at least 500 ms apart per upstream host. HTTP 429
 responses pause all workers using that host and honor `Retry-After`, with bounded
 30/60/120/240-second backoff. That host then slows to one request per second.

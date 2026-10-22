@@ -79,6 +79,27 @@ export async function runCombatPowerPrefetch({
       ),
   });
 
+  async function retryAPI(response, attempt, detail) {
+    // Gateway/platform failures can outlast a short 2/4-second retry window,
+    // including the final publication after all character work has finished.
+    let delay = (response?.status >= 500 ? 30000 : 2000) * (attempt + 1);
+    const retryAfter = response?.headers.get("retry-after");
+    if (retryAfter) {
+      const requested = /^\d+$/.test(retryAfter)
+        ? Number(retryAfter) * 1000
+        : Date.parse(retryAfter) - Date.now();
+      if (Number.isFinite(requested)) delay = Math.max(delay, requested);
+    }
+    // Keep recovery inside the ten-minute population lease. Never retry sooner
+    // than requested if the server asks for a longer pause than this job allows.
+    if (delay > 120000)
+      throw new Error(`Prefetch API recovery exceeds the retry wait limit (${detail}).`);
+    log(
+      `${region}/${cls}: retrying API response (${detail}, attempt ${attempt + 1}/3) in ${Math.ceil(delay / 1000)}s`
+    );
+    await wait(delay);
+  }
+
   async function post(body) {
     for (let attempt = 0; attempt < 3; attempt++) {
       let response;
@@ -94,16 +115,22 @@ export async function runCombatPowerPrefetch({
         });
         text = await response.text();
         data = JSON.parse(text);
-      } catch {
+      } catch (error) {
         const code = text.match(/error code:\s*(\d{4})\b/i)?.[1];
         const status = response ? `HTTP ${response.status}` : "network/timeout";
-        const detail = `${status}${code ? `, Cloudflare ${code}` : ""}`;
+        const ray = response?.headers.get("cf-ray");
+        const type = response?.headers.get("content-type");
+        const reason = response
+          ? text.replace(/<[^>]*>/g, " ").trim() || "empty or interrupted response"
+          : error.message;
+        const detail = `${status}${code ? `, Cloudflare ${code}` : ""}${
+          ray ? `, Ray ${safeText(ray, 80)}` : ""
+        }${type ? `, ${safeText(type, 80)}` : ""}: ${safeText(reason, 160)}`;
         if (attempt === 2 || [400, 401, 403, 404].includes(response?.status))
           throw new Error(
             `Prefetch API returned an unavailable or malformed response (${detail}).`
           );
-        log(`${region}/${cls}: retrying API response (${detail}, attempt ${attempt + 1}/3)`);
-        await wait(2000 * (attempt + 1));
+        await retryAPI(response, attempt, detail);
         continue;
       }
       if (response.status === 202 && data?.inProgress === true) return { waiting: true };
@@ -113,16 +140,9 @@ export async function runCombatPowerPrefetch({
           typeof data?.error === "string" ? `: ${safeText(data.error, 300)}` : ""
         }`;
         if ([500, 502, 503, 504].includes(response.status) && attempt < 2) {
-          // Give a short discovery outage time to recover without restarting
-          // the population or repeating successful enrichment/uploads.
-          const delay =
-            response.status === 503 && data?.code === "UPSTREAM_UNAVAILABLE"
-              ? 30000 * (attempt + 1)
-              : 2000 * (attempt + 1);
-          log(
-            `${region}/${cls}: retrying API response (${detail}, attempt ${attempt + 1}/3) in ${delay / 1000}s`
-          );
-          await wait(delay);
+          // Replay only this checkpoint/upload/publication, never discovery or
+          // enrichment that has already succeeded.
+          await retryAPI(response, attempt, detail);
           continue;
         }
         throw new Error(`Prefetch API failed (${detail}).`);
