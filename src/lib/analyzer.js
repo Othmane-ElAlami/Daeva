@@ -148,9 +148,14 @@ export async function analyze(
   let enrichPlayer = null;
   // Cached builds cost CPU even when they need no outbound fetches. Bound raw
   // cache upgrades/processing on low-limit Workers and resume the same pool.
-  const workLimit =
-    enrichExternally || (budget.hardLimit <= 50 && sourceMeta.source !== "Cache") ? 5 : Infinity;
-  const cacheGroupSize = enrichExternally || budget.hardLimit <= 50 ? 5 : 40;
+  // Scheduled preparation shares the Free-plan CPU cap with its API wrapper.
+  // Read/normalize at most one character; publication has its own invocation.
+  const workLimit = enrichExternally
+    ? 1
+    : budget.hardLimit <= 50 && sourceMeta.source !== "Cache"
+      ? 5
+      : Infinity;
+  const cacheGroupSize = enrichExternally ? 1 : budget.hardLimit <= 50 ? 5 : 40;
   while (processedPlayers.length < config.limit && (players.length || sourceMeta.hasMore)) {
     const candidates = players.filter((player) => {
       const key = characterKey(player);

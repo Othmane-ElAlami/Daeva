@@ -162,12 +162,14 @@ export async function runCombatPowerPrefetch({
   }
 
   try {
-    while (requests < 160) {
+    // Each new build has its own upload acknowledgement and preparation call.
+    // Allow both while retaining a bounded guard for cached waves/omissions.
+    while (requests < 320) {
       phase = "api";
       const data = await post({
         ...base,
         continuation,
-        ...(enrichedBuild ? { enrichedBuild } : {}),
+        ...(enrichedBuild ? { enrichedBuild, uploadOnly: true } : {}),
         ...(unavailable ? { unavailable } : {}),
       });
       lastHeartbeat = Date.now();

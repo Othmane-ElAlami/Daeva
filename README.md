@@ -126,6 +126,14 @@ Malformed-response diagnostics include a bounded, redacted body summary and the
 Cloudflare Ray ID when present. Exhausted publication recovery retains the last
 complete dataset and the already prepared individual character caches.
 
+Scheduled runners acknowledge each uploaded build in its own API invocation.
+That invocation validates and stores one build and renews progress; each following
+preparation invocation reads and normalizes at most one cached character. Splitting these steps
+reduces peak Worker CPU work without repeating official enrichment. A final
+upload returns a publication checkpoint, and only a complete validated population
+can replace the full snapshot. Older runners retain their existing upload
+behavior until they opt into these checkpoints.
+
 Scheduled build requests start at least 500 ms apart per upstream host. HTTP 429
 responses pause all workers using that host and honor `Retry-After`, with bounded
 30/60/120/240-second backoff. That host then slows to one request per second.
@@ -182,12 +190,12 @@ Unresolved failures stop the refresh and retain the last usable population.
 Workflow/status diagnostics identify the stage, character rank, failed item/slot
 or HTTP/Cloudflare error code when available. Authentication secrets are redacted.
 
-Each region/class job has a 90-minute timeout. CP runner jobs allow at most 160 API batches, covering cached-player checkpoints, up to 100 complete build uploads, bounded omissions and a separate publication request. API calls have a one-minute timeout and bounded retries; another refresh's lease is polled for at most 30 minutes. The legacy/manual Worker enrichment path retains its fetch budget, and interactive analysis retains its continuation safeguards. An unresolved refresh never publishes a partial population.
+Each region/class job has a 90-minute timeout. CP runner jobs allow at most 320 API batches, covering separate upload/preparation checkpoints, up to 100 complete build uploads, bounded omissions and a final publication request. API calls have a one-minute timeout and bounded retries; another refresh's lease is polled for at most 30 minutes. The legacy/manual Worker enrichment path retains its fetch budget, and interactive analysis retains its continuation safeguards. An unresolved refresh never publishes a partial population.
 
-Discovery exhaustion (`503 UPSTREAM_UNAVAILABLE`) retries after 30 and 60 seconds,
-then fails explicitly if the source is still unavailable. Other API failures keep
-their shorter retries. Workflow logs and authenticated refresh status retain the
-bounded, redacted upstream explanation; successful builds are not fetched again.
+Temporary API server failures, including discovery exhaustion
+(`503 UPSTREAM_UNAVAILABLE`), retry after 30 and 60 seconds, then fail explicitly
+if recovery is exhausted. Workflow logs and authenticated refresh status retain
+the bounded, redacted explanation; successful builds are not fetched again.
 
 Shugo may retain corrupt duplicate lookup records. Daeva discards one only when
 a valid entry with the same official profile-image character key, region,

@@ -16,7 +16,7 @@ import {
 import { populationKey, discoveryConfig } from "../src/lib/discovery-config.js";
 import { parseCombatPowerResponse } from "../src/lib/providers/leaderboard/shugo-combat-power.js";
 import { getLeaderboard } from "../src/lib/providers/leaderboard/index.js";
-import { analyze } from "../src/lib/analyzer.js";
+import { analyze, analysisIdentity } from "../src/lib/analyzer.js";
 import {
   loadCachedBuild,
   loadCachedBuilds,
@@ -1008,7 +1008,14 @@ describe("official build enrichment, ranking and continuation", () => {
       fetchedAt
     );
   });
-  it.each(["complete", "duplicate", "unavailable", "mixed-cache", "publication-retry"])(
+  it.each([
+    "complete",
+    "duplicate",
+    "unavailable",
+    "mixed-cache",
+    "publication-retry",
+    "legacy-runner",
+  ])(
     "runner prefetch uploads 100 complete unique builds and reuses the population (%s)",
     async (scenario) => {
       const duplicate = scenario === "duplicate";
@@ -1091,6 +1098,11 @@ describe("official build enrichment, ranking and continuation", () => {
         cls: "chanter",
         region: "GLOBAL",
         request: (url, init) => {
+          if (scenario === "legacy-runner") {
+            const body = JSON.parse(init.body);
+            delete body.uploadOnly;
+            init = { ...init, body: JSON.stringify(body) };
+          }
           if (
             scenario === "publication-retry" &&
             JSON.parse(init.body).continuation?.phase === "publish"
@@ -1109,7 +1121,7 @@ describe("official build enrichment, ranking and continuation", () => {
         complete: true,
         buildCount: 100,
         enrichedCount: 100 - cachedCount,
-        requests: unavailable ? 103 : cachedCount ? 98 : 102,
+        requests: scenario === "legacy-runner" ? 102 : unavailable ? 202 : cachedCount ? 196 : 201,
         unavailableCount: unavailable ? 1 : 0,
       });
       expect(enrich).toHaveBeenCalledTimes(unavailable ? 101 : 100 - cachedCount);
@@ -1233,6 +1245,120 @@ describe("official build enrichment, ranking and continuation", () => {
       expect(after.data.refresh).toMatchObject({ status: "failed", leaseExpiresAt: 0 });
     }
   );
+  it("acknowledges an upload without reading/normalizing more builds or replacing the full snapshot", async () => {
+    const allPlayers = Array.from({ length: 100 }, (_, index) => ({
+      ...players[0],
+      characterId: `bounded-upload-${index}`,
+      rank: index + 1,
+      combatPower: 300000 - index,
+    }));
+    const fullConfig = { ...config, limit: 100 };
+    const sourceMeta = {
+      source: "Shugo Combat Power",
+      leaderboardType: "combat-power",
+      region: "GLOBAL",
+      total: 100,
+      hasMore: false,
+    };
+    const priorBuilds = allPlayers.map((player) => ({
+      ...sampleBuild,
+      ...buildPlayerMetadata(player),
+    }));
+    await setPrefetchCache(
+      db,
+      "chanter",
+      "combat-power",
+      { sourceMeta },
+      priorBuilds,
+      -1,
+      "Shugo Combat Power",
+      "GLOBAL"
+    );
+    const before = await getPrefetchCache(db, "chanter", "combat-power", true, "GLOBAL");
+    const fetchedAt = Date.now() - 60000;
+    // These five raw caches require normalization. The upload must do none;
+    // each subsequent preparation invocation may normalize only one.
+    for (const player of allPlayers.slice(70, 75))
+      await setCachedPlayer(
+        db,
+        player.characterId,
+        player.serverId,
+        player.region,
+        equip,
+        details,
+        3353,
+        null,
+        fetchedAt
+      );
+    const lease = await claimRefresh(db, fullConfig, null, "scheduled");
+    const continuation = {
+      identity: analysisIdentity(fullConfig),
+      sourceMeta,
+      players: allPlayers.slice(69),
+      processedPlayers: allPlayers.slice(0, 69),
+      processedCount: 69,
+      refreshToken: lease.token,
+    };
+    const build = { ...priorBuilds[69], buildFetchedAt: fetchedAt };
+    getRequestContext.mockReturnValue({
+      env: { DB: db, ADMIN_SECRET: "runner-test", LEADERBOARD_SOURCE_MODE: "combat-power" },
+    });
+    const upstream = vi.fn(async () => {
+      throw new Error("No upstream work belongs in an upload checkpoint");
+    });
+    vi.stubGlobal("fetch", upstream);
+    const sql = vi.spyOn(db, "prepare");
+    const post = (body) =>
+      prefetchPOST(
+        new Request("http://test/api/prefetch/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: "Bearer runner-test" },
+          body: JSON.stringify({
+            cls: "chanter",
+            leaderboard: "combat-power",
+            region: "GLOBAL",
+            execution: "runner",
+            ...body,
+          }),
+        })
+      );
+    const upload = { continuation, enrichedBuild: build, uploadOnly: true };
+    const first = await (await post(upload)).json();
+    const replay = await (await post(upload)).json();
+    expect(first).toMatchObject({
+      success: true,
+      complete: false,
+      playerCount: 70,
+      errorCount: 0,
+      budgetUsed: 0,
+    });
+    expect(first.enrichPlayer).toBeUndefined();
+    expect(replay.continuation).toEqual(first.continuation);
+    expect(first.continuation.processedPlayers).toEqual(allPlayers.slice(0, 70));
+    expect(
+      sql.mock.calls.some(([query]) => /FROM player_cache|UPDATE player_cache/.test(query))
+    ).toBe(false);
+    expect(upstream).not.toHaveBeenCalled();
+    const retained = await getPrefetchCache(db, "chanter", "combat-power", true, "GLOBAL");
+    expect(retained.builds).toEqual(before.builds);
+    expect(retained.fetchedAt).toBe(before.fetchedAt);
+    expect(retained.expiresAt).toBe(before.expiresAt);
+    expect(
+      (await getCachedPlayer(db, build.characterId, build.serverId, build.region)).fetchedAt
+    ).toBe(fetchedAt);
+    const next = await (await post({ continuation: first.continuation })).json();
+    expect(next).toMatchObject({ success: true, complete: false, playerCount: 71 });
+    expect(next.continuation.processedPlayers).toEqual(allPlayers.slice(0, 71));
+    expect(upstream).not.toHaveBeenCalled();
+    expect(
+      (await getCachedPlayer(db, allPlayers[70].characterId, allPlayers[70].serverId, "GLOBAL"))
+        .equipData._daevaBuildVersion
+    ).toBe(1);
+    expect(
+      (await getCachedPlayer(db, allPlayers[71].characterId, allPlayers[71].serverId, "GLOBAL"))
+        .equipData._daevaBuildVersion
+    ).toBeUndefined();
+  });
   it.each(["region", "identity", "timestamp", "details"])(
     "rejects an invalid runner upload (%s) before writing any character cache",
     async (invalid) => {

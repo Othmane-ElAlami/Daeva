@@ -113,6 +113,18 @@ export async function POST(request) {
       { error: "Enriched build does not match the pending population." },
       { status: 400 }
     );
+  if (
+    body.uploadOnly &&
+    (body.uploadOnly !== true ||
+      !body.enrichedBuild ||
+      body.failed ||
+      body.heartbeat ||
+      body.unavailable)
+  )
+    return Response.json(
+      { error: "An upload checkpoint requires only its enriched build." },
+      { status: 400 }
+    );
   if (body.failed && (!external || !body.continuation))
     return Response.json(
       { error: "A runner failure requires its pending continuation." },
@@ -218,6 +230,35 @@ export async function POST(request) {
       : body.unavailable
         ? omitUnavailablePlayer(body.unavailable, body.continuation)
         : body.continuation;
+    if (body.uploadOnly === true) {
+      // Acknowledging one validated upload must not also read/normalize the
+      // next cached players. Keep those CPU costs in a separate invocation.
+      // Opt in so older scheduled runners retain their original batch budget.
+      const publishing =
+        continuation.processedCount >= analysisConfig.limit ||
+        (!continuation.players.length && !continuation.sourceMeta.hasMore);
+      await updateRefresh(env.DB, analysisConfig, refreshToken, "running", {
+        buildCount: continuation.processedCount,
+      });
+      return Response.json({
+        success: true,
+        complete: false,
+        class: cls,
+        leaderboard,
+        region,
+        continuation: {
+          ...continuation,
+          ...(publishing ? { players: [], phase: "publish" } : {}),
+          refreshToken,
+        },
+        playerCount: continuation.processedCount,
+        errorCount: 0,
+        budgetUsed: 0,
+        durationMs: Date.now() - startTime,
+        errors: [],
+        sourceMeta: continuation.sourceMeta,
+      });
+    }
     const result = await runPrefetchJob(cls, leaderboard, env.DB, {
       region,
       sourceMode: config.sourceMode,

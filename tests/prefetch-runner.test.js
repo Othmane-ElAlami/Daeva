@@ -236,6 +236,7 @@ describe("scheduled Combat Power runner", () => {
     });
     expect(enrich).toHaveBeenCalledOnce();
     expect(JSON.parse(request.mock.calls[2][1].body).enrichedBuild.characterId).toBe("sample");
+    expect(JSON.parse(request.mock.calls[2][1].body).uploadOnly).toBe(true);
   });
   it.each(["checkpoint", "unaccepted-upload"])(
     "still rejects a repeated %s without progress",
