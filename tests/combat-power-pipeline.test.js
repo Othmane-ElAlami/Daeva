@@ -31,6 +31,7 @@ import {
   aggregate,
   createBudget,
   createWorkerBudget,
+  UpstreamTimeoutError,
 } from "../src/lib/scraper-shared.js";
 import {
   resultLabel,
@@ -542,6 +543,184 @@ describe("provider failures and historical populations", () => {
 });
 
 describe("official build enrichment, ranking and continuation", () => {
+  it.each(["timeout", "server-error", "network", "persistent-timeout"])(
+    "retains successful item details during bounded recovery after exhausted %s retries",
+    async (failure) => {
+      const equipment = fixture("global-equipment");
+      const [goodItem] = equipment.equipment.equipmentList;
+      const failedItem = equipment.equipment.equipmentList.find((item) => item.id === 210330118);
+      expect(failedItem).toBeDefined();
+      equipment.equipment.equipmentList = [goodItem, failedItem];
+      const fetchedAt = Date.now() - 7 * 3600000;
+      await setCachedPlayer(
+        db,
+        players[0].characterId,
+        players[0].serverId,
+        "GLOBAL",
+        equip,
+        details,
+        3353,
+        sampleBuild,
+        fetchedAt
+      );
+      let equipmentReads = 0,
+        infoReads = 0,
+        goodReads = 0,
+        directFailures = 0,
+        proxyFailures = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input) => {
+          let url = new URL(input);
+          const proxy = url.pathname === "/api/proxy";
+          if (proxy) url = new URL(url.searchParams.get("url"));
+          if (url.pathname.endsWith("/info")) {
+            infoReads++;
+            return Response.json(fixture("global-info"));
+          }
+          if (url.pathname.endsWith("/equipment")) {
+            equipmentReads++;
+            return Response.json(equipment);
+          }
+          if (url.searchParams.get("id") === String(goodItem.id)) {
+            goodReads++;
+            return Response.json({ ...fixture("global-item"), id: goodItem.id });
+          }
+          if (!proxy) {
+            directFailures++;
+            return new Response("missing", { status: 404 });
+          }
+          proxyFailures++;
+          if (proxyFailures < 3) return new Response("missing", { status: 404 });
+          if (proxyFailures === 3 || failure === "persistent-timeout") {
+            if (failure === "server-error") return new Response("unavailable", { status: 503 });
+            if (failure === "network") throw new TypeError("fetch failed");
+            throw new DOMException("Request aborted", "AbortError");
+          }
+          return Response.json({ ...fixture("global-item"), id: failedItem.id });
+        })
+      );
+      let time = 0;
+      const transport = createScheduledJSON({
+        now: () => time,
+        wait: async (ms) => {
+          time += ms;
+        },
+      });
+      const result = await fetchCharacterBuild(players[0], db, createBudget(), {
+        requestJSON: transport.json,
+        retryItemDetails: true,
+        retryEquipmentChanges: true,
+      });
+      expect(directFailures).toBe(2);
+      expect(proxyFailures).toBe(failure === "persistent-timeout" ? 6 : 4);
+      expect(infoReads).toBe(1);
+      expect(goodReads).toBe(1);
+      const cached = await getCachedPlayer(
+        db,
+        players[0].characterId,
+        players[0].serverId,
+        "GLOBAL"
+      );
+      if (failure === "persistent-timeout") {
+        expect(result.warnings).toHaveLength(1);
+        expect(result.itemFailures[0]).toBeInstanceOf(UpstreamTimeoutError);
+        expect(result.itemFailures[0]).toMatchObject({
+          code: "UPSTREAM_TIMEOUT",
+          retryExhausted: true,
+        });
+        expect(equipmentReads).toBe(2);
+        expect(cached.fetchedAt).toBe(fetchedAt);
+      } else {
+        expect(result.warnings).toEqual([]);
+        expect(result.build.equipItems).toHaveLength(2);
+        expect(equipmentReads).toBe(1);
+        expect(cached.fetchedAt).toBeGreaterThan(fetchedAt);
+      }
+    }
+  );
+  it.each([401, 429, "PREFETCH_DEADLINE"])(
+    "does not restart item recovery after a terminal %s failure",
+    async (failure) => {
+      let itemReads = 0;
+      const requestJSON = vi.fn(async (input) => {
+        let url = new URL(input);
+        const proxy = url.pathname === "/api/proxy";
+        if (proxy) url = new URL(url.searchParams.get("url"));
+        if (url.pathname.endsWith("/info")) return fixture("global-info");
+        if (url.pathname.endsWith("/equipment")) return equip;
+        itemReads++;
+        // A timeout on the alternate transport cannot hide an exhausted
+        // authentication/rate-limit failure on the official transport.
+        if (proxy) throw Object.assign(new UpstreamTimeoutError(20000), { retryExhausted: true });
+        throw Object.assign(
+          new Error(String(failure)),
+          typeof failure === "number"
+            ? { status: failure, retryExhausted: true }
+            : { code: failure, retryable: false }
+        );
+      });
+      const result = await fetchCharacterBuild(players[0], db, createBudget(), {
+        requestJSON,
+        retryItemDetails: true,
+      });
+      expect(itemReads).toBe(typeof failure === "number" ? 2 : 1);
+      expect(result.warnings).toHaveLength(1);
+      expect(
+        await getCachedPlayer(db, players[0].characterId, players[0].serverId, "GLOBAL")
+      ).toBeNull();
+    }
+  );
+  it.each(["timeout", "rate-limit", "deadline"])(
+    "does not hide an equipment recheck %s behind earlier missing-item errors",
+    async (failure) => {
+      const fetchedAt = Date.now() - 7 * 3600000;
+      await setCachedPlayer(
+        db,
+        players[0].characterId,
+        players[0].serverId,
+        "GLOBAL",
+        equip,
+        details,
+        3353,
+        sampleBuild,
+        fetchedAt
+      );
+      let equipmentReads = 0;
+      const requestJSON = vi.fn(async (input) => {
+        let url = new URL(input);
+        if (url.pathname === "/api/proxy") url = new URL(url.searchParams.get("url"));
+        if (url.pathname.endsWith("/info")) return fixture("global-info");
+        if (url.pathname.endsWith("/equipment")) {
+          if (++equipmentReads === 1) return equip;
+          if (failure === "timeout") throw new UpstreamTimeoutError(20000);
+          throw Object.assign(
+            new Error(failure),
+            failure === "rate-limit"
+              ? { status: 429, retryExhausted: true }
+              : { code: "PREFETCH_DEADLINE", retryable: false }
+          );
+        }
+        throw Object.assign(new Error("HTTP 404"), { status: 404, retryExhausted: true });
+      });
+      await expect(
+        fetchCharacterBuild(players[0], db, createBudget(), {
+          requestJSON,
+          retryItemDetails: true,
+          retryEquipmentChanges: true,
+        })
+      ).rejects.toMatchObject(
+        failure === "timeout"
+          ? { code: "UPSTREAM_TIMEOUT" }
+          : failure === "rate-limit"
+            ? { status: 429 }
+            : { code: "PREFETCH_DEADLINE" }
+      );
+      expect(
+        (await getCachedPlayer(db, players[0].characterId, players[0].serverId, "GLOBAL")).fetchedAt
+      ).toBe(fetchedAt);
+    }
+  );
   it.each(["equipment-ok", "rate-limit"])(
     "settles profile/equipment work and prioritizes hard failures (%s)",
     async (failure) => {

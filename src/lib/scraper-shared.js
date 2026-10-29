@@ -197,6 +197,15 @@ function friendlyFetchLabel(url) {
   return "Loading";
 }
 
+export class UpstreamTimeoutError extends Error {
+  constructor(timeoutMs) {
+    super(`Request timed out after ${timeoutMs}ms`);
+    this.name = "UpstreamTimeoutError";
+    this.code = "UPSTREAM_TIMEOUT";
+    this.retryable = true;
+  }
+}
+
 export async function fetchJSON(
   url,
   headers,
@@ -232,7 +241,7 @@ export async function fetchJSON(
     return data;
   } catch (err) {
     if (err.name === "AbortError") {
-      throw new Error(`Request timed out after ${timeoutMs}ms`);
+      throw new UpstreamTimeoutError(timeoutMs);
     }
     // Detect Cloudflare Workers subrequest limit — stop immediately
     if (err.message && /too many subrequests/i.test(err.message)) {

@@ -353,7 +353,7 @@ describe("scheduled Combat Power runner", () => {
       expect(JSON.parse(request.mock.calls[1][1].body).enrichedBuild).toBeUndefined();
     }
   );
-  it.each(["missing-item", "schema", "rate-limit", "proxy-rate-limit"])(
+  it.each(["missing-item", "schema", "rate-limit", "proxy-rate-limit", "timeout"])(
     "only backfills a confirmed unavailable character (%s)",
     async (failure) => {
       const skippable = ["missing-item", "schema"].includes(failure);
@@ -395,6 +395,11 @@ describe("scheduled Combat Power runner", () => {
         if (failure === "schema") error.code = "ITEM_UNAVAILABLE";
         else error.status = failure === "rate-limit" ? 429 : 404;
         if (failure === "proxy-rate-limit") error.officialFailure = { status: 429 };
+        if (failure === "timeout") {
+          delete error.status;
+          error.code = "UPSTREAM_TIMEOUT";
+          error.officialFailure = { status: 404 };
+        }
         return {
           build: { characterId: "sample" },
           warnings: [error.message],

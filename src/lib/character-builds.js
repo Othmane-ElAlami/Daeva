@@ -29,6 +29,29 @@ function unavailable(message, code, retryable = true) {
   return error;
 }
 
+function terminalFailure(error) {
+  return !!(
+    error &&
+    (error.retryable === false ||
+      [401, 403, 429].includes(error.status) ||
+      ["LEASE_LOST", "PREFETCH_DEADLINE"].includes(error.code) ||
+      terminalFailure(error.officialFailure))
+  );
+}
+
+function canRetryItem(error) {
+  if (terminalFailure(error)) return false;
+  // Exhausting one transport's attempts must not erase the separate, bounded
+  // item retry. Keep successful details; never restart the whole character.
+  return (
+    !error.retryExhausted ||
+    error.code === "UPSTREAM_TIMEOUT" ||
+    error.status === 408 ||
+    error.status >= 500 ||
+    (error.name === "TypeError" && /fetch/i.test(error.message))
+  );
+}
+
 async function officialJSON(
   player,
   path,
@@ -56,7 +79,11 @@ async function officialJSON(
   try {
     return await read(url, makeDirectHeaders(), { fallbackAvailable: true });
   } catch (error) {
-    if (error instanceof subrequestBudgetExhausted || error.code === "LEASE_LOST") throw error;
+    if (
+      error instanceof subrequestBudgetExhausted ||
+      ["LEASE_LOST", "PREFETCH_DEADLINE"].includes(error.code)
+    )
+      throw error;
     // The fallback transports the same first-party JSON, never Shugo build HTML.
     try {
       return await read(proxyUrl(url), makeHeaders(`${baseUrl}/leaderboard`));
@@ -262,7 +289,7 @@ export async function fetchCharacterBuild(
           } catch (error) {
             if (
               error instanceof subrequestBudgetExhausted ||
-              error.retryExhausted ||
+              !canRetryItem(error) ||
               attempt === attempts - 1
             )
               throw error;
@@ -294,8 +321,9 @@ export async function fetchCharacterBuild(
     try {
       latest = await officialJSON(player, "equipment", budget, {}, validateEquipment, requestJSON);
     } catch (error) {
-      if (error instanceof subrequestBudgetExhausted || error.code === "LEASE_LOST") throw error;
-      // The original incomplete result still fails scheduled publication.
+      // A failed recheck cannot turn earlier missing items into an omittable
+      // character when the latest evidence is a transport/auth/lease failure.
+      if (error instanceof subrequestBudgetExhausted || !unavailableCode(error)) throw error;
     }
     const changed =
       latest &&

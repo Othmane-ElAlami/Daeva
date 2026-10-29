@@ -180,12 +180,17 @@ class, identifiers, rank and leaderboard CP, and retain their actual build-fetch
 timestamp. Stale player rows are filtered in SQL before their build JSON is
 transferred or parsed. Missing/mismatched official profiles can retry once;
 scheduled item failures retry that item once while retaining successful details.
+That separate item retry also applies after a transport exhausts its attempts
+with a timeout, temporary server error or network failure. Authentication errors,
+exhausted rate limits, lost leases and the job deadline cannot restart that retry.
 Invalid direct profile stats, equipment/skills or item payloads also use the
 validated first-party proxy fallback. Both transports must return the expected
 character/server IDs and complete official stats; a zero Item Level is unavailable.
 After unresolved item retries, scheduled runs recheck equipment once. A changed
 failed slot triggers one complete character rebuild from fresh official data;
 unchanged malformed items remain failures. Old and new equipment are never combined.
+Transport/authentication failures during the recheck stop preparation; they cannot
+be hidden behind earlier missing-item errors or treated as an omittable character.
 Unresolved failures stop the refresh and retain the last usable population.
 Workflow/status diagnostics identify the stage, character rank, failed item/slot
 or HTTP/Cloudflare error code when available. Authentication secrets are redacted.

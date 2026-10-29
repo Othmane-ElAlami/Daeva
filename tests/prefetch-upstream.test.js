@@ -95,7 +95,11 @@ describe("scheduled upstream transport", () => {
     });
     const timed = expect(
       fetchJSON("https://example.com/body", {}, "GET", null, null, null, 1000)
-    ).rejects.toThrow("Request timed out after 1000ms");
+    ).rejects.toMatchObject({
+      name: "UpstreamTimeoutError",
+      code: "UPSTREAM_TIMEOUT",
+      message: "Request timed out after 1000ms",
+    });
     await vi.advanceTimersByTimeAsync(1000);
     await timed;
   });
