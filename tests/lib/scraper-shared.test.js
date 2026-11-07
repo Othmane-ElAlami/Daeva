@@ -753,9 +753,18 @@ describe("extractBuild", () => {
       ["Necklace", "Necklace"],
       ["Amulet", "Amulet"],
       ["Earring1", "Earrings"],
+      ["Earring2", "Earrings"],
+      ["Ring1", "Ring"],
       ["Ring2", "Ring"],
       ["Bracelet1", "Bracelet"],
+      ["Bracelet2", "Bracelet"],
+      ["Brooch1", "Brooch"],
+      ["Brooch2", "Brooch"],
+      ["Seal1", "Seal"],
+      ["Seal2", "Seal"],
+      ["Pendant", "Pendant"],
       ["Rune1", "Rune"],
+      ["Rune2", "Rune"],
     ];
 
     for (const [slotPosName, expectedCategory] of slots) {
@@ -782,6 +791,10 @@ describe("extractBuild", () => {
       Arcana4: "Bell",
       Arcana5: "Mirror",
       Arcana6: "Scales",
+      Arcana7: "Key",
+      Arcana8: "Hourglass",
+      Arcana9: "Dice",
+      Arcana10: "Lantern",
     };
 
     for (const [slotPosName, expectedCategory] of Object.entries(arcanaSlots)) {

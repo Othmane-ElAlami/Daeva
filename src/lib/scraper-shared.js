@@ -458,11 +458,14 @@ export function extractBuild(
       Belt: "Belt",
       Necklace: "Necklace",
       Amulet: "Amulet",
+      Pendant: "Pendant",
     };
     if (map[slotName]) return map[slotName];
     if (slotName.startsWith("Earring")) return "Earrings";
     if (slotName.startsWith("Ring")) return "Ring";
     if (slotName.startsWith("Bracelet")) return "Bracelet";
+    if (slotName.startsWith("Brooch")) return "Brooch";
+    if (slotName.startsWith("Seal")) return "Seal";
     if (slotName.startsWith("Rune")) return "Rune";
     if (slotName.startsWith("Arcana")) {
       const arcanaNames = {
@@ -472,6 +475,10 @@ export function extractBuild(
         4: "Bell",
         5: "Mirror",
         6: "Scales",
+        7: "Key",
+        8: "Hourglass",
+        9: "Dice",
+        10: "Lantern",
       };
       const num = slotName.replace(/\D/g, "");
       return arcanaNames[num] || "Arcana";

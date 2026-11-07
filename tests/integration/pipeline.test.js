@@ -5,6 +5,7 @@
 
 import { describe, it, expect } from "vitest";
 import { extractBuild, aggregate } from "../../src/lib/scraper-shared.js";
+import { groupEquipmentSlots } from "../../src/lib/analyzer-presentation.js";
 
 function makeFullPlayer(name, serverId, overrides = {}) {
   return {
@@ -413,6 +414,68 @@ describe("Full pipeline: extractBuild → aggregate", () => {
     expect(categories).toContain("Bell");
     expect(categories).toContain("Mirror");
     expect(categories).toContain("Scales");
+  });
+
+  it("combines fresh and cached paired accessories consistently in both equipment panels", () => {
+    const pairs = [
+      ["Ring", "Ring"],
+      ["Earring", "Earrings"],
+      ["Bracelet", "Bracelet"],
+      ["Brooch", "Brooch"],
+      ["Seal", "Seal"],
+      ["Rune", "Rune"],
+    ];
+    const equipment = pairs.flatMap(([raw, category], index) =>
+      [1, 2].map((number) => ({
+        id: `${raw}${number}`,
+        name: `${category} Item`,
+        slotPos: index * 2 + number,
+        slotPosName: `${raw}${number}`,
+        grade: 5,
+        enchantLevel: number,
+        itemLevel: 100 * number,
+      }))
+    );
+    const builds = ["fresh", "cached"].map((source) => {
+      const player = makeFullPlayer(source, 1001);
+      player._equip.equipment.equipmentList = equipment;
+      const details = equipment.map((item) => ({
+        slotPos: item.slotPos,
+        categoryName: item.slotPosName,
+        subStats: [{ name: "Accuracy", value: `${item.slotPos}` }],
+      }));
+      const build = extractBuild(player, {}, details, 400, 10000);
+      if (source === "cached") {
+        // Older snapshots retained numbered item categories as well as substats.
+        build.equipItems.forEach((item, index) => {
+          item.categoryName = equipment[index].slotPosName;
+        });
+      }
+      return JSON.parse(JSON.stringify(build));
+    });
+    const stats = aggregate(builds);
+    const before = structuredClone(stats);
+    const itemGroups = groupEquipmentSlots(stats.itemsBySlot);
+    const substatGroups = groupEquipmentSlots(stats.subStatsBySlot, "substats");
+
+    for (const groups of [itemGroups, substatGroups]) {
+      expect(groups.map((group) => group.label)).toEqual(["Accessories"]);
+      expect(groups[0].slots.map(([slot]) => slot)).toEqual(pairs.map(([, category]) => category));
+    }
+    pairs.forEach(([, category], index) => {
+      const items = itemGroups[0].slots[index][1];
+      expect(items[`${category} Item`]).toMatchObject({
+        count: 4,
+        maxEnchant: 2,
+        itemLevel: 200,
+      });
+      const substats = substatGroups[0].slots[index][1];
+      expect(substats.Accuracy).toEqual({
+        count: 4,
+        values: [`${index * 2 + 1}`, `${index * 2 + 1}`, `${index * 2 + 2}`, `${index * 2 + 2}`],
+      });
+    });
+    expect(stats).toEqual(before);
   });
 
   it("includes Rune slot in equipment", () => {

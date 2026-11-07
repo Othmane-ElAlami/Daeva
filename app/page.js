@@ -4,6 +4,7 @@ import "./homepage.css";
 import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { ArrowRight, Menu, X, Zap, BarChart3, Target } from "lucide-react";
+import { APP_VERSION } from "@/lib/release";
 
 /* ═══════════════════════════════════════════
    DATA
@@ -813,7 +814,7 @@ export default function HomePage() {
             Daeva is an independent, open-source community project and is not affiliated with or
             endorsed by NCSoft. &middot;{" "}
             <Link href="/changelog" className="cin-footer-link">
-              v0.11.0-beta
+              v{APP_VERSION}
             </Link>
           </p>
           <p className="cin-footer-tagline">

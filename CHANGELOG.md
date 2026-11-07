@@ -4,10 +4,23 @@ All notable changes to Daeva will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## 0.12.0-beta - 2026-11-07
+
+### Added
+
+- Regression coverage for both numbered slots of every paired accessory, mixed fresh/cached builds, complete item/substat totals, and all supported regions' equipment fixtures.
+- Complete current release notes in the in-app changelog, with an automated consistency check against the Markdown changelog and package metadata.
+
+### Changed
+
+- Set the app and package version to `0.12.0-beta`.
+- Shorten analyzer headers and move source explanations and detailed freshness metadata into collapsible sections. Combat Power and historical game-mode labels remain explicit.
+- Label retained results from an interrupted scan as partial, with a concise class/count/basis summary.
 
 ### Fixed
 
+- Keep Brooch, Seal and Pendant under Accessories in both equipment panels. Recognize Chalice and the newer Key, Hourglass, Dice and Lantern Arcana types, and keep unrecognized slots visible under Other Equipment instead of misplacing or hiding them.
+- Combine paired rings, earrings, bracelets, brooches, seals and runes into one card per accessory type, including numbered entries in older cached results. Preserve item counts, substat values, maximum enchantments and item levels when combining slots.
 - Keep the bounded item retry available after transient transport retries are exhausted, preserving successful item details instead of failing an otherwise enriched population immediately. Add typed timeout errors, keep authentication/rate-limit/lease/deadline stops, and propagate equipment-recheck transport failures rather than hiding them behind earlier missing-item errors. Unresolved builds remain unpublished and the last complete cache is retained.
 - Acknowledge scheduled build uploads before preparing the next cached players, and read/normalize at most one cached character per preparation call, reducing peak Worker CPU work that can exhaust Cloudflare resource limits mid-population. Preserve strict upload validation, idempotent retries, cache reuse and complete-only publication; keep older runners compatible and bound the additional preparation checkpoints to 320 API batches.
 - Allow 30/60-second recovery for temporary prefetch API server errors, including non-JSON 503 responses during final publication. Retry the same checkpoint without repeating successful discovery/enrichment, honor bounded `Retry-After`, and retain redacted response diagnostics and Cloudflare Ray IDs. Exhausted recovery preserves the last complete dataset and prepared character caches.
@@ -33,10 +46,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Reuse versioned normalized build projections and bound cached-player processing on Free-plan Workers, reducing repeated raw equipment parsing in long scans while retaining the original cache timestamps and official data.
 - Retry interrupted analysis connections from the last completed checkpoint, accept complete SSE results before socket closure, and retain completed builds with a Resume Scan action if retries are exhausted.
 
-### Changed
+### Release status
 
-- Shorten analyzer headers and move source explanations and detailed freshness metadata into collapsible sections. Combat Power and historical game-mode labels remain explicit.
-- Label retained results from an interrupted scan as partial, with a concise class/count/basis summary.
+- Version `0.12.0-beta` uses temporary Combat Power discovery. The `1.0.0` gate requires the official mode-specific live analysis to return and be validated.
 
 ## 0.11.0-beta - 2026-10-09
 
@@ -54,6 +66,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Credit [Shugo.GG's public leaderboard](https://shugo.gg/leaderboard) in the analyzer and report conservative source/freshness metadata, including the actual top-500 refresh timestamp.
 - Namespace CP full-build/aggregate caches by source, type and region; namespace official character IDs by region without a schema migration.
 - Replace the 30-minute mode traversal with six-hour region/class prefetch, refresh guards and reusable discovery across continuation batches.
+- Pin deployment and prefetch jobs to Ubuntu 24.04 and retry temporary prefetch HTTP failures in CI.
 
 ### Fixed
 

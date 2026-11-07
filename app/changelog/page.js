@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
+import { APP_VERSION } from "@/lib/release";
+import { CURRENT_RELEASE } from "@/lib/release-notes";
 import "./changelog.css";
 
 export const metadata = {
@@ -8,11 +10,12 @@ export const metadata = {
 };
 
 const CHANGELOG = [
+  CURRENT_RELEASE,
   {
     version: "0.11",
     label: "Beta 0.11.0",
     date: "Oct 9, 2026",
-    latest: true,
+    latest: false,
     groups: [
       {
         type: "new",
@@ -53,6 +56,10 @@ const CHANGELOG = [
           {
             title: "Next.js security patch",
             desc: "Update Next.js and its ESLint configuration to 15.5.27, resolving the critical advisories without a major upgrade.",
+          },
+          {
+            title: "CI runners and HTTP recovery",
+            desc: "Pin deployment and prefetch jobs to Ubuntu 24.04 and retry temporary prefetch HTTP failures in CI.",
           },
         ],
       },
@@ -456,7 +463,7 @@ export default function ChangelogPage() {
       <footer className="cl-footer" role="contentinfo">
         <div className="cl-footer-inner">
           <p className="cl-footer-text">Daeva Analyzer &middot; Aion 2 Build Intelligence</p>
-          <span className="cl-footer-version">v0.11.0-beta</span>
+          <span className="cl-footer-version">v{APP_VERSION}</span>
         </div>
       </footer>
     </div>

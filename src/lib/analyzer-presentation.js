@@ -1,6 +1,108 @@
 import { leaderboardTypes } from "./scraper-shared.js";
 import { COMBAT_POWER } from "./discovery-config.js";
 
+const EQUIPMENT_GROUPS = [
+  {
+    label: "Weapons & Guard",
+    icon: "⚔️",
+    categories: ["Main Hand", "Guard"],
+  },
+  {
+    label: "Armor",
+    icon: "🛡️",
+    categories: ["Top", "Legs", "Helm", "Pauldrons", "Gloves", "Shoes", "Cloak", "Belt"],
+  },
+  {
+    label: "Accessories",
+    icon: "💍",
+    categories: [
+      "Earrings",
+      "Necklace",
+      "Amulet",
+      "Ring",
+      "Bracelet",
+      "Brooch",
+      "Seal",
+      "Pendant",
+      "Rune",
+    ],
+  },
+  {
+    label: "Arcanas",
+    icon: "✨",
+    categories: [
+      "Grail",
+      "Chalice",
+      "Parchment",
+      "Compass",
+      "Bell",
+      "Mirror",
+      "Scales",
+      "Key",
+      "Hourglass",
+      "Dice",
+      "Lantern",
+      "Arcana",
+    ],
+  },
+];
+
+const PAIRED_ACCESSORIES = new Set(["Earrings", "Ring", "Bracelet", "Brooch", "Seal", "Rune"]);
+
+function mergeSlotEntries(first, second, kind) {
+  const merged = { ...first };
+  for (const [name, entry] of Object.entries(second)) {
+    const current = merged[name];
+    if (!current) {
+      merged[name] = entry;
+      continue;
+    }
+    merged[name] =
+      kind === "substats"
+        ? {
+            ...current,
+            count: current.count + entry.count,
+            values: [...current.values, ...entry.values],
+          }
+        : {
+            ...current,
+            count: current.count + entry.count,
+            grade: current.grade ?? entry.grade,
+            maxEnchant: Math.max(current.maxEnchant || 0, entry.maxEnchant || 0),
+            itemLevel:
+              entry.itemLevel != null &&
+              (current.itemLevel == null || entry.itemLevel > current.itemLevel)
+                ? entry.itemLevel
+                : (current.itemLevel ?? null),
+          };
+  }
+  return merged;
+}
+
+// Both equipment panels must classify the same slots, including cached builds
+// with numbered slots and categories carrying parenthesized qualifiers.
+export function groupEquipmentSlots(slots = {}, kind = "items") {
+  const groups = EQUIPMENT_GROUPS.map(({ label, icon }) => ({ label, icon, slots: [] }));
+  const other = { label: "Other Equipment", icon: "📦", slots: [] };
+
+  for (const [slot, entries] of Object.entries(slots)) {
+    if (!entries || Object.keys(entries).length === 0) continue;
+    const category = slot
+      .replace(/\s*\([^)]*\)$/, "")
+      .replace(/\d+$/, "")
+      .trim()
+      .replace(/^Earring$/, "Earrings");
+    const index = EQUIPMENT_GROUPS.findIndex((group) => group.categories.includes(category));
+    const group = index === -1 ? other : groups[index];
+    const displaySlot = PAIRED_ACCESSORIES.has(category) ? category : slot;
+    const existing = group.slots.find(([name]) => name === displaySlot);
+    if (existing) existing[1] = mergeSlotEntries(existing[1], entries, kind);
+    else group.slots.push([displaySlot, entries]);
+  }
+
+  return [...groups, other].filter((group) => group.slots.length > 0);
+}
+
 export function resultLabel(type, historical = false) {
   const label = leaderboardTypes[type]?.label || type;
   return historical

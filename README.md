@@ -5,7 +5,7 @@
 
 Open-source AION 2 build and meta analyzer that studies leaderboard data to identify popular skills, stigmas, equipment patterns, and other build trends.
 
-> **Beta**
+> **Version 0.12.0-beta**
 >
 > Daeva remains in beta. NCSOFT's mode-specific ranking API is unavailable. Daeva temporarily discovers high-Combat-Power characters through [Shugo.GG's public Combat Power leaderboard](https://shugo.gg/leaderboard) and fetches their builds from official character APIs. Combat Power is not a Nightmare, Abyss, Arena, Raid or other game-mode ranking. This temporary source does not satisfy the `1.0.0` gate.
 >

@@ -12,6 +12,7 @@ import {
   quickBuild,
   sourceHealthText,
   stigmaUsagePercent,
+  groupEquipmentSlots,
 } from "@/lib/analyzer-presentation";
 import {
   Search,
@@ -2963,75 +2964,10 @@ export default function Home() {
                     </div>
 
                     {(() => {
-                      const WEAPON_SLOTS = ["Main Hand", "Guard"];
-                      const ARMOR_SLOTS = [
-                        "Top",
-                        "Legs",
-                        "Helm",
-                        "Pauldrons",
-                        "Gloves",
-                        "Shoes",
-                        "Cloak",
-                        "Belt",
-                      ];
-                      const ACCESSORY_SLOTS = [
-                        "Earrings",
-                        "Necklace",
-                        "Amulet",
-                        "Ring",
-                        "Bracelet",
-                        "Rune",
-                      ];
-                      const ARCANA_SLOTS = [
-                        "Grail",
-                        "Parchment",
-                        "Compass",
-                        "Bell",
-                        "Mirror",
-                        "Scales",
-                        "Arcana",
-                      ];
-
-                      const allSlots = Object.entries(
-                        displayData.stats.subStatsBySlot || {}
-                      ).filter(([, stats]) => Object.keys(stats).length > 0);
-
-                      const matchesGroup = (slot, slotList) =>
-                        slotList.some((s) => slot === s || slot.startsWith(s + "("));
-                      const groupSlots = (slotList) =>
-                        allSlots.filter(([slot]) => matchesGroup(slot, slotList));
-                      const allKnownSlots = [
-                        ...WEAPON_SLOTS,
-                        ...ARMOR_SLOTS,
-                        ...ACCESSORY_SLOTS,
-                        ...ARCANA_SLOTS,
-                      ];
-                      const remainingSlots = allSlots.filter(
-                        ([slot]) => !matchesGroup(slot, allKnownSlots)
+                      const groups = groupEquipmentSlots(
+                        displayData.stats.subStatsBySlot,
+                        "substats"
                       );
-
-                      const groups = [
-                        {
-                          label: "Weapons & Guard",
-                          icon: "⚔️",
-                          slots: groupSlots(WEAPON_SLOTS),
-                        },
-                        {
-                          label: "Armor",
-                          icon: "🛡️",
-                          slots: groupSlots(ARMOR_SLOTS),
-                        },
-                        {
-                          label: "Accessories",
-                          icon: "💍",
-                          slots: groupSlots(ACCESSORY_SLOTS),
-                        },
-                        {
-                          label: "Arcanas",
-                          icon: "✨",
-                          slots: [...groupSlots(ARCANA_SLOTS), ...remainingSlots],
-                        },
-                      ].filter((g) => g.slots.length > 0);
 
                       return groups.map((group) => (
                         <div key={group.label} style={{ marginBottom: "24px" }}>
@@ -3302,66 +3238,7 @@ export default function Home() {
                     </h3>
 
                     {(() => {
-                      const WEAPON_SLOTS = ["Main Hand", "Guard"];
-                      const ARMOR_SLOTS = [
-                        "Top",
-                        "Legs",
-                        "Helm",
-                        "Pauldrons",
-                        "Gloves",
-                        "Shoes",
-                        "Cloak",
-                        "Belt",
-                      ];
-                      const ACCESSORY_SLOTS = [
-                        "Earrings",
-                        "Necklace",
-                        "Amulet",
-                        "Ring",
-                        "Bracelet",
-                        "Rune",
-                      ];
-                      const ARCANA_SLOTS = [
-                        "Grail",
-                        "Parchment",
-                        "Compass",
-                        "Bell",
-                        "Mirror",
-                        "Scales",
-                        "Arcana",
-                      ];
-
-                      const allSlots = Object.entries(displayData.stats.itemsBySlot || {}).filter(
-                        ([, items]) => Object.keys(items).length > 0
-                      );
-
-                      const matchesGroup = (slot, slotList) =>
-                        slotList.some((s) => slot === s || slot.startsWith(s + "("));
-                      const groupSlots = (slotList) =>
-                        allSlots.filter(([slot]) => matchesGroup(slot, slotList));
-
-                      const groups = [
-                        {
-                          label: "Main Hand & Guard",
-                          icon: "⚔️",
-                          slots: groupSlots(WEAPON_SLOTS),
-                        },
-                        {
-                          label: "Armor",
-                          icon: "🛡️",
-                          slots: groupSlots(ARMOR_SLOTS),
-                        },
-                        {
-                          label: "Accessories",
-                          icon: "💍",
-                          slots: groupSlots(ACCESSORY_SLOTS),
-                        },
-                        {
-                          label: "Arcanas",
-                          icon: "✨",
-                          slots: groupSlots(ARCANA_SLOTS),
-                        },
-                      ].filter((g) => g.slots.length > 0);
+                      const groups = groupEquipmentSlots(displayData.stats.itemsBySlot);
 
                       return groups.map((group) => (
                         <div key={group.label} style={{ marginBottom: "24px" }}>
