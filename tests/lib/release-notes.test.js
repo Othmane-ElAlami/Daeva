@@ -5,7 +5,9 @@ import { CURRENT_RELEASE } from "../../src/lib/release-notes.js";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const markdown = read("../../CHANGELOG.md");
-const [heading, ...lines] = markdown.split(/^## /m)[1].split(/\r?\n/);
+const [, ...changelogSections] = markdown.split(/^## /m);
+const currentSection = changelogSections.find((section) => !/^Unreleased\r?\n/.test(section));
+const [heading, ...lines] = currentSection.split(/\r?\n/);
 
 describe("current release metadata and changelog", () => {
   it("keeps package, lockfile, displayed version and release dates consistent", () => {

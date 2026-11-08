@@ -326,43 +326,9 @@ export default function Home() {
   const elyosServers = regionServers.filter((server) => Number(server.id) < 2000);
   const asmodianServers = regionServers.filter((server) => Number(server.id) >= 2000);
 
-  // Derive race from a specific server ID
-  const raceFromServer = (sid) => {
-    if (!sid || sid === "all") return null;
-    const num = parseInt(sid);
-    if (num >= 2000) return "asmodians";
-    if (num >= 1000) return "elyos";
-    return null;
-  };
-
-  // Filtered server list based on selected race
-  const filteredServers =
-    forma.race === "elyos"
-      ? { elyos: elyosServers, asmodian: [] }
-      : forma.race === "asmodians"
-        ? { elyos: [], asmodian: asmodianServers }
-        : { elyos: elyosServers, asmodian: asmodianServers };
-
-  // Handle race change — reset server if incompatible
-  const handleRaceChange = (newRace) => {
-    const currentServerRace = raceFromServer(forma.serverId);
-    let newServerId = forma.serverId;
-    if (newRace !== "all" && currentServerRace && currentServerRace !== newRace) {
-      newServerId = "all";
-    }
-    setFormData({ ...forma, race: newRace, serverId: newServerId });
-    setRaceFilter(newRace);
-  };
-
-  // Handle server change — auto-set race if specific server picked
-  const handleServerChange = (newServerId) => {
-    const serverRace = raceFromServer(newServerId);
-    let newRace = forma.race;
-    if (serverRace && forma.race === "all") {
-      newRace = serverRace;
-    }
-    setFormData({ ...forma, serverId: newServerId, race: newRace });
-    if (serverRace) setRaceFilter(serverRace);
+  const handleRaceAndServerChange = (race, serverId = "all") => {
+    setFormData((form) => ({ ...form, race, serverId }));
+    setRaceFilter(race);
   };
 
   const [mounted, setMounted] = useState(false);
@@ -890,10 +856,10 @@ export default function Home() {
                           const showAsmoFaction =
                             !q || "asmodian".includes(q) || "asmo".includes(q) || "all".includes(q);
 
-                          const elyosList = ELYOS_SERVERS.filter((s) =>
+                          const elyosList = elyosServers.filter((s) =>
                             s.name.toLowerCase().includes(q)
                           );
-                          const asmoList = ASMODIAN_SERVERS.filter((s) =>
+                          const asmoList = asmodianServers.filter((s) =>
                             s.name.toLowerCase().includes(q)
                           );
 
@@ -926,7 +892,7 @@ export default function Home() {
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    handleRaceChange("all");
+                                    handleRaceAndServerChange("all");
                                     setServerDropdownOpen(false);
                                     setServerSearch("");
                                   }}
@@ -980,7 +946,7 @@ export default function Home() {
                                   <button
                                     type="button"
                                     onClick={() => {
-                                      handleRaceChange("elyos");
+                                      handleRaceAndServerChange("elyos");
                                       setServerDropdownOpen(false);
                                       setServerSearch("");
                                     }}
@@ -1029,7 +995,7 @@ export default function Home() {
                                       key={s.id}
                                       type="button"
                                       onClick={() => {
-                                        handleServerChange(s.id);
+                                        handleRaceAndServerChange("elyos", s.id);
                                         setServerDropdownOpen(false);
                                         setServerSearch("");
                                       }}
@@ -1068,7 +1034,7 @@ export default function Home() {
                                   <button
                                     type="button"
                                     onClick={() => {
-                                      handleRaceChange("asmodians");
+                                      handleRaceAndServerChange("asmodians");
                                       setServerDropdownOpen(false);
                                       setServerSearch("");
                                     }}
@@ -1122,7 +1088,7 @@ export default function Home() {
                                       key={s.id}
                                       type="button"
                                       onClick={() => {
-                                        handleServerChange(s.id);
+                                        handleRaceAndServerChange("asmodians", s.id);
                                         setServerDropdownOpen(false);
                                         setServerSearch("");
                                       }}

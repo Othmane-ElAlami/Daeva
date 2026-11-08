@@ -4,6 +4,12 @@ All notable changes to Daeva will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Fixed
+
+- Show servers for the selected region in the analyzer. Choosing All Servers clears the previous server filter, and invalid Global server selections show a specific error.
+
 ## 0.12.0-beta - 2026-11-07
 
 ### Added

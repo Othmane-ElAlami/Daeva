@@ -7,7 +7,7 @@ import { loadConfig } from "@/lib/prefetch/config";
 import { cachedAnalysis } from "@/lib/prefetch/population";
 import { claimRefresh, updateRefresh } from "@/lib/prefetch/refresh";
 import { getSourceMode, isHistoricalOnly, COMBAT_POWER, CP_SOURCE } from "@/lib/discovery-config";
-import { normalizeRegion, normalizeFaction } from "@/lib/regions";
+import { globalSubregion, normalizeRegion, normalizeFaction } from "@/lib/regions";
 import { leaderboardTypes, classRankingIds, createWorkerBudget } from "@/lib/scraper-shared";
 
 export const runtime = "edge";
@@ -63,6 +63,11 @@ export async function POST(req) {
   const serverId = body.serverId || "all";
   if (serverId !== "all" && !/^\d{4}$/.test(String(serverId)))
     return Response.json({ error: "Invalid server." }, { status: 400 });
+  if (serverId !== "all" && region === "GLOBAL" && !globalSubregion(serverId))
+    return Response.json(
+      { error: "Choose a Global server or clear the server filter." },
+      { status: 400 }
+    );
   const runeFilter = body.runeFilter || "all";
   if (!["all", "pve", "pvp"].includes(runeFilter))
     return Response.json({ error: "Invalid rune filter." }, { status: 400 });

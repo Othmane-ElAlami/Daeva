@@ -400,6 +400,27 @@ describe("POST /api/scrape input validation", () => {
     expect(body.error).toContain("class");
   });
 
+  it("rejects a legacy server ID in a Global scan before discovery", async () => {
+    const { POST } = await import("../../app/api/scrape/route.js");
+    const req = new Request("http://localhost/api/scrape", {
+      method: "POST",
+      body: JSON.stringify({
+        lbType: "combat-power",
+        cls: "ranger",
+        region: "GLOBAL",
+        race: "elyos",
+        serverId: "1002",
+        limit: 10,
+      }),
+      headers: { "Content-Type": "application/json" },
+    });
+
+    const res = await POST(req);
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain("Global server");
+    expect(mockDb.prepare).not.toHaveBeenCalled();
+  });
+
   it("rejects missing lbType with 400", async () => {
     const { POST } = await import("../../app/api/scrape/route.js");
 
