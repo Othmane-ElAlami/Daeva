@@ -543,6 +543,47 @@ describe("provider failures and historical populations", () => {
 });
 
 describe("official build enrichment, ranking and continuation", () => {
+  it.each([false, true])(
+    "stops new item work after a confirmed miss and settles the in-flight request (timeout: %s)",
+    async (timeout) => {
+      const equipment = fixture("global-equipment");
+      equipment.equipment.equipmentList = equipment.equipment.equipmentList.slice(0, 6);
+      const [missing, inFlight] = equipment.equipment.equipmentList;
+      const itemSlots = new Set();
+      let equipmentReads = 0;
+      const requestJSON = vi.fn(async (input) => {
+        let url = new URL(input);
+        if (url.pathname === "/api/proxy") url = new URL(url.searchParams.get("url"));
+        if (url.pathname.endsWith("/info")) return fixture("global-info");
+        if (url.pathname.endsWith("/equipment")) {
+          equipmentReads++;
+          return equipment;
+        }
+        const slot = Number(url.searchParams.get("slotPos"));
+        itemSlots.add(slot);
+        if (slot === missing.slotPos)
+          throw Object.assign(new Error("HTTP 404"), { status: 404, retryExhausted: true });
+        if (slot !== inFlight.slotPos) throw new Error("Later slots must not be requested");
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        if (timeout) throw Object.assign(new UpstreamTimeoutError(20000), { retryExhausted: true });
+        return { ...fixture("global-item"), id: inFlight.id };
+      });
+      const result = await fetchCharacterBuild(players[0], db, createBudget(), {
+        requestJSON,
+        retryItemDetails: true,
+        retryEquipmentChanges: true,
+        itemConcurrency: 2,
+      });
+      expect([...itemSlots]).toEqual([missing.slotPos, inFlight.slotPos]);
+      expect(equipmentReads).toBe(2);
+      expect(result.itemFailures[0]).toMatchObject({ status: 404 });
+      if (timeout) expect(result.itemFailures[1]).toBeInstanceOf(UpstreamTimeoutError);
+      else expect(result.warnings).toHaveLength(1);
+      expect(
+        await getCachedPlayer(db, players[0].characterId, players[0].serverId, "GLOBAL")
+      ).toBeNull();
+    }
+  );
   it.each(["timeout", "server-error", "network", "persistent-timeout"])(
     "retains successful item details during bounded recovery after exhausted %s retries",
     async (failure) => {
@@ -1270,27 +1311,45 @@ describe("official build enrichment, ranking and continuation", () => {
         };
       });
       const publicationRequests = [];
+      const startTokens = [];
+      const playerReplies = [];
+      let lostUpload = false;
       const wait = vi.fn(async () => {});
       const options = {
         apiUrl: "http://localhost",
         secret: "runner-test",
         cls: "chanter",
         region: "GLOBAL",
-        request: (url, init) => {
+        request: async (url, init) => {
+          const body = JSON.parse(init.body);
           if (scenario === "legacy-runner") {
-            const body = JSON.parse(init.body);
             delete body.uploadOnly;
+            delete body.runToken;
             init = { ...init, body: JSON.stringify(body) };
           }
-          if (
-            scenario === "publication-retry" &&
-            JSON.parse(init.body).continuation?.phase === "publish"
-          ) {
+          if (scenario === "publication-retry" && body.continuation?.phase === "publish") {
             publicationRequests.push(init.body);
             if (publicationRequests.length < 3)
               return new Response("Service Unavailable", { status: 503 });
           }
-          return prefetchPOST(new Request(url, init));
+          const response = await prefetchPOST(new Request(url, init));
+          if (scenario === "complete" && body.runToken) {
+            startTokens.push(body.runToken);
+            if (startTokens.length === 1)
+              return new Response((await response.text()).slice(0, 100));
+          }
+          if (body.playerStep) {
+            expect(body.continuation).toBeUndefined();
+            const reply = await response.clone().text();
+            playerReplies.push(Buffer.byteLength(reply));
+            expect(JSON.parse(reply).continuation).toBeUndefined();
+            if (scenario === "complete" && body.enrichedBuild && !lostUpload) {
+              lostUpload = true;
+              await response.body.cancel();
+              return new Response("Worker exceeded resource limits", { status: 503 });
+            }
+          }
+          return response;
         },
         enrich,
         wait,
@@ -1304,6 +1363,15 @@ describe("official build enrichment, ranking and continuation", () => {
         unavailableCount: unavailable ? 1 : 0,
       });
       expect(enrich).toHaveBeenCalledTimes(unavailable ? 101 : 100 - cachedCount);
+      if (scenario === "complete") {
+        expect(startTokens).toHaveLength(2);
+        expect(startTokens[1]).toBe(startTokens[0]);
+        expect(lostUpload).toBe(true);
+        expect(wait.mock.calls.map(([ms]) => ms)).toEqual([2000, 30000]);
+        expect(playerReplies).toHaveLength(200);
+        expect(Math.max(...playerReplies)).toBeLessThan(256);
+      }
+      if (scenario === "legacy-runner") expect(playerReplies).toHaveLength(0);
       if (scenario === "publication-retry") {
         expect(publicationRequests).toEqual(Array(3).fill(publicationRequests[0]));
         expect(wait.mock.calls.map(([ms]) => ms)).toEqual([30000, 60000]);
@@ -1345,7 +1413,9 @@ describe("official build enrichment, ranking and continuation", () => {
         count: 100,
         sourceMeta: { source: "Cache" },
       });
-      expect(upstream).toHaveBeenCalledTimes(duplicate || unavailable ? 2 : 1);
+      expect(upstream).toHaveBeenCalledTimes(
+        duplicate || unavailable || scenario === "complete" ? 2 : 1
+      );
     }
   );
   it.each(["outage", "rate-limit", "deadline"])(
@@ -1424,7 +1494,7 @@ describe("official build enrichment, ranking and continuation", () => {
       expect(after.data.refresh).toMatchObject({ status: "failed", leaseExpiresAt: 0 });
     }
   );
-  it("acknowledges an upload without reading/normalizing more builds or replacing the full snapshot", async () => {
+  it.each(["legacy", "player-step"])("isolates the %s upload", async (protocol) => {
     const allPlayers = Array.from({ length: 100 }, (_, index) => ({
       ...players[0],
       characterId: `bounded-upload-${index}`,
@@ -1501,7 +1571,27 @@ describe("official build enrichment, ranking and continuation", () => {
           }),
         })
       );
-    const upload = { continuation, enrichedBuild: build, uploadOnly: true };
+    const step = { player: allPlayers[69], processedCount: 69, refreshToken: lease.token };
+    const upload =
+      protocol === "player-step"
+        ? { playerStep: step, enrichedBuild: build }
+        : { continuation, enrichedBuild: build, uploadOnly: true };
+    if (protocol === "player-step") {
+      expect(
+        (await post({ ...upload, playerStep: { ...step, refreshToken: crypto.randomUUID() } }))
+          .status
+      ).toBe(409);
+      expect(
+        (
+          await post({
+            ...upload,
+            playerStep: { ...step, player: { ...step.player, region: "TW" } },
+          })
+        ).status
+      ).toBe(400);
+      expect(await getCachedPlayer(db, build.characterId, build.serverId, "GLOBAL")).toBeNull();
+      sql.mockClear();
+    }
     const first = await (await post(upload)).json();
     const replay = await (await post(upload)).json();
     expect(first).toMatchObject({
@@ -1509,11 +1599,14 @@ describe("official build enrichment, ranking and continuation", () => {
       complete: false,
       playerCount: 70,
       errorCount: 0,
-      budgetUsed: 0,
     });
     expect(first.enrichPlayer).toBeUndefined();
     expect(replay.continuation).toEqual(first.continuation);
-    expect(first.continuation.processedPlayers).toEqual(allPlayers.slice(0, 70));
+    if (protocol === "player-step") {
+      expect(first.playerPrepared).toBe(true);
+      expect(first.continuation).toBeUndefined();
+      expect(replay).toEqual(first);
+    } else expect(first.continuation.processedPlayers).toEqual(allPlayers.slice(0, 70));
     expect(
       sql.mock.calls.some(([query]) => /FROM player_cache|UPDATE player_cache/.test(query))
     ).toBe(false);
@@ -1525,9 +1618,19 @@ describe("official build enrichment, ranking and continuation", () => {
     expect(
       (await getCachedPlayer(db, build.characterId, build.serverId, build.region)).fetchedAt
     ).toBe(fetchedAt);
-    const next = await (await post({ continuation: first.continuation })).json();
+    const prepare =
+      protocol === "player-step"
+        ? { playerStep: { ...step, player: allPlayers[70], processedCount: 70 } }
+        : { continuation: first.continuation };
+    const next = await (await post(prepare)).json();
     expect(next).toMatchObject({ success: true, complete: false, playerCount: 71 });
-    expect(next.continuation.processedPlayers).toEqual(allPlayers.slice(0, 71));
+    if (protocol === "player-step") {
+      expect(next.playerPrepared).toBe(true);
+      db.sqlite.exec(
+        "UPDATE prefetch_cache SET data = json_set(data, '$.refresh.leaseExpiresAt', 0)"
+      );
+      expect((await post(prepare)).status).toBe(409);
+    } else expect(next.continuation.processedPlayers).toEqual(allPlayers.slice(0, 71));
     expect(upstream).not.toHaveBeenCalled();
     expect(
       (await getCachedPlayer(db, allPlayers[70].characterId, allPlayers[70].serverId, "GLOBAL"))

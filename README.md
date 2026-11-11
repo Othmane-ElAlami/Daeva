@@ -129,10 +129,16 @@ complete dataset and the already prepared individual character caches.
 Scheduled runners acknowledge each uploaded build in its own API invocation.
 That invocation validates and stores one build and renews progress; each following
 preparation invocation reads and normalizes at most one cached character. Splitting these steps
-reduces peak Worker CPU work without repeating official enrichment. A final
-upload returns a publication checkpoint, and only a complete validated population
-can replace the full snapshot. Older runners retain their existing upload
-behavior until they opt into these checkpoints.
+reduces peak Worker CPU work without repeating official enrichment. Once the last
+build is prepared, the runner sends a publication checkpoint. Only a complete
+validated population can replace the full snapshot. Older runners retain their
+existing upload behavior.
+
+For normal uploads and cache checks, the runner retains the discovered list
+locally and sends only the current player and its lease. The Worker returns a
+small acknowledgement. Discovery, paging and final publication still validate
+the complete continuation. If the first response is lost, the runner retries
+with the same lease token rather than waiting for its own lease to expire.
 
 Scheduled build requests start at least 500 ms apart per upstream host. HTTP 429
 responses pause all workers using that host and honor `Retry-After`, with bounded
@@ -189,6 +195,10 @@ character/server IDs and complete official stats; a zero Item Level is unavailab
 After unresolved item retries, scheduled runs recheck equipment once. A changed
 failed slot triggers one complete character rebuild from fresh official data;
 unchanged malformed items remain failures. Old and new equipment are never combined.
+After a confirmed item miss, scheduled jobs stop starting new item requests for
+that character and collect the results of requests already in flight. If those
+results include a transport or authentication error, it is reported first and
+the character cannot be skipped as unavailable.
 Transport/authentication failures during the recheck stop preparation; they cannot
 be hidden behind earlier missing-item errors or treated as an omittable character.
 Unresolved failures stop the refresh and retain the last usable population.

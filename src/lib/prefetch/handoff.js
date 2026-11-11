@@ -41,6 +41,33 @@ export function omitUnavailablePlayer(unavailable, continuation) {
   };
 }
 
+export function validRunnerToken(token) {
+  return typeof token === "string" && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(token);
+}
+
+export function validPlayerStep(step, config) {
+  const player = step?.player;
+  return !!(
+    validRunnerToken(step?.refreshToken) &&
+    Number.isInteger(step.processedCount) &&
+    step.processedCount >= 0 &&
+    step.processedCount < config.limit &&
+    player?.source === CP_SOURCE &&
+    player.region === config.region &&
+    player.class === config.cls &&
+    typeof player.characterId === "string" &&
+    player.characterId &&
+    typeof player.characterName === "string" &&
+    player.characterName &&
+    Number.isInteger(player.serverId) &&
+    player.serverId > 0 &&
+    Number.isInteger(player.rank) &&
+    player.rank > 0 &&
+    Number.isFinite(player.combatPower) &&
+    player.combatPower > 0
+  );
+}
+
 // Only the authenticated scheduler can upload an enriched build. It must match
 // the next character in the same discovered population, including its CP rank.
 export function validRunnerBuild(build, continuation, config) {
@@ -82,7 +109,7 @@ export function validRunnerBuild(build, continuation, config) {
   );
 }
 
-export async function acceptRunnerBuild(db, build, continuation) {
+export async function storeRunnerBuild(db, build) {
   // The normalized build includes equipment, skills, arcana, runes and stones.
   // It uses the existing versioned player-cache representation and keeps the
   // actual fetch timestamp; uploading never makes an old build fresh again.
@@ -97,6 +124,9 @@ export async function acceptRunnerBuild(db, build, continuation) {
     null,
     build.buildFetchedAt
   );
+}
+
+export function advanceRunnerPlayer(continuation) {
   const [player, ...remaining] = continuation.players;
   return {
     ...continuation,
@@ -104,4 +134,16 @@ export async function acceptRunnerBuild(db, build, continuation) {
     processedPlayers: [...continuation.processedPlayers, player],
     processedCount: continuation.processedCount + 1,
   };
+}
+
+export function runnerPublicationCheckpoint(continuation, limit) {
+  return continuation.processedCount >= limit ||
+    (!continuation.players.length && !continuation.sourceMeta.hasMore)
+    ? { ...continuation, players: [], phase: "publish" }
+    : continuation;
+}
+
+export async function acceptRunnerBuild(db, build, continuation) {
+  await storeRunnerBuild(db, build);
+  return advanceRunnerPlayer(continuation);
 }

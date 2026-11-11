@@ -402,8 +402,14 @@ describe("scheduled Combat Power runner", () => {
         }
         return {
           build: { characterId: "sample" },
-          warnings: [error.message],
-          itemFailures: [error],
+          warnings:
+            failure === "timeout"
+              ? ["HTTP 404", "HTTP 404", "HTTP 404", "Request timed out after 20000ms"]
+              : [error.message],
+          itemFailures:
+            failure === "timeout"
+              ? [{ status: 404 }, { status: 404 }, { status: 404 }, error]
+              : [error],
         };
       });
       const run = runCombatPowerPrefetch({ ...options, request, enrich });
@@ -416,7 +422,9 @@ describe("scheduled Combat Power runner", () => {
         });
         expect(enrich).toHaveBeenCalledTimes(2);
       } else {
-        await expect(run).rejects.toThrow("incomplete");
+        await expect(run).rejects.toThrow(
+          failure === "timeout" ? "incomplete: Request timed out" : "incomplete"
+        );
         expect(enrich).toHaveBeenCalledOnce();
       }
       const bodies = request.mock.calls.map(([, init]) => JSON.parse(init.body));

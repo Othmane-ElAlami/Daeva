@@ -262,8 +262,12 @@ export async function fetchCharacterBuild(
   const warnings = [];
   const failedItems = [];
   const itemFailures = [];
+  let unavailableItem = false;
   const results = await runPool(
     equipment.map((item) => async () => {
+      // Scheduled preparation needs a complete character. After a confirmed
+      // missing item, settle existing requests and avoid fetching unused slots.
+      if (unavailableItem) return null;
       try {
         // A bad HTTP-200 item payload also gets the first-party proxy fallback.
         // Scheduled Node jobs retry only this item once, retaining other details.
@@ -301,6 +305,7 @@ export async function fetchCharacterBuild(
         if (error.code === "LEASE_LOST") return error;
         failedItems.push(item);
         itemFailures.push(error);
+        if (retryEquipmentChanges && unavailableCode(error)) unavailableItem = true;
         warnings.push(`${item.name} (id ${item.id}, slot ${item.slotPos}): ${error.message}`);
         return null;
       }

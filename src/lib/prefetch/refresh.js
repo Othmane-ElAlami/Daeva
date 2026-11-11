@@ -22,6 +22,7 @@ export async function claimRefresh(db, config, token = null, origin = "interacti
     VALUES (?, ?, ?, '[]', 0, 0, ?)
     ON CONFLICT(class, leaderboard) DO UPDATE SET data =
       CASE WHEN json_extract(prefetch_cache.data, '$.refresh.owner') = ?
+        AND json_extract(prefetch_cache.data, '$.refresh.status') = 'running'
       THEN json_set(prefetch_cache.data, '$.refresh.leaseExpiresAt', ?)
       ELSE json_set(prefetch_cache.data, '$.refresh', json(?)) END
     WHERE COALESCE(json_extract(prefetch_cache.data, '$.refresh.leaseExpiresAt'), 0) <= ?
@@ -42,6 +43,34 @@ export async function claimRefresh(db, config, token = null, origin = "interacti
     )
     .first();
   return { acquired: !!row, token: row ? owner : null };
+}
+
+// A runner step can only renew its active lease. A single update both checks
+// ownership and records progress already acknowledged by the runner.
+export async function renewRunnerRefresh(db, config, token, buildCount) {
+  const now = Date.now();
+  return !!(await db
+    .prepare(
+      `UPDATE prefetch_cache SET data = json_set(data,
+        '$.refresh.leaseExpiresAt', ?, '$.refresh.updatedAt', ?, '$.refresh.buildCount',
+        max(COALESCE(json_extract(data, '$.refresh.buildCount'), 0), ?))
+       WHERE class = ? AND leaderboard = ?
+         AND json_extract(data, '$.refresh.owner') = ?
+         AND json_extract(data, '$.refresh.origin') = 'scheduled'
+         AND json_extract(data, '$.refresh.status') = 'running'
+         AND json_extract(data, '$.refresh.leaseExpiresAt') > ?
+       RETURNING 1 AS renewed`
+    )
+    .bind(
+      now + LEASE_MS,
+      now,
+      buildCount,
+      config.cls,
+      populationKey(config.lbType, config.region),
+      token,
+      now
+    )
+    .first());
 }
 
 export async function updateRefresh(db, config, token, status, details = {}) {

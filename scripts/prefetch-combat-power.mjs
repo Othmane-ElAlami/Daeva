@@ -4,6 +4,7 @@ import { classes, createBudget, sleep } from "../src/lib/scraper-shared.js";
 import { characterKey, normalizeRegion } from "../src/lib/regions.js";
 import { COMBAT_POWER, CP_SOURCE } from "../src/lib/discovery-config.js";
 import { createScheduledJSON } from "../src/lib/prefetch/upstream.js";
+import { advanceRunnerPlayer, runnerPublicationCheckpoint } from "../src/lib/prefetch/handoff.js";
 import {
   MAX_UNAVAILABLE_PROFILES,
   MAX_CONSECUTIVE_UNAVAILABLE,
@@ -36,6 +37,9 @@ export async function runCombatPowerPrefetch({
   const endpoint = `${apiUrl.replace(/\/$/, "")}/api/prefetch/run`;
   const base = { cls, region, leaderboard: COMBAT_POWER, execution: "runner" };
   const headers = { "Content-Type": "application/json", Authorization: `Bearer ${secret}` };
+  // Replaying a lost first response must not wait on a lease we just acquired.
+  const runToken = crypto.randomUUID();
+  let playerSteps = false;
   let continuation;
   let enrichedBuild;
   let unavailable;
@@ -145,8 +149,15 @@ export async function runCombatPowerPrefetch({
           await retryAPI(response, attempt, detail);
           continue;
         }
-        throw new Error(`Prefetch API failed (${detail}).`);
+        throw Object.assign(new Error(`Prefetch API failed (${detail}).`), { code: data?.code });
       }
+      const validCheckpoint = body.playerStep
+        ? data?.complete === false &&
+          !data.continuation &&
+          typeof data.playerPrepared === "boolean" &&
+          (!body.enrichedBuild || data.playerPrepared) &&
+          data.playerCount === body.playerStep.processedCount + Number(data.playerPrepared)
+        : data?.complete === true || !!data?.continuation;
       if (
         data?.success !== true ||
         data.class !== cls ||
@@ -154,7 +165,7 @@ export async function runCombatPowerPrefetch({
         data.leaderboard !== COMBAT_POWER ||
         data.errorCount !== 0 ||
         !Number.isInteger(data.playerCount) ||
-        (data.complete !== true && !data.continuation)
+        !validCheckpoint
       )
         throw new Error("Prefetch API returned an incomplete or invalid population.");
       return data;
@@ -166,12 +177,24 @@ export async function runCombatPowerPrefetch({
     // Allow both while retaining a bounded guard for cached waves/omissions.
     while (requests < 320) {
       phase = "api";
-      const data = await post({
-        ...base,
-        continuation,
-        ...(enrichedBuild ? { enrichedBuild, uploadOnly: true } : {}),
-        ...(unavailable ? { unavailable } : {}),
-      });
+      const step =
+        playerSteps && !unavailable && !continuation?.phase && continuation?.players?.length
+          ? {
+              player: continuation.players[0],
+              processedCount: continuation.processedCount,
+              refreshToken: continuation.refreshToken,
+            }
+          : null;
+      let data = await post(
+        step
+          ? { ...base, playerStep: step, ...(enrichedBuild ? { enrichedBuild } : {}) }
+          : {
+              ...base,
+              ...(continuation ? { continuation } : { runToken }),
+              ...(enrichedBuild ? { enrichedBuild, uploadOnly: true } : {}),
+              ...(unavailable ? { unavailable } : {}),
+            }
+      );
       lastHeartbeat = Date.now();
       if (data.disabled) {
         log(`${region}/${cls}: prefetch disabled`);
@@ -181,6 +204,18 @@ export async function runCombatPowerPrefetch({
         if (++waiting >= 360) throw new Error("Population preparation wait limit reached.");
         await wait(5000);
         continue;
+      }
+      if (data.playerSteps === true) playerSteps = true;
+      if (step) {
+        const next = data.playerPrepared
+          ? runnerPublicationCheckpoint(advanceRunnerPlayer(continuation), 100)
+          : continuation;
+        data = {
+          ...data,
+          continuation: next,
+          sourceMeta: next.sourceMeta,
+          enrichPlayer: data.playerPrepared ? undefined : step.player,
+        };
       }
       requests++;
       log(`${region}/${cls}: ${data.playerCount} builds prepared`);
@@ -236,13 +271,20 @@ export async function runCombatPowerPrefetch({
             requestJSON: upstream.json,
           });
           if (!result?.build || result.warnings?.length) {
+            const warnings = result?.warnings || [];
+            const failures = result?.itemFailures || [];
+            // Surface the transport error that prevents backfill, even if
+            // several earlier missing items would otherwise fill the log.
+            const blocker = failures.findIndex((failure) => !unavailableCode(failure));
+            const details =
+              blocker >= 0
+                ? [warnings[blocker], ...warnings.filter((_, index) => index !== blocker)]
+                : warnings;
             const error = new Error(
-              `Official build details are incomplete: ${safeText(result?.warnings?.slice(0, 3).join("; ") || "missing build")}`
+              `Official build details are incomplete: ${safeText(details.slice(0, 3).join("; ") || "missing build")}`
             );
             error.code =
-              result?.itemFailures?.length && result.itemFailures.every(unavailableCode)
-                ? "ITEM_UNAVAILABLE"
-                : "ITEM_DETAILS_INCOMPLETE";
+              failures.length && blocker < 0 ? "ITEM_UNAVAILABLE" : "ITEM_DETAILS_INCOMPLETE";
             error.retryable = false;
             throw error;
           }
@@ -285,7 +327,7 @@ export async function runCombatPowerPrefetch({
     const context = `${region}/${cls} ${phase} at ${Math.max(previousCount, 0)} builds${target ? ` (${target.characterName || target.characterId}, rank ${target.rank})` : ""}`;
     const problem = new Error(safeText(`${context}: ${error.message}`));
     // Release the existing population lease without touching its last-good data.
-    if (continuation?.refreshToken) {
+    if (continuation?.refreshToken && error.code !== "LEASE_LOST") {
       try {
         const response = await request(endpoint, {
           method: "POST",

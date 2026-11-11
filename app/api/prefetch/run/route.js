@@ -18,14 +18,19 @@ import { loadConfig } from "@/lib/prefetch/config";
 import { runPrefetchJob } from "@/lib/prefetch/runner";
 import { classes, leaderboardTypes } from "@/lib/scraper-shared";
 import { COMBAT_POWER, CP_SOURCE, isHistoricalOnly } from "@/lib/discovery-config";
-import { normalizeRegion } from "@/lib/regions";
+import { characterKey, normalizeRegion } from "@/lib/regions";
+import { BUILD_FRESH_MS, isFreshBuild, loadCachedBuilds } from "@/lib/character-builds";
 import { validateContinuation } from "@/lib/analyzer";
 import { saveMetaSnapshot } from "@/lib/meta-snapshots";
 import { inspectPopulation, populationTarget } from "@/lib/prefetch/population";
-import { claimRefresh, updateRefresh } from "@/lib/prefetch/refresh";
+import { claimRefresh, renewRunnerRefresh, updateRefresh } from "@/lib/prefetch/refresh";
 import {
   validRunnerBuild,
   acceptRunnerBuild,
+  validRunnerToken,
+  validPlayerStep,
+  storeRunnerBuild,
+  runnerPublicationCheckpoint,
   validUnavailablePlayer,
   omitUnavailablePlayer,
 } from "@/lib/prefetch/handoff";
@@ -105,9 +110,31 @@ export async function POST(request) {
       { error: "Runner execution requires a Combat Power D1 population." },
       { status: 400 }
     );
+  const step = body.playerStep;
+  if (
+    body.runToken !== undefined &&
+    (!external || body.continuation || step || !validRunnerToken(body.runToken))
+  )
+    return Response.json({ error: "Invalid scheduled run token." }, { status: 400 });
+  if (
+    step !== undefined &&
+    (!external ||
+      body.continuation ||
+      body.failed ||
+      body.heartbeat ||
+      body.unavailable ||
+      body.uploadOnly ||
+      !validPlayerStep(step, analysisConfig))
+  )
+    return Response.json({ error: "Invalid scheduled player step." }, { status: 400 });
   if (
     body.enrichedBuild &&
-    (!external || !validRunnerBuild(body.enrichedBuild, body.continuation, analysisConfig))
+    (!external ||
+      !validRunnerBuild(
+        body.enrichedBuild,
+        step ? { players: [step.player], processedCount: step.processedCount } : body.continuation,
+        analysisConfig
+      ))
   )
     return Response.json(
       { error: "Enriched build does not match the pending population." },
@@ -156,6 +183,39 @@ export async function POST(request) {
   let refreshToken = null;
 
   try {
+    if (step) {
+      if (
+        !(await renewRunnerRefresh(env.DB, analysisConfig, step.refreshToken, step.processedCount))
+      )
+        return Response.json(
+          { error: "Scheduled population lease is no longer active.", code: "LEASE_LOST" },
+          { status: 409 }
+        );
+      refreshToken = step.refreshToken;
+      let playerPrepared;
+      if (body.enrichedBuild) {
+        await storeRunnerBuild(env.DB, body.enrichedBuild);
+        playerPrepared = true;
+      } else {
+        const cached = await loadCachedBuilds(env.DB, [step.player], {
+          normalize: true,
+          maxAgeMs: BUILD_FRESH_MS,
+        });
+        playerPrepared = isFreshBuild(cached.get(characterKey(step.player)));
+      }
+      // Discovery and publication still validate the whole population. These
+      // frequent requests only parse one identity and acknowledge one build.
+      return Response.json({
+        success: true,
+        complete: false,
+        class: cls,
+        leaderboard,
+        region,
+        playerPrepared,
+        playerCount: step.processedCount + Number(playerPrepared),
+        errorCount: 0,
+      });
+    }
     if (!body.continuation) {
       const cached = await getPrefetchCache(env.DB, cls, leaderboard, false, region, {
         metadataOnly: leaderboard === COMBAT_POWER,
@@ -187,7 +247,7 @@ export async function POST(request) {
     const lease = await claimRefresh(
       env.DB,
       analysisConfig,
-      body.continuation?.refreshToken,
+      body.continuation?.refreshToken || body.runToken,
       "scheduled"
     );
     if (!lease.acquired)
@@ -234,9 +294,6 @@ export async function POST(request) {
       // Acknowledging one validated upload must not also read/normalize the
       // next cached players. Keep those CPU costs in a separate invocation.
       // Opt in so older scheduled runners retain their original batch budget.
-      const publishing =
-        continuation.processedCount >= analysisConfig.limit ||
-        (!continuation.players.length && !continuation.sourceMeta.hasMore);
       await updateRefresh(env.DB, analysisConfig, refreshToken, "running", {
         buildCount: continuation.processedCount,
       });
@@ -247,8 +304,7 @@ export async function POST(request) {
         leaderboard,
         region,
         continuation: {
-          ...continuation,
-          ...(publishing ? { players: [], phase: "publish" } : {}),
+          ...runnerPublicationCheckpoint(continuation, analysisConfig.limit),
           refreshToken,
         },
         playerCount: continuation.processedCount,
@@ -346,6 +402,7 @@ export async function POST(request) {
       durationMs: Date.now() - startTime,
       errors: result.errors.slice(0, 10),
       sourceMeta: result.sourceMeta,
+      ...(body.runToken && result.continuation ? { playerSteps: true } : {}),
       ...(result.enrichPlayer ? { enrichPlayer: result.enrichPlayer } : {}),
     });
   } catch (err) {
