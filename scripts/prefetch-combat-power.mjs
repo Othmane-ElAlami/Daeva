@@ -86,7 +86,9 @@ export async function runCombatPowerPrefetch({
   async function retryAPI(response, attempt, detail) {
     // Gateway/platform failures can outlast a short 2/4-second retry window,
     // including the final publication after all character work has finished.
-    let delay = (response?.status >= 500 ? 30000 : 2000) * (attempt + 1);
+    // Broken connections and truncated HTTP-200 bodies need the same recovery
+    // window as gateway errors. Replaying still uses the identical checkpoint.
+    let delay = 30000 * (attempt + 1);
     const retryAfter = response?.headers.get("retry-after");
     if (retryAfter) {
       const requested = /^\d+$/.test(retryAfter)
@@ -127,9 +129,12 @@ export async function runCombatPowerPrefetch({
         const reason = response
           ? text.replace(/<[^>]*>/g, " ").trim() || "empty or interrupted response"
           : error.message;
+        const transportCode = error.cause?.code || error.code;
         const detail = `${status}${code ? `, Cloudflare ${code}` : ""}${
           ray ? `, Ray ${safeText(ray, 80)}` : ""
-        }${type ? `, ${safeText(type, 80)}` : ""}: ${safeText(reason, 160)}`;
+        }${type ? `, ${safeText(type, 80)}` : ""}${
+          transportCode ? `, ${safeText(transportCode, 80)}` : ""
+        }: ${safeText(reason, 160)}`;
         if (attempt === 2 || [400, 401, 403, 404].includes(response?.status))
           throw new Error(
             `Prefetch API returned an unavailable or malformed response (${detail}).`
@@ -297,11 +302,18 @@ export async function runCombatPowerPrefetch({
         } catch (error) {
           const code = unavailableCode(error);
           if (code && (attempt || error.retryable === false || error.retryExhausted)) {
+            const streak = unavailableStreak(continuation);
             if (
               unavailableCount >= MAX_UNAVAILABLE_PROFILES ||
-              unavailableStreak(continuation) >= MAX_CONSECUTIVE_UNAVAILABLE
+              streak >= MAX_CONSECUTIVE_UNAVAILABLE
             )
-              throw new Error("Too many unavailable profiles; previous dataset retained.");
+              throw new Error(
+                `Too many unavailable profiles: ${
+                  unavailableCount >= MAX_UNAVAILABLE_PROFILES
+                    ? `population omission limit ${MAX_UNAVAILABLE_PROFILES} reached`
+                    : `consecutive omission limit ${MAX_CONSECUTIVE_UNAVAILABLE} reached`
+                } (${unavailableCount} omitted, ${streak} consecutive); previous dataset retained.`
+              );
             unavailable = { code, reason: safeText(error.message) };
             log(
               `${region}/${cls}: omitting unavailable ${safeText(player.characterName || player.characterId)} (rank ${player.rank}, ${code}); trying the next CP rank`

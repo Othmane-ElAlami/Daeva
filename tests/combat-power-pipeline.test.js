@@ -1367,7 +1367,7 @@ describe("official build enrichment, ranking and continuation", () => {
         expect(startTokens).toHaveLength(2);
         expect(startTokens[1]).toBe(startTokens[0]);
         expect(lostUpload).toBe(true);
-        expect(wait.mock.calls.map(([ms]) => ms)).toEqual([2000, 30000]);
+        expect(wait.mock.calls.map(([ms]) => ms)).toEqual([30000, 30000]);
         expect(playerReplies).toHaveLength(200);
         expect(Math.max(...playerReplies)).toBeLessThan(256);
       }

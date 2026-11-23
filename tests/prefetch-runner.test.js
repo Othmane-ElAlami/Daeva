@@ -30,6 +30,97 @@ afterEach(() => {
 });
 
 describe("scheduled Combat Power runner", () => {
+  it.each(["connection", "interrupted-body"])(
+    "recovers an API %s without repeating enrichment",
+    async (failure) => {
+      const upload = { ...continuation, processedCount: 10 };
+      const bodies = [];
+      let uploads = 0;
+      const request = vi.fn(async (_url, init) => {
+        const body = JSON.parse(init.body);
+        if (!body.enrichedBuild)
+          return Response.json({
+            ...baseResponse,
+            playerCount: 10,
+            continuation: upload,
+            enrichPlayer: player,
+          });
+        uploads++;
+        bodies.push(init.body);
+        if (uploads <= 2) {
+          if (failure === "connection")
+            throw new TypeError("fetch failed", { cause: { code: "ECONNRESET" } });
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.error(
+                  new TypeError("terminated", { cause: { code: "UND_ERR_SOCKET" } })
+                );
+              },
+            }),
+            { headers: { "Content-Type": "application/json" } }
+          );
+        }
+        return Response.json({ ...baseResponse, complete: true, playerCount: 11 });
+      });
+      const enrich = vi.fn(async () => ({
+        build: { characterId: player.characterId },
+        warnings: [],
+      }));
+      const wait = vi.fn(async () => {});
+      const log = vi.fn();
+      expect(
+        await runCombatPowerPrefetch({ ...options, request, enrich, wait, log })
+      ).toMatchObject({ complete: true, enrichedCount: 1 });
+      expect(enrich).toHaveBeenCalledOnce();
+      expect(bodies).toEqual(Array(3).fill(bodies[0]));
+      expect(wait.mock.calls.map(([ms]) => ms)).toEqual([30000, 60000]);
+      expect(log.mock.calls.flat().join(" ")).toContain(
+        failure === "connection" ? "ECONNRESET" : "UND_ERR_SOCKET"
+      );
+    }
+  );
+  it.each(["total", "consecutive"])(
+    "retains the %s unavailable-profile safeguard with a specific diagnostic",
+    async (limit) => {
+      const count = limit === "total" ? 25 : 5;
+      const current = {
+        ...continuation,
+        processedCount: 93,
+        sourceMeta: {
+          unavailablePlayers: Array.from({ length: count }, (_, index) => ({
+            preparedBuildCount: limit === "total" ? index : 93,
+          })),
+        },
+      };
+      const request = vi.fn(async (_url, init) =>
+        JSON.parse(init.body).failed
+          ? Response.json({ code: "ENRICHMENT_FAILED" }, { status: 502 })
+          : Response.json({
+              ...baseResponse,
+              playerCount: 93,
+              continuation: current,
+              enrichPlayer: player,
+              sourceMeta: current.sourceMeta,
+            })
+      );
+      const enrich = vi.fn(async () => {
+        throw Object.assign(new Error("Profile unavailable"), {
+          code: "PROFILE_UNAVAILABLE",
+          retryExhausted: true,
+        });
+      });
+      await expect(runCombatPowerPrefetch({ ...options, request, enrich })).rejects.toThrow(
+        limit === "total"
+          ? "population omission limit 25 reached"
+          : "consecutive omission limit 5 reached"
+      );
+      expect(enrich).toHaveBeenCalledOnce();
+      const failed = JSON.parse(request.mock.calls.at(-1)[1].body);
+      expect(failed).toMatchObject({ failed: true, continuation: current });
+      expect(failed.unavailable).toBeUndefined();
+    }
+  );
   it.each(["html", "json", "truncated"])(
     "recovers a %s 503 during publication without rediscovery or enrichment",
     async (format) => {

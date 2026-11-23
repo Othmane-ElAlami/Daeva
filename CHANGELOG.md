@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Give interrupted scheduled API connections and malformed responses the same bounded 30/60-second recovery window as server errors, replaying the existing checkpoint without repeating enrichment. Share upstream service/gateway `Retry-After` cooldowns with queued workers on that host. Keep omission limits unchanged and report which limit was reached with its counts; failed refreshes retain the last complete dataset.
 - Reduce scheduled Worker request and response sizes by sending only one player's checkpoint during uploads and cache checks. Reuse the same lease token after an interrupted startup response, retain compatibility with older runners, and keep complete-only publication.
 - Stop starting more scheduled item requests when a confirmed missing item prevents a complete build. Settle in-flight requests and prioritize any transport failure in diagnostics so it cannot be hidden by earlier 404s.
 - Show servers for the selected region in the analyzer. Choosing All Servers clears the previous server filter, and invalid Global server selections show a specific error.

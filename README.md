@@ -122,6 +122,9 @@ API checkpoint, upload and publication requests retry temporary server errors
 after 30/60 seconds, including non-JSON 503 responses. Retries send the same
 request without repeating discovery or character enrichment. `Retry-After` can
 extend each wait up to two minutes; longer requested pauses fail explicitly.
+Connection failures and interrupted/malformed responses, including truncated
+HTTP-200 JSON, use the same 30/60-second recovery window. Diagnostics retain the
+transport error code when available.
 Malformed-response diagnostics include a bounded, redacted body summary and the
 Cloudflare Ray ID when present. Exhausted publication recovery retains the last
 complete dataset and the already prepared individual character caches.
@@ -143,6 +146,8 @@ with the same lease token rather than waiting for its own lease to expire.
 Scheduled build requests start at least 500 ms apart per upstream host. HTTP 429
 responses pause all workers using that host and honor `Retry-After`, with bounded
 30/60/120/240-second backoff. That host then slows to one request per second.
+An upstream `Retry-After` on a service/gateway error also pauses queued workers
+for that host; healthy requests to a different host can continue.
 Only the failed request is repeated; fetched item
 details and completed players remain available. Unavailable direct responses
 (HTTP 404 or missing official data) try Shugo's proxy of the same official JSON
@@ -163,6 +168,9 @@ the actual ranks and reports omitted profiles in source details and admin status
 At most 25 profiles may be omitted; six consecutive unavailable profiles stop the
 refresh. Rate limits, authentication errors and transport failures remain job
 failures. An incomplete population never replaces the last complete dataset.
+Failure diagnostics distinguish the total omission limit from the consecutive
+limit and include the counts. Reaching either safeguard remains a failed refresh,
+even if a large usable prefix has already been prepared.
 
 There is no server-startup prefetch loop. Region/class jobs run with at most three active jobs. The authenticated API owns Shugo discovery, cache reuse, refresh leases and publication. `scripts/prefetch-combat-power.mjs` fetches missing official character/item builds on the GitHub Actions runner, avoiding Worker CPU limits during enrichment. It uses the same build-fetching code as interactive analysis, with four item workers and one character at a time per scheduled job. Those workers share the same 500 ms per-host request spacing; extra workers absorb response latency without raising that request-rate cap. Interactive enrichment retains two item workers. Complete official character caches younger than six hours are reused. A complete job publishes its full player builds and aggregates to D1; continuation work and failed/partial refreshes preserve the previous full snapshot. Recently completed jobs are skipped for 330 minutes; datasets are fresh for 420 minutes and remain usable as stale data for up to seven days.
 

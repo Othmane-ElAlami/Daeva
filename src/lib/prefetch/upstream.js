@@ -116,6 +116,10 @@ export function createScheduledJSON({
           error.retryAfterMs || 0,
           limited ? 30000 * 2 ** attempt : 5000 * 3 ** attempt
         );
+        // Retry-After on a gateway/service error applies to the host too,
+        // including the last failed attempt. Queued requests share this pause.
+        if (limited || error.retryAfterMs > 0)
+          state.cooldown = Math.max(state.cooldown, now() + delay);
         if (
           !retryable ||
           attempt >= attempts ||
@@ -125,8 +129,6 @@ export function createScheduledJSON({
           if (limited) state.blocked = error;
           throw error;
         }
-        // A 429 pauses every worker using that host, including queued requests.
-        if (limited) state.cooldown = Math.max(state.cooldown, now() + delay);
         // Ordinary per-request retries must not exhaust rate-limit recovery
         // for the remainder of a 2,500+ request population. They remain bounded
         // by two retries per request and the overall job deadline.

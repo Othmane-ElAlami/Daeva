@@ -16,6 +16,57 @@ function clocked(options = {}) {
 }
 
 describe("scheduled upstream transport", () => {
+  it.each([502, 503])("shares HTTP %s Retry-After with queued item requests", async (status) => {
+    vi.useFakeTimers();
+    const starts = [];
+    const transport = createScheduledJSON();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url) => {
+        starts.push({ url, time: Date.now() });
+        return starts.length === 1
+          ? new Response("temporarily unavailable", { status, headers: { "Retry-After": "60" } })
+          : Response.json({ id: 1 });
+      })
+    );
+    const started = Date.now();
+    const first = transport.json("https://shugo.gg/failed-item", {});
+    const queued = transport.json("https://shugo.gg/next-item", {});
+    const independent = transport.json("https://aion2.plaync.com/info", {});
+    const done = Promise.all([first, queued, independent]);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(starts.map(({ url }) => url)).toEqual([
+      "https://shugo.gg/failed-item",
+      "https://aion2.plaync.com/info",
+    ]);
+    await vi.advanceTimersByTimeAsync(59000);
+    expect(starts).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(2000);
+    await done;
+    const retriedHost = starts.filter(({ url }) => new URL(url).host === "shugo.gg");
+    expect(retriedHost).toHaveLength(3);
+    expect(retriedHost.slice(1).every(({ time }) => time >= started + 60000)).toBe(true);
+    expect(retriedHost[2].time - retriedHost[1].time).toBeGreaterThanOrEqual(500);
+    expect(transport.metrics.rateLimits).toBe(0);
+  });
+  it("keeps the server cooldown after one request exhausts its retries", async () => {
+    const starts = [];
+    let transport;
+    const request = vi.fn(async (url) => {
+      starts.push(transport.now());
+      if (url.endsWith("/failed"))
+        throw Object.assign(new Error("HTTP 502"), { status: 502, retryAfterMs: 60000 });
+      return { id: 1 };
+    });
+    transport = clocked({ request });
+    await expect(transport.json("https://shugo.gg/failed", {})).rejects.toMatchObject({
+      status: 502,
+      retryExhausted: true,
+    });
+    expect(await transport.json("https://shugo.gg/next", {})).toEqual({ id: 1 });
+    expect(starts[3] - starts[2]).toBeGreaterThanOrEqual(60000);
+    expect(transport.metrics.retries).toBe(2);
+  });
   it("keeps request spacing with four item workers waiting for slow responses", async () => {
     vi.useFakeTimers();
     const starts = [];
