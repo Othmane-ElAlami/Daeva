@@ -337,7 +337,13 @@ export async function runCombatPowerPrefetch({
     throw new Error("Population preparation batch limit reached.");
   } catch (error) {
     const context = `${region}/${cls} ${phase} at ${Math.max(previousCount, 0)} builds${target ? ` (${target.characterName || target.characterId}, rank ${target.rank})` : ""}`;
-    const problem = new Error(safeText(`${context}: ${error.message}`));
+    const problem = new Error(
+      safeText(
+        `${context}: ${error.message}${
+          error.officialFailure ? ` (official: ${error.officialFailure.message})` : ""
+        }`
+      )
+    );
     // Release the existing population lease without touching its last-good data.
     if (continuation?.refreshToken && error.code !== "LEASE_LOST") {
       try {

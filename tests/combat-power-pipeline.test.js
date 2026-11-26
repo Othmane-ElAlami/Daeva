@@ -543,6 +543,63 @@ describe("provider failures and historical populations", () => {
 });
 
 describe("official build enrichment, ranking and continuation", () => {
+  it.each(["timeout", "server-error"])(
+    "stops unused slots after exhausted %s item recovery and preserves the last good build",
+    async (failure) => {
+      const equipment = fixture("global-equipment");
+      equipment.equipment.equipmentList = equipment.equipment.equipmentList.slice(0, 6);
+      const [good, failed] = equipment.equipment.equipmentList;
+      const fetchedAt = Date.now() - 7 * 3600000;
+      await setCachedPlayer(
+        db,
+        players[0].characterId,
+        players[0].serverId,
+        "GLOBAL",
+        equip,
+        details,
+        3353,
+        sampleBuild,
+        fetchedAt
+      );
+      let equipmentReads = 0;
+      let goodReads = 0;
+      const slots = new Set();
+      const requestJSON = vi.fn(async (input) => {
+        let url = new URL(input);
+        if (url.pathname === "/api/proxy") url = new URL(url.searchParams.get("url"));
+        if (url.pathname.endsWith("/info")) return fixture("global-info");
+        if (url.pathname.endsWith("/equipment")) {
+          equipmentReads++;
+          return equipment;
+        }
+        const slot = Number(url.searchParams.get("slotPos"));
+        slots.add(slot);
+        if (slot === good.slotPos) {
+          goodReads++;
+          return { ...fixture("global-item"), id: good.id };
+        }
+        if (slot !== failed.slotPos) throw new Error("Unused item must not be fetched");
+        throw Object.assign(
+          failure === "timeout" ? new UpstreamTimeoutError(20000) : new Error("HTTP 502"),
+          { retryExhausted: true, ...(failure === "server-error" ? { status: 502 } : {}) }
+        );
+      });
+      const result = await fetchCharacterBuild(players[0], db, createBudget(), {
+        requestJSON,
+        retryItemDetails: true,
+        retryEquipmentChanges: true,
+        itemConcurrency: 1,
+      });
+      expect([...slots]).toEqual([good.slotPos, failed.slotPos]);
+      expect(goodReads).toBe(1);
+      expect(equipmentReads).toBe(1);
+      expect(result.warnings).toHaveLength(1);
+      expect(result.resumable).toBe(false);
+      expect(
+        (await getCachedPlayer(db, players[0].characterId, players[0].serverId, "GLOBAL")).fetchedAt
+      ).toBe(fetchedAt);
+    }
+  );
   it.each([false, true])(
     "stops new item work after a confirmed miss and settles the in-flight request (timeout: %s)",
     async (timeout) => {
@@ -575,7 +632,7 @@ describe("official build enrichment, ranking and continuation", () => {
         itemConcurrency: 2,
       });
       expect([...itemSlots]).toEqual([missing.slotPos, inFlight.slotPos]);
-      expect(equipmentReads).toBe(2);
+      expect(equipmentReads).toBe(timeout ? 1 : 2);
       expect(result.itemFailures[0]).toMatchObject({ status: 404 });
       if (timeout) expect(result.itemFailures[1]).toBeInstanceOf(UpstreamTimeoutError);
       else expect(result.warnings).toHaveLength(1);
@@ -670,7 +727,7 @@ describe("official build enrichment, ranking and continuation", () => {
           code: "UPSTREAM_TIMEOUT",
           retryExhausted: true,
         });
-        expect(equipmentReads).toBe(2);
+        expect(equipmentReads).toBe(1);
         expect(cached.fetchedAt).toBe(fetchedAt);
       } else {
         expect(result.warnings).toEqual([]);

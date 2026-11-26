@@ -206,6 +206,26 @@ export class UpstreamTimeoutError extends Error {
   }
 }
 
+const certificateErrors = new Set([
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "UNABLE_TO_GET_ISSUER_CERT",
+  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+  "CERT_HAS_EXPIRED",
+  "CERT_NOT_YET_VALID",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "ERR_TLS_CERT_ALTNAME_INVALID",
+]);
+
+export class UpstreamTlsError extends Error {
+  constructor(cause) {
+    super(`TLS certificate verification failed (${cause.code})`, { cause });
+    this.name = "UpstreamTlsError";
+    this.code = "UPSTREAM_TLS";
+    this.retryable = false;
+  }
+}
+
 export async function fetchJSON(
   url,
   headers,
@@ -240,6 +260,8 @@ export async function fetchJSON(
     if (logger) logger.success("fetch", `${label} ✓`);
     return data;
   } catch (err) {
+    if (certificateErrors.has(err.cause?.code || err.code))
+      throw new UpstreamTlsError(err.cause || err);
     if (err.name === "AbortError") {
       throw new UpstreamTimeoutError(timeoutMs);
     }

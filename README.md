@@ -162,6 +162,22 @@ Overlapping jobs for the same region/class queue instead of running together.
 Runner summaries distinguish cache hits, enrichment, retries, rate limits and
 immediate fallbacks for unavailable responses (`upstreamFallbacks`).
 
+Taiwan's official server currently sends an incomplete TLS certificate chain.
+The scheduled Node step supplies the missing public Sectigo OV R36 intermediate
+via `NODE_EXTRA_CA_CERTS`, preserving certificate and hostname verification.
+The bundled [certificate](scripts/certs/sectigo-ov-r36.pem) comes from the
+[issuer URL in the server certificate](http://crt.sectigo.com/SectigoPublicServerAuthenticationCAOVR36.crt).
+Its SHA-256 fingerprint is `6542D176BED50F193C0CE297AE44ECD8A0A86BEC2EDE682769344059B4E78530`;
+the workflow verifies its signature against Ubuntu's trusted roots before use.
+This runner-only workaround can be removed when the server supplies its chain.
+Certificate errors fail without retries on that host and remain explicit errors
+if the first-party proxy cannot resolve them.
+
+After scheduled item recovery is exhausted, no unused equipment slots are fetched.
+In-flight work settles, successful details remain available, and only confirmed
+missing-item failures recheck equipment for changes. Transport failures fail the
+refresh directly instead of spending minutes on the rest of an unusable build.
+
 If an individual profile or item remains unavailable, the scheduler can try the
 next CP-ranked character to prepare 100 complete available builds. It retains
 the actual ranks and reports omitted profiles in source details and admin status.

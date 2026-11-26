@@ -23,6 +23,8 @@
 # misc
 .DS_Store
 *.pem
+# Public CA intermediate used by scheduled Taiwan requests; contains no key.
+!/scripts/certs/sectigo-ov-r36.pem
 
 # debug
 npm-debug.log*

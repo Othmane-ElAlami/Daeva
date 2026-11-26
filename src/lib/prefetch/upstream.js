@@ -92,6 +92,9 @@ export function createScheduledJSON({
         validate(data);
         return data;
       } catch (error) {
+        // A certificate failure cannot recover through retries on this host.
+        // Keep verification enabled; callers may still use the official proxy.
+        if (error.code === "UPSTREAM_TLS") state.blocked = error;
         // Try the alternate transport before spending time retrying an
         // unavailable direct response. Both transports still validate the same
         // official payload; unresolved fallback requests retain bounded retries.

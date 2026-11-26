@@ -31,9 +31,13 @@ jobs:
           ADMIN_SECRET: ${{ secrets.ADMIN_SECRET }}
           REGION: ${{ matrix.region }}
           PREFETCH_CLASS: ${{ matrix.class }}
+          # Taiwan currently omits this intermediate from its TLS chain.
+          # Keep normal certificate/hostname verification and bundled roots.
+          NODE_EXTRA_CA_CERTS: ${{ github.workspace }}/scripts/certs/sectigo-ov-r36.pem
         run: |
           : "${API_URL:?API_URL is not configured}"
           : "${ADMIN_SECRET:?ADMIN_SECRET is not configured}"
+          openssl verify -CAfile /etc/ssl/certs/ca-certificates.crt "$NODE_EXTRA_CA_CERTS"
           # Retry interrupted/malformed JSON too, including HTTP-200 responses.
           node scripts/prefetch-config.mjs > /tmp/discovery_config.json
           MODE=$(jq -er '.sourceMode' /tmp/discovery_config.json)

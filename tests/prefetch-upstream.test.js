@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { X509Certificate } from "node:crypto";
+import { rootCertificates } from "node:tls";
 import { createScheduledJSON } from "../src/lib/prefetch/upstream.js";
 import { createBudget, fetchJSON, subrequestBudgetExhausted } from "../src/lib/scraper-shared.js";
 
@@ -16,6 +19,41 @@ function clocked(options = {}) {
 }
 
 describe("scheduled upstream transport", () => {
+  it("supplies a public intermediate signed by an existing trusted root", () => {
+    const certificate = new X509Certificate(
+      readFileSync(new URL("../scripts/certs/sectigo-ov-r36.pem", import.meta.url))
+    );
+    expect(certificate.ca).toBe(true);
+    expect(certificate.fingerprint256.replaceAll(":", "")).toBe(
+      "6542D176BED50F193C0CE297AE44ECD8A0A86BEC2EDE682769344059B4E78530"
+    );
+    const issuer = rootCertificates
+      .map((pem) => new X509Certificate(pem))
+      .find((root) => certificate.checkIssued(root) && certificate.verify(root.publicKey));
+    expect(issuer?.subject).toContain("Sectigo Public Server Authentication Root R46");
+  });
+  it.each(["UNABLE_TO_VERIFY_LEAF_SIGNATURE", "ERR_TLS_CERT_ALTNAME_INVALID"])(
+    "reports %s and stops retrying that host without weakening TLS",
+    async (code) => {
+      const fetch = vi.fn(async (url) => {
+        if (new URL(url).host === "tw.ncsoft.com")
+          throw new TypeError("fetch failed", { cause: Object.assign(new Error(code), { code }) });
+        return Response.json({ id: 1 });
+      });
+      vi.stubGlobal("fetch", fetch);
+      const transport = clocked();
+      for (const path of ["equipment", "equipment/item"])
+        await expect(transport.json(`https://tw.ncsoft.com/${path}`, {})).rejects.toMatchObject({
+          code: "UPSTREAM_TLS",
+          retryable: false,
+          cause: { code },
+          message: expect.stringContaining(code),
+        });
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(transport.metrics.retries).toBe(0);
+      expect(await transport.json("https://shugo.gg/api/proxy", {})).toEqual({ id: 1 });
+    }
+  );
   it.each([502, 503])("shares HTTP %s Retry-After with queued item requests", async (status) => {
     vi.useFakeTimers();
     const starts = [];

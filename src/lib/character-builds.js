@@ -202,6 +202,7 @@ export async function fetchCharacterBuild(
     cachedBuild,
     retryItemDetails = false,
     retryEquipmentChanges = false,
+    stopOnItemFailure = retryEquipmentChanges,
     itemConcurrency = 2,
     requestJSON = fetchJSON,
   } = {}
@@ -262,12 +263,12 @@ export async function fetchCharacterBuild(
   const warnings = [];
   const failedItems = [];
   const itemFailures = [];
-  let unavailableItem = false;
+  let stopItemWork = false;
   const results = await runPool(
     equipment.map((item) => async () => {
-      // Scheduled preparation needs a complete character. After a confirmed
-      // missing item, settle existing requests and avoid fetching unused slots.
-      if (unavailableItem) return null;
+      // Scheduled preparation needs a complete character. Once an item exhausts
+      // recovery, settle existing requests and avoid fetching unused slots.
+      if (stopItemWork) return null;
       try {
         // A bad HTTP-200 item payload also gets the first-party proxy fallback.
         // Scheduled Node jobs retry only this item once, retaining other details.
@@ -301,12 +302,16 @@ export async function fetchCharacterBuild(
           }
         }
       } catch (error) {
+        if (stopOnItemFailure) stopItemWork = true;
         if (error instanceof subrequestBudgetExhausted) return error;
         if (error.code === "LEASE_LOST") return error;
         failedItems.push(item);
         itemFailures.push(error);
-        if (retryEquipmentChanges && unavailableCode(error)) unavailableItem = true;
-        warnings.push(`${item.name} (id ${item.id}, slot ${item.slotPos}): ${error.message}`);
+        warnings.push(
+          `${item.name} (id ${item.id}, slot ${item.slotPos}): ${error.message}${
+            error.officialFailure ? ` (official: ${error.officialFailure.message})` : ""
+          }`
+        );
         return null;
       }
     }),
@@ -321,7 +326,11 @@ export async function fetchCharacterBuild(
     !budget.canAfford()
   )
     throw new subrequestBudgetExhausted(budget.used);
-  if (failedItems.length && retryEquipmentChanges) {
+  if (
+    failedItems.length &&
+    retryEquipmentChanges &&
+    itemFailures.every((error) => unavailableCode(error))
+  ) {
     let latest;
     try {
       latest = await officialJSON(player, "equipment", budget, {}, validateEquipment, requestJSON);
@@ -352,6 +361,7 @@ export async function fetchCharacterBuild(
           cachedBuild: null,
           retryItemDetails,
           retryEquipmentChanges: false,
+          stopOnItemFailure,
           itemConcurrency,
           requestJSON,
         });
